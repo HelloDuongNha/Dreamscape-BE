@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
-const { default: KnowledgeRuleCandidate } = require('../dist/models/KnowledgeRuleCandidate');
+const { default: PendingKnowledgeRule } = require('../dist/models/PendingKnowledgeRule');
 
 async function checkAndDrop() {
   const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017/dreamscape';
@@ -20,9 +20,9 @@ async function checkAndDrop() {
     const db = mongoose.connection.db;
 
     // 1. Audit active candidate model collection name
-    const activeModelCollectionName = KnowledgeRuleCandidate.collection.name;
-    console.log(`Active KnowledgeRuleCandidate model points to collection: '${activeModelCollectionName}'`);
-    if (activeModelCollectionName === 'knowledge_rule_candidates') {
+    const activeModelCollectionName = PendingKnowledgeRule.collection.name;
+    console.log(`Active PendingKnowledgeRule model points to collection: '${activeModelCollectionName}'`);
+    if (activeModelCollectionName === 'pending_knowledge_rules') {
       console.log('✅ Active model target collection verified: correct.');
     } else {
       console.warn(`⚠️ Warning: Active model targets unexpected collection name: '${activeModelCollectionName}'`);

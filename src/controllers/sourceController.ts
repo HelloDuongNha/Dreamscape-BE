@@ -2,8 +2,8 @@ import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import SourceContribution from '../models/SourceContribution';
 import AcademicSource from '../models/AcademicSource';
-import AcademicFullText from '../models/AcademicFullText';
-import AcademicFullTextSection from '../models/AcademicFullTextSection';
+import AcademicFullText from '../models/AcademicDocument';
+import AcademicFullTextSection from '../models/AcademicSection';
 import { normalizeDoi, fetchUnpaywallMetadata } from '../services/openAccess.service';
 import { incrementSubmitted } from '../services/contributionStats.service';
 import { resolveSourceImport } from '../services/sourceImportResolver.service';
@@ -522,9 +522,11 @@ export const getApprovedSourceRead = async (req: Request, res: Response): Promis
     }
 
     // Access control validation
-    const isEligible = source.readableInApp === true &&
-                       source.fullTextStatus === 'imported' &&
-                       source.allowedUse === 'open_access_fulltext';
+    // Access control validation
+    const srcAny = source as any;
+    const isEligible = srcAny.readableInApp === true &&
+                       srcAny.fullTextStatus === 'imported' &&
+                       srcAny.allowedUse === 'open_access_fulltext';
 
     if (!isEligible) {
       res.status(403).json({
@@ -535,7 +537,7 @@ export const getApprovedSourceRead = async (req: Request, res: Response): Promis
     }
 
     // Query full text metadata
-    const fullText = await AcademicFullText.findOne({ academicSourceId: source._id });
+    const fullText = await AcademicFullText.findOne({ sourceId: source._id });
     if (!fullText) {
       res.status(404).json({
         success: false,
@@ -554,7 +556,7 @@ export const getApprovedSourceRead = async (req: Request, res: Response): Promis
 
     const skip = (page - 1) * limit;
 
-    const total = await AcademicFullTextSection.countDocuments({ academicSourceId: source._id });
+    const total = await AcademicFullTextSection.countDocuments({ documentId: fullText._id });
     if (total === 0) {
       res.status(409).json({
         success: false,
@@ -566,11 +568,12 @@ export const getApprovedSourceRead = async (req: Request, res: Response): Promis
     const pages = Math.ceil(total / limit);
 
     // Retrieve sorted sections
-    const sections = await AcademicFullTextSection.find({ academicSourceId: source._id })
+    const sections = await AcademicFullTextSection.find({ documentId: fullText._id })
       .sort({ sectionIndex: 1 })
       .skip(skip)
       .limit(limit);
 
+    const ftAny = fullText as any;
     res.status(200).json({
       success: true,
       data: {
@@ -584,35 +587,38 @@ export const getApprovedSourceRead = async (req: Request, res: Response): Promis
           license: source.license
         },
         fullText: {
-          wordCount: fullText.wordCount,
-          characterCount: fullText.characterCount,
-          sectionCount: fullText.sectionCount,
-          importedAt: fullText.importedAt,
-          extractionEngine: fullText.extractionEngine,
-          extractionQuality: fullText.extractionQuality,
-          structureVersion: fullText.structureVersion,
-          hasStructuredReferences: fullText.hasStructuredReferences,
-          hasDetectedSections: fullText.hasDetectedSections,
-          sourceUsedUrl: fullText.sourceUsedUrl,
-          sourceUsedType: fullText.sourceUsedType,
-          smartReaderSourceType: fullText.smartReaderSourceType,
-          sourceUrlUsed: fullText.sourceUrlUsed,
-          parserQuality: fullText.parserQuality,
-          layoutQuality: fullText.layoutQuality,
-          warnings: fullText.warnings
+          wordCount: ftAny.wordCount,
+          characterCount: ftAny.characterCount,
+          sectionCount: ftAny.sectionCount,
+          importedAt: ftAny.importedAt,
+          extractionEngine: ftAny.extractionEngine,
+          extractionQuality: ftAny.extractionQuality,
+          structureVersion: ftAny.structureVersion,
+          hasStructuredReferences: ftAny.hasStructuredReferences,
+          hasDetectedSections: ftAny.hasDetectedSections,
+          sourceUsedUrl: ftAny.sourceUsedUrl,
+          sourceUsedType: ftAny.sourceUsedType,
+          smartReaderSourceType: ftAny.smartReaderSourceType,
+          sourceUrlUsed: ftAny.sourceUrlUsed,
+          parserQuality: ftAny.parserQuality,
+          layoutQuality: ftAny.layoutQuality,
+          warnings: ftAny.warnings
         },
-        sections: sections.map(s => ({
-          sectionIndex: s.sectionIndex,
-          title: s.title,
-          text: s.text,
-          html: s.html || undefined,
-          wordCount: s.wordCount,
-          characterCount: s.characterCount,
-          pageStart: s.pageStart,
-          pageEnd: s.pageEnd,
-          sectionType: s.sectionType || 'unknown',
-          style: s.style
-        })),
+        sections: sections.map(s => {
+          const sAny = s as any;
+          return {
+            sectionIndex: sAny.sectionIndex,
+            title: sAny.title,
+            text: sAny.text,
+            html: sAny.html || undefined,
+            wordCount: sAny.wordCount,
+            characterCount: sAny.characterCount,
+            pageStart: sAny.pageStart,
+            pageEnd: sAny.pageEnd,
+            sectionType: sAny.sectionType || 'unknown',
+            style: sAny.style
+          };
+        }),
         pagination: {
           page,
           limit,
@@ -700,8 +706,9 @@ export const getApprovedSourceOriginalDocument = async (req: Request, res: Respo
     }
 
     // 3. Fallback check for url/fullTextUrl — only if URL clearly looks like PDF
+    const srcAny2 = source as any;
     if (!confirmedPdf) {
-      const fallbackUrl = source.fullTextUrl || source.url;
+      const fallbackUrl = srcAny2.fullTextUrl || srcAny2.url;
       if (fallbackUrl && fallbackUrl.trim().startsWith('http')) {
         const trimmed = fallbackUrl.trim();
         if (isUrlPdfLike(trimmed)) {
@@ -712,11 +719,11 @@ export const getApprovedSourceOriginalDocument = async (req: Request, res: Respo
     }
 
     // 4. Check metadata for stored Unpaywall PDF URLs
-    if (!confirmedPdf && source.metadata) {
+    if (!confirmedPdf && srcAny2.metadata) {
       const metaPdfCandidates = [
-        source.metadata.pdfUrl,
-        source.metadata.best_oa_location?.url_for_pdf,
-        source.metadata.bestOaLocation?.url_for_pdf,
+        srcAny2.metadata.pdfUrl,
+        srcAny2.metadata.best_oa_location?.url_for_pdf,
+        srcAny2.metadata.bestOaLocation?.url_for_pdf,
       ].filter((u: any) => u && typeof u === 'string' && u.trim().startsWith('http'));
 
       if (metaPdfCandidates.length > 0) {
@@ -739,7 +746,7 @@ export const getApprovedSourceOriginalDocument = async (req: Request, res: Respo
     }
 
     // Not a PDF, resolve article_only or metadata_only fallback
-    const articleUrl = source.fullTextUrl || source.url || source.landingPageUrl || (source.doi ? `https://doi.org/${source.doi.replace(/^(doi|DOI):\s*/, '').trim()}` : '');
+    const articleUrl = srcAny2.fullTextUrl || srcAny2.url || srcAny2.landingPageUrl || (srcAny2.doi ? `https://doi.org/${srcAny2.doi.replace(/^(doi|DOI):\s*/, '').trim()}` : '');
     if (articleUrl && articleUrl.trim().startsWith('http')) {
       res.status(200).json({
         success: true,
@@ -811,19 +818,20 @@ export const getApprovedSourcePdfInline = async (req: Request, res: Response): P
     }
 
     // Fallback to url/fullTextUrl only if PDF-like
+    const srcAny3 = source as any;
     if (!pdfUrl) {
-      const fallbackUrl = source.fullTextUrl || source.url;
+      const fallbackUrl = srcAny3.fullTextUrl || srcAny3.url;
       if (fallbackUrl && fallbackUrl.trim().startsWith('http') && isUrlPdfLike(fallbackUrl.trim())) {
         pdfUrl = fallbackUrl.trim();
       }
     }
 
     // Check metadata for stored Unpaywall PDF URLs
-    if (!pdfUrl && source.metadata) {
+    if (!pdfUrl && srcAny3.metadata) {
       const metaPdfCandidates = [
-        source.metadata.pdfUrl,
-        source.metadata.best_oa_location?.url_for_pdf,
-        source.metadata.bestOaLocation?.url_for_pdf,
+        srcAny3.metadata.pdfUrl,
+        srcAny3.metadata.best_oa_location?.url_for_pdf,
+        srcAny3.metadata.bestOaLocation?.url_for_pdf,
       ].filter((u: any) => u && typeof u === 'string' && u.trim().startsWith('http'));
       if (metaPdfCandidates.length > 0) {
         pdfUrl = metaPdfCandidates[0].trim();

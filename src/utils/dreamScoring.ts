@@ -101,36 +101,16 @@ export function calculateComponentAScore(symbols: any[]): { score: number; reaso
  * Calculates Component D (Knowledge Rules) score using stored DB metadata.
  */
 export function calculateComponentDScore(appliedRules: any[]): { score: number; reason: string; factors: IScoringFactor[] } {
-  let sumImpact = 0;
   const factors: IScoringFactor[] = [];
+  const score = 50;
+  const reason = 'No active sleep context or environmental rules affected the score.';
 
-  for (const rule of appliedRules) {
-    if (rule.scoring && rule.scoring.enabled === true) {
-      const impact = rule.scoring.scoreImpact * rule.confidenceCap;
-      sumImpact += impact;
-
-      factors.push({
-        source: 'D',
-        factor: rule._id || rule.factor,
-        impact: impact,
-        reason: rule.scoring.reason || `Rule "${rule.label || rule._id}" applied with impact ${impact.toFixed(1)}.`
-      });
-    }
-  }
-
-  const score = Math.min(100, Math.max(0, 50 + sumImpact));
-  const reason = factors.length > 0 
-    ? `Applied ${factors.length} active sleep context or environmental rule(s) affecting dream valence.` 
-    : 'No active sleep context or environmental rules affected the score.';
-
-  if (factors.length === 0) {
-    factors.push({
-      source: 'D',
-      factor: 'no_rules_applied',
-      impact: 0,
-      reason: 'No active sleep context or environmental rules affected the score.'
-    });
-  }
+  factors.push({
+    source: 'D',
+    factor: 'no_rules_applied',
+    impact: 0,
+    reason: 'No active sleep context or environmental rules affected the score.'
+  });
 
   return {
     score,

@@ -27,13 +27,13 @@ async function run() {
     const collectionNames = collections.map(c => c.name);
     
     const requiredCollections = [
-      'knowledge_rules',
-      'knowledge_rule_candidates',
+      'verified_knowledge_rules',
+      'pending_knowledge_rules',
       'academic_sources',
       'academic_chunks',
       'dreams',
       'users',
-      'knowledge_rule_sources'
+      'knowledge_rule_evidences'
     ];
 
     for (const name of requiredCollections) {
@@ -110,8 +110,8 @@ async function run() {
     }
 
     // C. Scan Knowledge Rule Candidates
-    if (collectionNames.includes('knowledge_rule_candidates')) {
-      const candidates = await db.collection('knowledge_rule_candidates').find({}).toArray();
+    if (collectionNames.includes('pending_knowledge_rules')) {
+      const candidates = await db.collection('pending_knowledge_rules').find({}).toArray();
       for (const cand of candidates) {
         const labelSafe = cand.label && SAFE_SOURCE_PATTERNS.test(cand.label);
         const ruleIdSafe = cand.proposedRuleId && SAFE_RULE_PATTERNS.test(cand.proposedRuleId);
@@ -123,14 +123,14 @@ async function run() {
 
         if (labelSafe || ruleIdSafe || sourceTitleSafe) {
           safeToDelete.push({
-            collection: 'knowledge_rule_candidates',
+            collection: 'pending_knowledge_rules',
             id: cand._id,
             identifier: cand.proposedRuleId || cand.label,
             details: `Status: ${cand.status}, Label: ${cand.label}`
           });
         } else if (hasSuspiciousText) {
           suspiciousToReview.push({
-            collection: 'knowledge_rule_candidates',
+            collection: 'pending_knowledge_rules',
             id: cand._id,
             identifier: cand.proposedRuleId || cand.label,
             details: `Possible test keyword in fields`
@@ -140,8 +140,8 @@ async function run() {
     }
 
     // D. Scan Knowledge Rules
-    if (collectionNames.includes('knowledge_rules')) {
-      const rules = await db.collection('knowledge_rules').find({}).toArray();
+    if (collectionNames.includes('verified_knowledge_rules')) {
+      const rules = await db.collection('verified_knowledge_rules').find({}).toArray();
       for (const r of rules) {
         const idSafe = r._id && SAFE_RULE_PATTERNS.test(r._id);
         const labelSafe = r.label && SAFE_SOURCE_PATTERNS.test(r.label);
@@ -152,14 +152,14 @@ async function run() {
 
         if (idSafe || labelSafe) {
           safeToDelete.push({
-            collection: 'knowledge_rules',
+            collection: 'verified_knowledge_rules',
             id: r._id,
             identifier: r._id,
             details: `Origin: ${r.origin}, isActive: ${r.isActive}, Label: ${r.label}`
           });
         } else if (hasSuspiciousText) {
           suspiciousToReview.push({
-            collection: 'knowledge_rules',
+            collection: 'verified_knowledge_rules',
             id: r._id,
             identifier: r._id,
             details: `Possible test keyword in rule ID/label/basis`
@@ -168,11 +168,11 @@ async function run() {
       }
     }
 
-    // E. Scan Knowledge Rule Sources
-    if (collectionNames.includes('knowledge_rule_sources')) {
-      const links = await db.collection('knowledge_rule_sources').find({}).toArray();
+    // E. Scan Knowledge Rule Evidences
+    if (collectionNames.includes('knowledge_rule_evidences')) {
+      const links = await db.collection('knowledge_rule_evidences').find({}).toArray();
       const safeRuleIds = safeToDelete
-        .filter(r => r.collection === 'knowledge_rules')
+        .filter(r => r.collection === 'verified_knowledge_rules')
         .map(r => r.id.toString());
 
       for (const link of links) {
@@ -181,16 +181,16 @@ async function run() {
 
         if (isSafeRuleLink) {
           safeToDelete.push({
-            collection: 'knowledge_rule_sources',
+            collection: 'knowledge_rule_evidences',
             id: link._id,
-            identifier: `Link between rule ${link.ruleId} and source ${link.academicSourceId}`,
+            identifier: `Link between rule ${link.ruleId} and source ${link.sourceId}`,
             details: `Status: ${link.status}`
           });
         } else if (hasSuspiciousText) {
           suspiciousToReview.push({
-            collection: 'knowledge_rule_sources',
+            collection: 'knowledge_rule_evidences',
             id: link._id,
-            identifier: `Link between rule ${link.ruleId} and source ${link.academicSourceId}`,
+            identifier: `Link between rule ${link.ruleId} and source ${link.sourceId}`,
             details: `Possible test keyword in relevanceNote`
           });
         }
@@ -255,12 +255,12 @@ async function run() {
 
     const integrityReports = [];
 
-    // A. Orphan KnowledgeRuleSource links
-    if (collectionNames.includes('knowledge_rule_sources')) {
-      const links = await db.collection('knowledge_rule_sources').find({}).toArray();
+    // A. Orphan KnowledgeRuleEvidence links
+    if (collectionNames.includes('knowledge_rule_evidences')) {
+      const links = await db.collection('knowledge_rule_evidences').find({}).toArray();
       for (const link of links) {
-        const ruleExists = await db.collection('knowledge_rules').findOne({ _id: link.ruleId });
-        const sourceExists = await db.collection('academic_sources').findOne({ _id: link.academicSourceId });
+        const ruleExists = await db.collection('verified_knowledge_rules').findOne({ _id: link.ruleId });
+        const sourceExists = await db.collection('academic_sources').findOne({ _id: link.sourceId });
         
         if (!ruleExists || !sourceExists) {
           integrityReports.push({
@@ -273,10 +273,10 @@ async function run() {
     }
 
     // B. Active rules with missing or inactive links
-    if (collectionNames.includes('knowledge_rules')) {
-      const activeGenRules = await db.collection('knowledge_rules').find({ isActive: true, origin: 'source_generated' }).toArray();
+    if (collectionNames.includes('verified_knowledge_rules')) {
+      const activeGenRules = await db.collection('verified_knowledge_rules').find({ isActive: true, origin: 'source_generated' }).toArray();
       for (const rule of activeGenRules) {
-        const links = await db.collection('knowledge_rule_sources').find({ ruleId: rule._id }).toArray();
+        const links = await db.collection('knowledge_rule_evidences').find({ ruleId: rule._id }).toArray();
         if (links.length === 0) {
           integrityReports.push({
             type: 'active_rule_no_links',
@@ -297,10 +297,10 @@ async function run() {
     }
 
     // C. Inactive rules with active links
-    if (collectionNames.includes('knowledge_rules')) {
-      const inactiveRules = await db.collection('knowledge_rules').find({ isActive: false }).toArray();
+    if (collectionNames.includes('verified_knowledge_rules')) {
+      const inactiveRules = await db.collection('verified_knowledge_rules').find({ isActive: false }).toArray();
       for (const rule of inactiveRules) {
-        const activeLinks = await db.collection('knowledge_rule_sources').find({ ruleId: rule._id, status: 'active' }).toArray();
+        const activeLinks = await db.collection('knowledge_rule_evidences').find({ ruleId: rule._id, status: 'active' }).toArray();
         if (activeLinks.length > 0) {
           integrityReports.push({
             type: 'inactive_rule_active_links',
@@ -312,8 +312,8 @@ async function run() {
     }
 
     // D. Candidates pointing to missing academic sources
-    if (collectionNames.includes('knowledge_rule_candidates')) {
-      const candidates = await db.collection('knowledge_rule_candidates').find({}).toArray();
+    if (collectionNames.includes('pending_knowledge_rules')) {
+      const candidates = await db.collection('pending_knowledge_rules').find({}).toArray();
       for (const cand of candidates) {
         const sourceExists = await db.collection('academic_sources').findOne({ _id: cand.academicSourceId });
         if (!sourceExists) {
@@ -327,8 +327,8 @@ async function run() {
     }
 
     // E. Candidates pointing to missing chunks
-    if (collectionNames.includes('knowledge_rule_candidates')) {
-      const candidates = await db.collection('knowledge_rule_candidates').find({}).toArray();
+    if (collectionNames.includes('pending_knowledge_rules')) {
+      const candidates = await db.collection('pending_knowledge_rules').find({}).toArray();
       for (const cand of candidates) {
         if (cand.evidenceChunkIds && Array.isArray(cand.evidenceChunkIds)) {
           const missingChunkIds = [];
@@ -350,10 +350,10 @@ async function run() {
     }
 
     // F. source_generated rules without evidence links (identical check to B, but active/inactive agnostic)
-    if (collectionNames.includes('knowledge_rules')) {
-      const genRules = await db.collection('knowledge_rules').find({ origin: 'source_generated' }).toArray();
+    if (collectionNames.includes('verified_knowledge_rules')) {
+      const genRules = await db.collection('verified_knowledge_rules').find({ origin: 'source_generated' }).toArray();
       for (const rule of genRules) {
-        const totalLinks = await db.collection('knowledge_rule_sources').countDocuments({ ruleId: rule._id });
+        const totalLinks = await db.collection('knowledge_rule_evidences').countDocuments({ ruleId: rule._id });
         if (totalLinks === 0) {
           integrityReports.push({
             type: 'gen_rule_zero_links',
@@ -365,11 +365,11 @@ async function run() {
     }
 
     // G. Rejected candidates that still have active live rules
-    if (collectionNames.includes('knowledge_rule_candidates')) {
-      const rejectedCands = await db.collection('knowledge_rule_candidates').find({ status: 'rejected' }).toArray();
+    if (collectionNames.includes('pending_knowledge_rules')) {
+      const rejectedCands = await db.collection('pending_knowledge_rules').find({ status: 'rejected' }).toArray();
       for (const cand of rejectedCands) {
         if (cand.proposedRuleId) {
-          const liveRule = await db.collection('knowledge_rules').findOne({ _id: cand.proposedRuleId, isActive: true });
+          const liveRule = await db.collection('verified_knowledge_rules').findOne({ _id: cand.proposedRuleId, isActive: true });
           if (liveRule) {
             integrityReports.push({
               type: 'rejected_candidate_active_rule',
@@ -382,11 +382,11 @@ async function run() {
     }
 
     // H. Approved candidates without live KnowledgeRule
-    if (collectionNames.includes('knowledge_rule_candidates')) {
-      const approvedCands = await db.collection('knowledge_rule_candidates').find({ status: 'approved' }).toArray();
+    if (collectionNames.includes('pending_knowledge_rules')) {
+      const approvedCands = await db.collection('pending_knowledge_rules').find({ status: 'approved' }).toArray();
       for (const cand of approvedCands) {
         if (cand.proposedRuleId) {
-          const ruleExists = await db.collection('knowledge_rules').findOne({ _id: cand.proposedRuleId });
+          const ruleExists = await db.collection('verified_knowledge_rules').findOne({ _id: cand.proposedRuleId });
           if (!ruleExists) {
             integrityReports.push({
               type: 'approved_candidate_no_rule',
@@ -399,8 +399,8 @@ async function run() {
     }
 
     // I. Live KnowledgeRule records with origin values outside the allowed enum
-    if (collectionNames.includes('knowledge_rules')) {
-      const rules = await db.collection('knowledge_rules').find({}).toArray();
+    if (collectionNames.includes('verified_knowledge_rules')) {
+      const rules = await db.collection('verified_knowledge_rules').find({}).toArray();
       const allowedOrigins = ['seed', 'source_generated', 'manual'];
       for (const rule of rules) {
         if (!allowedOrigins.includes(rule.origin)) {
@@ -427,8 +427,8 @@ async function run() {
 
     // Check if any safe test records are linked to active systems
     for (const r of safeToDelete) {
-      if (r.collection === 'knowledge_rules') {
-        const activeRule = await db.collection('knowledge_rules').findOne({ _id: r.id, isActive: true });
+      if (r.collection === 'verified_knowledge_rules') {
+        const activeRule = await db.collection('verified_knowledge_rules').findOne({ _id: r.id, isActive: true });
         if (activeRule) {
           wouldImpactApp = true;
           impactExplanation.push(`- Active Rule [${r.id}]: Deleting it will immediately remove the rule "${activeRule.label}" from the active analysis database and library detail pages.`);
@@ -436,7 +436,7 @@ async function run() {
       }
       if (r.collection === 'academic_sources') {
         // If it's a test source, is it linked to any live rule?
-        const links = await db.collection('knowledge_rule_sources').find({ academicSourceId: r.id, status: 'active' }).toArray();
+        const links = await db.collection('knowledge_rule_evidences').find({ sourceId: r.id, status: 'active' }).toArray();
         if (links.length > 0) {
           wouldImpactApp = true;
           impactExplanation.push(`- Academic Source [${r.id}]: Deleting it will orphan active evidence links for Rule IDs: [${links.map(l => l.ruleId).join(', ')}].`);

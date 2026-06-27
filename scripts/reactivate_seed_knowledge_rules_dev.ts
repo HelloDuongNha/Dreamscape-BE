@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
-import KnowledgeRule from '../src/models/KnowledgeRule';
+import VerifiedKnowledgeRule from '../src/models/VerifiedKnowledgeRule';
 import { logger } from '../src/utils/logger';
 
 dotenv.config();
@@ -18,7 +18,7 @@ async function run() {
     logger.info('Reactivating seed knowledge rules...');
     
     // Activate seed rules
-    const updateResult = await KnowledgeRule.updateMany(
+    const updateResult = await VerifiedKnowledgeRule.updateMany(
       { origin: 'seed' },
       { $set: { isActive: true } }
     );

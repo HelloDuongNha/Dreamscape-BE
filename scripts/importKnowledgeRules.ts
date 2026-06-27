@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
-import KnowledgeRule from '../src/models/KnowledgeRule';
+import VerifiedKnowledgeRule from '../src/models/VerifiedKnowledgeRule';
 import { logger } from '../src/utils/logger';
 
 // Load environment variables
@@ -160,7 +160,7 @@ async function importRules() {
     logger.info('Database connection established successfully.');
 
     const seedIds = rules.map(r => r._id);
-    const existingRules = await KnowledgeRule.find({ _id: { $in: seedIds } }).lean();
+    const existingRules = await VerifiedKnowledgeRule.find({ _id: { $in: seedIds } }).lean();
     const existingMap = new Map(existingRules.map(r => [r._id, r]));
 
     const bulkOps: any[] = [];
@@ -210,14 +210,14 @@ async function importRules() {
     }
 
     if (bulkOps.length > 0) {
-      const bulkRes = await KnowledgeRule.bulkWrite(bulkOps);
+      const bulkRes = await VerifiedKnowledgeRule.bulkWrite(bulkOps);
       logger.info(`Bulk operations completed: created ${insertedCount} new rules, updated ${updatedCount} rules, skipped ${skippedCount} protected rules.`);
     } else {
       logger.info(`No updates needed. Skipped all ${skippedCount} rules.`);
     }
 
     // Re-verify and sync indexes
-    await KnowledgeRule.syncIndexes();
+    await VerifiedKnowledgeRule.syncIndexes();
     logger.info('Successfully verified and built single and compound indexes.');
 
   } catch (err: any) {

@@ -1,10 +1,10 @@
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
-import KnowledgeRule from '../models/KnowledgeRule';
+import VerifiedKnowledgeRule from '../models/VerifiedKnowledgeRule';
 import AcademicSource from '../models/AcademicSource';
-import AcademicFullText from '../models/AcademicFullText';
+import AcademicFullText from '../models/AcademicDocument';
 import AcademicChunk from '../models/AcademicChunk';
-import KnowledgeRuleSource from '../models/KnowledgeRuleSource';
+import KnowledgeRuleEvidence from '../models/KnowledgeRuleEvidence';
 
 /**
  * GET /api/moderation/knowledge-rules
@@ -13,33 +13,23 @@ import KnowledgeRuleSource from '../models/KnowledgeRuleSource';
  */
 export const getKnowledgeRules = async (req: Request, res: Response): Promise<void> => {
   try {
-    // Return only active rules by default (exclude seed rules unless ALLOW_SEED_RULES=true)
-    const rulesQuery: any = { isActive: true };
-    if (process.env.ALLOW_SEED_RULES !== 'true') {
-      rulesQuery.origin = { $ne: 'seed' };
-    }
-    const activeRules = await KnowledgeRule.find(rulesQuery).lean();
+    const activeRules = await VerifiedKnowledgeRule.find({}).lean();
 
-    // Query active evidence count grouped by ruleId
-    const counts = await KnowledgeRuleSource.aggregate([
-      { $match: { status: 'active' } },
+    const counts = await KnowledgeRuleEvidence.aggregate([
       { $group: { _id: '$ruleId', count: { $sum: 1 } } },
     ]);
 
-    const countsMap = new Map<string, number>(counts.map(c => [c._id, c.count]));
+    const countsMap = new Map<string, number>(counts.map((c: any) => [c._id.toString(), c.count]));
 
-    const result = activeRules.map(r => ({
+    const result = activeRules.map((r: any) => ({
       ruleId: r._id,
-      label: r.label,
-      group: r.group,
-      factor: r.factor,
-      claimStrength: r.claimStrength,
-      confidenceCap: r.confidenceCap,
-      evidenceCount: countsMap.get(r._id) || 0,
-      origin: r.origin,
-      sourceTitle: r.source?.title || 'Quy luật đã duyệt',
-      sourceAuthors: r.source?.author ? [r.source.author] : [],
-      sourceYear: r.source?.year || undefined
+      ruleCode: r.ruleCode,
+      ruleStatement: r.ruleStatement,
+      classifications: r.classifications,
+      scientificBasis: r.scientificBasis,
+      evidenceCount: countsMap.get(r._id.toString()) || 0,
+      version: r.version,
+      createdAt: r.createdAt
     }));
 
     res.status(200).json({
@@ -84,18 +74,14 @@ export const searchSourceChunks = async (req: Request, res: Response): Promise<v
       return;
     }
 
-    // Process search query: Trim and cap at 100 characters
     const q = rawQ.trim().substring(0, 100);
-
-    let filter: any = { academicSourceId: source._id };
+    let filter: any = { sourceId: source._id };
 
     if (q) {
-      // Escape regex special characters to prevent regex injection or crashing
       const escapedQ = q.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-      filter.chunkText = new RegExp(escapedQ, 'i');
+      filter.text = new RegExp(escapedQ, 'i');
     }
 
-    // Pagination setup (limit max 20)
     let page = parseInt(pageStr, 10);
     if (isNaN(page) || page < 1) page = 1;
 
@@ -107,20 +93,18 @@ export const searchSourceChunks = async (req: Request, res: Response): Promise<v
 
     const total = await AcademicChunk.countDocuments(filter);
 
-    // Query matching chunks sorted by chunkIndex, omitting embedding array
     const chunks = await AcademicChunk.find(filter)
-      .select('_id chunkIndex sectionType sectionTitle pageStart pageEnd sourceOrder chunkText')
-      .sort({ chunkIndex: 1 })
+      .select('_id sectionId documentId text tokenCount sectionOrder chunkOrder')
+      .sort({ chunkOrder: 1 })
       .skip(skip)
       .limit(limit)
       .lean();
 
-    // Map chunkText to a preview only (first 400 characters)
     const formattedChunks = chunks.map((c: any) => {
-      const isLong = c.chunkText.length > 400;
+      const isLong = c.text.length > 400;
       return {
         ...c,
-        chunkText: c.chunkText.substring(0, 400) + (isLong ? '...' : ''),
+        text: c.text.substring(0, 400) + (isLong ? '...' : ''),
       };
     });
 
@@ -148,12 +132,12 @@ export const searchSourceChunks = async (req: Request, res: Response): Promise<v
 
 /**
  * POST /api/moderation/knowledge-rules/:ruleId/evidence-links
- * Create or update an evidence link for a rule.
+ * Create an evidence link for a rule.
  * Access: Moderator only
  */
 export const createEvidenceLink = async (req: Request, res: Response): Promise<void> => {
   const { ruleId } = req.params;
-  const { academicSourceId, academicChunkIds, evidenceRole, relevanceNote } = req.body;
+  const { academicSourceId, academicChunkId, quote, evidenceSummary, confidence, extractionRunId } = req.body;
   const moderatorId = req.user?._id;
 
   if (!moderatorId) {
@@ -162,14 +146,12 @@ export const createEvidenceLink = async (req: Request, res: Response): Promise<v
   }
 
   try {
-    // 1. Validate Rule
-    const rule = await KnowledgeRule.findOne({ _id: ruleId, isActive: true });
+    const rule = await VerifiedKnowledgeRule.findById(ruleId);
     if (!rule) {
-      res.status(404).json({ success: false, message: 'Không tìm thấy quy luật này hoặc quy luật không kích hoạt.' });
+      res.status(404).json({ success: false, message: 'Không tìm thấy quy luật này.' });
       return;
     }
 
-    // 2. Validate Source
     if (!academicSourceId || !mongoose.Types.ObjectId.isValid(academicSourceId)) {
       res.status(400).json({ success: false, message: 'Mã định danh tài liệu không hợp lệ.' });
       return;
@@ -181,98 +163,49 @@ export const createEvidenceLink = async (req: Request, res: Response): Promise<v
       return;
     }
 
-    // Strict eligibility checks
-    if (!source.readableInApp || source.fullTextStatus !== 'imported' || source.allowedUse !== 'open_access_fulltext') {
-      res.status(400).json({ success: false, message: 'Tài liệu không có bản đọc đầy đủ hợp lệ trong hệ thống.' });
+    if (!academicChunkId || !mongoose.Types.ObjectId.isValid(academicChunkId)) {
+      res.status(400).json({ success: false, message: 'Phân đoạn liên kết không hợp lệ.' });
       return;
     }
 
-    if (source.chunkBuildStatus !== 'completed') {
-      res.status(400).json({ success: false, message: 'Tài liệu chưa được xây dựng dữ liệu RAG thành công.' });
-      return;
-    }
-
-    const fullText = await AcademicFullText.findOne({ academicSourceId: source._id });
-    if (!fullText) {
-      res.status(400).json({ success: false, message: 'Không tìm thấy thông tin bản đọc RAG.' });
-      return;
-    }
-
-    // 3. Validate Chunks
-    if (!Array.isArray(academicChunkIds) || academicChunkIds.length < 1 || academicChunkIds.length > 5) {
-      res.status(400).json({ success: false, message: 'Danh sách phân đoạn liên kết phải chứa từ 1 đến 5 phần tử.' });
-      return;
-    }
-
-    const chunkObjectIds = academicChunkIds.map(id => new mongoose.Types.ObjectId(id));
-
-    // Verify all chunks belong to this source
-    const matchedChunks = await AcademicChunk.find({
-      _id: { $in: chunkObjectIds },
-      academicSourceId: source._id,
+    const chunk = await AcademicChunk.findOne({
+      _id: new mongoose.Types.ObjectId(academicChunkId),
+      sourceId: source._id
     });
-
-    if (matchedChunks.length !== academicChunkIds.length) {
-      res.status(400).json({ success: false, message: 'Một hoặc nhiều phân đoạn không thuộc về tài liệu này.' });
+    if (!chunk) {
+      res.status(400).json({ success: false, message: 'Phân đoạn không thuộc về tài liệu này.' });
       return;
     }
 
-    // Validate evidenceRole
-    const allowedRoles = ['primary_support', 'secondary_support', 'background', 'contradiction', 'limitation'];
-    if (!allowedRoles.includes(evidenceRole)) {
-      res.status(400).json({ success: false, message: 'Vai trò bằng chứng không hợp lệ.' });
-      return;
-    }
+    const runId = extractionRunId && mongoose.Types.ObjectId.isValid(extractionRunId)
+      ? new mongoose.Types.ObjectId(extractionRunId)
+      : new mongoose.Types.ObjectId();
 
-    // 4. Generate quote preview server-side (300-500 characters, e.g. 400)
-    // Sort matched chunks by sourceOrder to reconstruct quote logically
-    matchedChunks.sort((a, b) => (a.sourceOrder || 0) - (b.sourceOrder || 0));
-    const combinedQuoteText = matchedChunks.map(c => c.chunkText).join(' [...] ');
-    const maxLen = 400;
-    const isTruncated = combinedQuoteText.length > maxLen;
-    const quotePreview = combinedQuoteText.substring(0, maxLen).trim() + (isTruncated ? '...' : '');
-
-    // 5. Up-sert logic: Allow only one active link per ruleId + academicSourceId + evidenceRole
-    let link = await KnowledgeRuleSource.findOne({
-      ruleId,
-      academicSourceId: source._id,
-      evidenceRole,
-      status: 'active',
+    // Create the flat evidence
+    const link = new KnowledgeRuleEvidence({
+      ruleId: rule._id,
+      chunkId: chunk._id,
+      quote: quote || chunk.text,
+      evidenceSummary: evidenceSummary || 'Tóm tắt bằng chứng khoa học',
+      confidence: confidence !== undefined ? Number(confidence) : 1.0,
+      extractionRunId: runId
     });
+    await link.save();
 
-    if (link) {
-      // Update existing
-      link.academicChunkIds = chunkObjectIds;
-      link.relevanceNote = relevanceNote || undefined;
-      link.selectedQuotePreview = quotePreview;
-      link.updatedBy = moderatorId;
-      link.updatedAt = new Date();
-      await link.save();
-    } else {
-      // Create new
-      link = new KnowledgeRuleSource({
-        ruleId,
-        academicSourceId: source._id,
-        academicFullTextId: fullText._id,
-        academicChunkIds: chunkObjectIds,
-        evidenceRole,
-        relevanceNote: relevanceNote || undefined,
-        selectedQuotePreview: quotePreview,
-        status: 'active',
-        linkedBy: moderatorId,
-        linkedAt: new Date(),
-      });
-      await link.save();
-    }
+    // Update VerifiedKnowledgeRule to append the evidence ID
+    await VerifiedKnowledgeRule.updateOne(
+      { _id: rule._id },
+      { $addToSet: { evidenceIds: link._id } }
+    );
 
     res.status(200).json({
       success: true,
-      message: 'Liên kết bằng chứng khoa học thành công.',
+      message: 'Tạo liên kết bằng chứng khoa học thành công.',
       data: link,
     });
 
   } catch (err: any) {
-    console.error('Failed to create/update evidence link:', err);
+    console.error('Failed to create evidence link:', err);
     res.status(500).json({
       success: false,
       message: 'Có lỗi xảy ra khi tạo liên kết bằng chứng.',
@@ -282,37 +215,41 @@ export const createEvidenceLink = async (req: Request, res: Response): Promise<v
 
 /**
  * GET /api/moderation/knowledge-rules/:ruleId/evidence-links
- * List active evidence links for a rule.
+ * List evidence links for a rule.
  * Access: Moderator only
  */
 export const getEvidenceLinks = async (req: Request, res: Response): Promise<void> => {
   const { ruleId } = req.params;
 
   try {
-    const links = await KnowledgeRuleSource.find({ ruleId, status: 'active' })
+    const links = await KnowledgeRuleEvidence.find({ ruleId })
       .populate({
-        path: 'academicSourceId',
-        select: 'title authors year doi journal publisher allowedUse copyrightStatus fullTextStatus',
-      })
-      .populate({
-        path: 'academicChunkIds',
-        select: 'chunkIndex sectionType sectionTitle pageStart pageEnd sourceOrder chunkText',
+        path: 'chunkId',
+        populate: {
+          path: 'sourceId',
+          select: 'title authors year doi journal publisher allowedUse',
+        }
       })
       .lean();
 
-    // Truncate populated chunk texts to previews for lightweight transmission
     const formattedLinks = links.map((link: any) => {
-      if (Array.isArray(link.academicChunkIds)) {
-        link.academicChunkIds = link.academicChunkIds.map((c: any) => {
-          if (!c || !c.chunkText) return c;
-          const isLong = c.chunkText.length > 400;
-          return {
-            ...c,
-            chunkText: c.chunkText.substring(0, 400) + (isLong ? '...' : ''),
-          };
-        });
-      }
-      return link;
+      const c = link.chunkId;
+      const src = c?.sourceId;
+      return {
+        _id: link._id,
+        ruleId: link.ruleId,
+        sourceId: src,
+        chunkId: c ? {
+          _id: c._id,
+          sectionId: c.sectionId,
+          documentId: c.documentId,
+          text: c.text ? (c.text.substring(0, 400) + (c.text.length > 400 ? '...' : '')) : ''
+        } : null,
+        quote: link.quote,
+        evidenceSummary: link.evidenceSummary,
+        confidence: link.confidence,
+        createdAt: link.createdAt
+      };
     });
 
     res.status(200).json({
@@ -331,8 +268,8 @@ export const getEvidenceLinks = async (req: Request, res: Response): Promise<voi
 
 /**
  * DELETE /api/moderation/knowledge-rules/:ruleId/evidence-links/:linkId
- * Soft deactivates an evidence link.
- * Access: Moderator only
+ * Deletes an evidence link.
+ * Access: Admin only
  */
 export const removeEvidenceLink = async (req: Request, res: Response): Promise<void> => {
   const { ruleId, linkId } = req.params;
@@ -362,31 +299,26 @@ export const removeEvidenceLink = async (req: Request, res: Response): Promise<v
       return;
     }
 
-    const link = await KnowledgeRuleSource.findOne({ _id: cleanLinkId, ruleId });
+    const link = await KnowledgeRuleEvidence.findOneAndDelete({ _id: cleanLinkId, ruleId });
     if (!link) {
       res.status(404).json({ success: false, message: 'Liên kết không tồn tại.' });
       return;
     }
 
-    if (link.status === 'inactive') {
-      res.status(400).json({ success: false, message: 'Liên kết này đã bị vô hiệu hóa trước đó.' });
-      return;
-    }
-
-    // Soft delete / deactivate link
-    link.status = 'inactive';
-    link.updatedBy = moderatorId;
-    link.updatedAt = new Date();
-    await link.save();
+    // Pull from VerifiedKnowledgeRule
+    await VerifiedKnowledgeRule.updateOne(
+      { _id: ruleId },
+      { $pull: { evidenceIds: link._id } }
+    );
 
     res.status(200).json({
       success: true,
-      message: 'Hủy liên kết bằng chứng khoa học thành công (đã vô hiệu hóa).',
+      message: 'Hủy liên kết bằng chứng khoa học thành công.',
       data: link,
     });
 
   } catch (err: any) {
-    console.error('Failed to soft delete evidence link:', err);
+    console.error('Failed to delete evidence link:', err);
     res.status(500).json({
       success: false,
       message: 'Có lỗi xảy ra khi hủy liên kết bằng chứng.',

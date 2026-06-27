@@ -1,9 +1,9 @@
 import mongoose from 'mongoose';
 import { logger } from '../utils/logger';
-import KnowledgeRule, { IKnowledgeRule } from '../models/KnowledgeRule';
-import KnowledgeRuleSource from '../models/KnowledgeRuleSource';
+import VerifiedKnowledgeRule, { IVerifiedKnowledgeRule, RuleClassification } from '../models/VerifiedKnowledgeRule';
+import KnowledgeRuleEvidence from '../models/KnowledgeRuleEvidence';
 import UserDreamProfile from '../models/UserDreamProfile';
-import { generateAnalysis, ILLMOutput } from './llm.service';
+import { generateAnalysis, ILLMOutput, generateEmbedding } from './llm.service';
 import { retrieveSymbolsHybrid, IRetrievedSymbol, isExplicitSleepContextClause } from './symbolRetrieval.service';
 import { buildScoringProfile } from './profileBuilder.service';
 import {
@@ -128,7 +128,7 @@ interface IAnalysisResult {
       evidenceLinks?: {
         ruleId: string;
         evidenceRole: string;
-        academicSourceId: mongoose.Types.ObjectId;
+        sourceId: mongoose.Types.ObjectId;
         sourceTitle: string;
         sourceYear: number | null;
         doi: string | null;
@@ -157,73 +157,36 @@ function getNestedValue(obj: any, path: string): any {
 /**
  * Rule matcher supporting nested paths, operator comparisons, and dependency guards.
  */
-function matchRule(rule: IKnowledgeRule, context: any): boolean {
-  const field = rule.inputRequired?.field;
-  if (!field) return false;
-
-  // 1. Dependency Guard: Personality Rules
-  if (rule.group === 'personality_knowledge' || rule.inputSource === 'measured_user_profile') {
-    if (field.includes('bigFive')) {
-      const enabled = getNestedValue(context, 'measuredPsychologicalProfile.bigFive.enabled');
-      if (!enabled) return false;
-    } else if (field.includes('chronotype')) {
-      const enabled = getNestedValue(context, 'measuredPsychologicalProfile.chronotype.enabled');
-      if (!enabled) return false;
-    } else if (field.includes('schemas')) {
-      const enabled = getNestedValue(context, 'measuredPsychologicalProfile.schemas.enabled');
-      if (!enabled) return false;
-    } else {
-      const b5 = getNestedValue(context, 'measuredPsychologicalProfile.bigFive.enabled');
-      const ct = getNestedValue(context, 'measuredPsychologicalProfile.chronotype.enabled');
-      const sc = getNestedValue(context, 'measuredPsychologicalProfile.schemas.enabled');
-      if (!b5 && !ct && !sc) return false;
-    }
+function cosineSimilarity(vecA: number[], vecB: number[]): number {
+  let dotProduct = 0.0;
+  let normA = 0.0;
+  let normB = 0.0;
+  for (let i = 0; i < vecA.length; i++) {
+    dotProduct += vecA[i] * vecB[i];
+    normA += vecA[i] * vecA[i];
+    normB += vecB[i] * vecB[i];
   }
+  if (normA === 0 || normB === 0) return 0;
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
 
-  // 2. Dependency Guard: Cultural Rules
-  const isCultural =
-    rule.group === 'cultural_limitation' ||
-    field.includes('culturalProfile') ||
-    rule.inputSource === 'user_dream_profile';
-
-  if (isCultural) {
-    const allowCultural = getNestedValue(context, 'preferences.allowCulturalAnalysis');
-    if (allowCultural !== true) return false;
+function predictDreamClassifications(text: string): RuleClassification[] {
+  const classifications: RuleClassification[] = [];
+  const lower = text.toLowerCase();
+  if (lower.includes('nhớ') || lower.includes('quên') || lower.includes('recall')) classifications.push(RuleClassification.DreamRecall);
+  if (lower.includes('ác mộng') || lower.includes('nightmare') || lower.includes('sợ') || lower.includes('rượt đuổi') || lower.includes('chạy trốn') || lower.includes('nguy hiểm')) classifications.push(RuleClassification.Nightmares);
+  if (lower.includes('mơ sáng suốt') || lower.includes('lucid') || lower.includes('nhận ra đang mơ') || lower.includes('tự chủ')) classifications.push(RuleClassification.LucidDreaming);
+  if (lower.includes('lo lắng') || lower.includes('lo âu') || lower.includes('anxiety') || lower.includes('buồn') || lower.includes('giận') || lower.includes('khóc') || lower.includes('sợ hãi')) classifications.push(RuleClassification.EmotionalIncorporation);
+  if (lower.includes('stress') || lower.includes('căng thẳng') || lower.includes('áp lực')) classifications.push(RuleClassification.StressIncorporation);
+  if (lower.includes('chấn thương') || lower.includes('tai nạn') || lower.includes('quá khứ') || lower.includes('trauma')) classifications.push(RuleClassification.TraumaReplay);
+  if (lower.includes('tiếng') || lower.includes('ồn') || lower.includes('nóng') || lower.includes('lạnh') || lower.includes('đau')) classifications.push(RuleClassification.ExternalStimulus);
+  if (lower.includes('tư thế') || lower.includes('nằm') || lower.includes('sấp') || lower.includes('ngửa') || lower.includes('nghiêng')) classifications.push(RuleClassification.SleepPosture);
+  if (lower.includes('môi trường') || lower.includes('phòng') || lower.includes('giường') || lower.includes('gối') || lower.includes('ánh sáng')) classifications.push(RuleClassification.SleepEnvironment);
+  if (lower.includes('mệt') || lower.includes('mất ngủ') || lower.includes('tỉnh giấc') || lower.includes('chập chờn') || lower.includes('sâu')) classifications.push(RuleClassification.SleepQuality);
+  if (classifications.length === 0) {
+    classifications.push(RuleClassification.Other);
   }
-
-  // 3. Retrieve actual value and check criteria
-  const actualValue = getNestedValue(context, field);
-  const requiredValue = rule.inputRequired.value;
-  const operator = rule.inputRequired.operator;
-
-  if (requiredValue === 'any') {
-    if (field === 'dreamText') {
-      return typeof actualValue === 'string' && actualValue.trim().length > 0;
-    }
-    return actualValue !== undefined && actualValue !== null && actualValue !== '';
-  }
-
-  if (operator) {
-    if (actualValue === undefined || actualValue === null) return false;
-    const act = Number(actualValue);
-    const req = Number(requiredValue);
-    if (isNaN(act) || isNaN(req)) {
-      // Fallback string-based comparisons if needed, otherwise numbers
-      if (operator === '>=') return actualValue >= requiredValue;
-      if (operator === '<=') return actualValue <= requiredValue;
-      if (operator === '>') return actualValue > requiredValue;
-      if (operator === '<') return actualValue < requiredValue;
-      return actualValue === requiredValue;
-    }
-    if (operator === '>=') return act >= req;
-    if (operator === '<=') return act <= req;
-    if (operator === '>') return act > req;
-    if (operator === '<') return act < req;
-    return act === req;
-  }
-
-  // Direct equality
-  return actualValue === requiredValue;
+  return classifications;
 }
 
 function enrichSleepContextFromText(text: string, currentContext: Record<string, any>): Record<string, any> {
@@ -357,141 +320,87 @@ export async function runDreamAnalysis(
   const enrichedSleepContext = enrichSleepContextFromText(sleepContextText, sleepContext || {});
 
   // ─── STEP 3: Multi-Source Rule Evaluation (Component D) ───
-  // Build a combined context block for nested rules matching
-  const combinedContext = {
-    dreamText: dreamNarrative,
-    rawText,
-    wakingReactionText,
-    sleepContextText,
-    sleepContext: enrichedSleepContext,
-    ...profileData,
-  };
+  // 1. Predict classifications of the dream based on keywords
+  const predictedClassifications = predictDreamClassifications(dreamText);
 
-  const rulesQuery: any = { isActive: true, oracleEligible: { $ne: false } };
-  if (process.env.ALLOW_SEED_RULES !== 'true') {
-    rulesQuery.origin = { $ne: 'seed' };
-  }
-  const activeRules = await KnowledgeRule.find(rulesQuery).lean();
-  const matchedRules: IAppliedRule[] = [];
-  const rulesToInject: any[] = [];
+  // 2. Pre-filter VerifiedKnowledgeRule records belonging to these predicted classifications
+  const candidateRules = await VerifiedKnowledgeRule.find({
+    classifications: { $in: predictedClassifications }
+  }).lean();
 
-  for (const rule of activeRules) {
-    if (matchRule(rule, combinedContext)) {
-      matchedRules.push({
-        ruleId: rule._id,
-        group: rule.group,
-        factor: rule.factor,
-        confidenceCap: rule.confidenceCap,
-        claimStrength: rule.claimStrength,
-      });
-      rulesToInject.push(rule);
-    }
+  // 3. Embedding-based Top-K retrieval
+  let matchedRules: any[] = [];
+  try {
+    const dreamEmbedding = await generateEmbedding(dreamText);
+    const similarities = candidateRules.map(rule => {
+      let score = 0;
+      if (rule.embedding && rule.embedding.length === dreamEmbedding.length) {
+        score = cosineSimilarity(dreamEmbedding, rule.embedding);
+      }
+      return { rule, score };
+    });
+
+    similarities.sort((a, b) => b.score - a.score);
+    matchedRules = similarities.slice(0, 4).map(item => item.rule);
+  } catch (err: any) {
+    logger.warn('Failed to retrieve rules by embedding similarity, falling back to first 4 candidates', { error: String(err) });
+    matchedRules = candidateRules.slice(0, 4);
   }
 
-  logger.info('Knowledge base rule matching completed', { evaluated: activeRules.length, applied: matchedRules.length });
-
-  // ─── STEP 3.5: Academic Evidence Retrieval & Grounding ───
+  // 4. Retrieve Academic Evidence links for the matched rules
   let validEvidenceLinks: any[] = [];
   try {
-    const ruleIds = rulesToInject.map(r => r._id);
-    const rawEvidenceLinks = await KnowledgeRuleSource.find({
-      ruleId: { $in: ruleIds },
-      status: 'active'
+    const ruleIds = matchedRules.map(r => r._id);
+    const rawEvidenceLinks = await KnowledgeRuleEvidence.find({
+      ruleId: { $in: ruleIds }
     })
     .populate({
-      path: 'academicSourceId',
-      select: 'title authors year journal publisher doi allowedUse readableInApp chunkBuildStatus'
-    })
-    .populate({
-      path: 'academicChunkIds',
-      select: 'chunkText sectionTitle sectionType pageStart pageEnd sourceOrder'
+      path: 'chunkId',
+      populate: {
+        path: 'sourceId',
+        select: 'title authors year journal publisher doi allowedUse readableInApp chunkBuildStatus'
+      }
     })
     .lean();
 
     validEvidenceLinks = rawEvidenceLinks.filter((link: any) => {
-      const src = link.academicSourceId;
+      const src = link.chunkId?.sourceId;
       return src && src.readableInApp === true && src.allowedUse === 'open_access_fulltext' && src.chunkBuildStatus === 'completed';
     });
   } catch (err: any) {
-    logger.warn('Failed to retrieve academic evidence chunks during dream analysis pipeline:', err);
-    validEvidenceLinks = [];
+    logger.warn('Failed to retrieve academic evidence links:', { error: String(err) });
   }
 
-  // Group valid evidence links by ruleId
+  // Group evidence by rule ID
   const linksByRule = new Map<string, any[]>();
   for (const link of validEvidenceLinks) {
-    if (!linksByRule.has(link.ruleId)) {
-      linksByRule.set(link.ruleId, []);
+    const rId = link.ruleId.toString();
+    if (!linksByRule.has(rId)) {
+      linksByRule.set(rId, []);
     }
-    linksByRule.get(link.ruleId)!.push(link);
+    linksByRule.get(rId)!.push(link);
   }
 
-  // Prioritize matched rules with evidence
-  const matchedRulesWithEvidence = rulesToInject.filter(r => linksByRule.has(r._id));
-  matchedRulesWithEvidence.sort((a, b) => {
-    const linksA = linksByRule.get(a._id) || [];
-    const linksB = linksByRule.get(b._id) || [];
-    const hasPrimaryA = linksA.some(l => l.evidenceRole === 'primary_support') ? 1 : 0;
-    const hasPrimaryB = linksB.some(l => l.evidenceRole === 'primary_support') ? 1 : 0;
-    
-    if (hasPrimaryA !== hasPrimaryB) return hasPrimaryB - hasPrimaryA;
-
-    const claimPriority: Record<string, number> = {
-      possible_contributing_factor: 5,
-      interpretive_framework: 4,
-      association_not_causation: 3,
-      hypothesis_not_diagnosis: 2,
-      epistemic_boundary_rule: 1
-    };
-    const prioA = claimPriority[a.claimStrength] || 0;
-    const prioB = claimPriority[b.claimStrength] || 0;
-    return prioB - prioA;
-  });
-
-  // Allowed evidence rules limit: max 4 rules
-  const allowedEvidenceRules = matchedRulesWithEvidence.slice(0, 4);
-  const allowedEvidenceRuleIds = new Set(allowedEvidenceRules.map(r => r._id));
-
-  // Prepare active evidence structures and prompt grounding texts
+  // Build prompt segments and audit trail
   const evidenceLinksAudit: any[] = [];
-  const validSourcesMap = new Map<string, any[]>();
+  let promptEvidenceText = '';
   let totalEvidenceChars = 0;
   const maxTotalEvidenceChars = 5000;
-  let promptEvidenceText = '';
+  const validSourcesMap = new Map<string, any[]>();
 
-  for (const r of rulesToInject) {
-    if (!allowedEvidenceRuleIds.has(r._id)) continue;
-    const links = linksByRule.get(r._id) || [];
-
-    // Sort links: primary_support first
-    links.sort((a, b) => {
-      const aVal = a.evidenceRole === 'primary_support' ? 1 : 0;
-      const bVal = b.evidenceRole === 'primary_support' ? 1 : 0;
-      return bVal - aVal;
-    });
+  for (const r of matchedRules) {
+    const links = linksByRule.get(r._id.toString()) || [];
+    if (links.length === 0) continue;
 
     // Limit to max 2 evidence links per rule
     const ruleLinks = links.slice(0, 2);
-
-    let ruleChunkCount = 0;
     let ruleText = '';
     const ruleSourcesList: any[] = [];
 
     for (const link of ruleLinks) {
-      const src = link.academicSourceId;
-      const chunks = (link.academicChunkIds || []) as any[];
+      const src = link.chunkId.sourceId;
+      const chunk = link.chunkId;
 
-      // Sort chunks by sourceOrder
-      chunks.sort((a, b) => (a.sourceOrder || 0) - (b.sourceOrder || 0));
-
-      // Limit to max 3 chunks per rule across all links
-      const remainingChunksAllowed = 3 - ruleChunkCount;
-      if (remainingChunksAllowed <= 0) break;
-
-      const selectedChunks = chunks.slice(0, remainingChunksAllowed);
-      ruleChunkCount += selectedChunks.length;
-
-      const chunkIds = selectedChunks.map(c => c._id.toString());
       ruleSourcesList.push({
         sourceId: src._id.toString(),
         title: src.title,
@@ -499,33 +408,21 @@ export async function runDreamAnalysis(
         year: src.year,
         journal: src.journal || src.publisher,
         doi: src.doi,
-        chunkIds
+        chunkIds: [chunk._id.toString()]
       });
 
-      // Construct rule evidence snippet (max 1500 chars per rule)
-      for (const chunk of selectedChunks) {
-        let remainingCharBudget = 1500 - ruleText.length;
-        if (ruleText) {
-          remainingCharBudget -= 1; // account for newline character
-        }
-        if (remainingCharBudget <= 0) break;
+      const snippet = link.quote || chunk.text || '';
+      ruleText += (ruleText ? '\n' : '') + snippet;
 
-        const textSnippet = chunk.chunkText || '';
-        const truncatedSnippet = textSnippet.substring(0, remainingCharBudget);
-        ruleText += (ruleText ? '\n' : '') + truncatedSnippet;
-      }
-
-      // Add audit details (capped around 300-500 characters, no embeddings)
-      const combinedChunkText = selectedChunks.map(c => c.chunkText).join(' [...] ');
       evidenceLinksAudit.push({
         ruleId: r._id,
-        evidenceRole: link.evidenceRole,
-        academicSourceId: src._id,
+        evidenceRole: 'primary_support',
+        sourceId: src._id,
         sourceTitle: src.title,
         sourceYear: src.year,
         doi: src.doi,
-        chunkIds: selectedChunks.map(c => c._id),
-        chunkPreview: combinedChunkText.substring(0, 400) + (combinedChunkText.length > 400 ? '...' : '')
+        chunkIds: [chunk._id],
+        chunkPreview: snippet.substring(0, 400) + (snippet.length > 400 ? '...' : '')
       });
     }
 
@@ -535,7 +432,7 @@ export async function runDreamAnalysis(
         const truncatedRuleText = ruleText.substring(0, remainingGlobalChars);
         totalEvidenceChars += truncatedRuleText.length;
 
-        validSourcesMap.set(r._id, ruleSourcesList);
+        validSourcesMap.set(r._id.toString(), ruleSourcesList);
 
         const authorsStr = ruleSourcesList.map(s => {
           const auths = s.authors || [];
@@ -548,10 +445,11 @@ export async function runDreamAnalysis(
         const doisStr = ruleSourcesList.map(s => s.doi || 'N/A').join('; ');
 
         promptEvidenceText += `
-Rule ID: ${r._id}
-Claim type: ${r.claimStrength}
+RuleCode: ${r.ruleCode}
+RuleStatement: ${r.ruleStatement}
 Source: ${authorsStr} (${yearsStr}), "${titlesStr}", DOI: ${doisStr}
-Evidence Chunks:
+Evidence Summary: ${ruleLinks.map(l => l.evidenceSummary).join('; ')}
+Evidence Quote:
 ${truncatedRuleText.split('\n').map(line => `- "${line}"`).join('\n')}
 `;
       }
@@ -598,10 +496,10 @@ ${truncatedRuleText.split('\n').map(line => `- "${line}"`).join('\n')}
     )
     .join('\n');
 
-  const compactRulesText = rulesToInject
+  const compactRulesText = matchedRules
     .map(
       (r) =>
-        `- Rule ID: "${r._id}" (Basis: "${r.scientificBasis}", Instruction: "${r.aiInstruction}", Claim Strength: "${r.claimStrength}", Confidence Cap: ${r.confidenceCap})`
+        `- RuleCode: "${r.ruleCode}" (Statement: "${r.ruleStatement}", Basis: "${r.scientificBasis}", Classifications: "${r.classifications.join(', ')}")`
     )
     .join('\n');
 
@@ -762,7 +660,7 @@ CRITICAL RULES:
 
   // Calculate deterministic dream score and breakdown (Backend owned)
   const resA = calculateComponentAScore(promptSymbols);
-  const resD = calculateComponentDScore(rulesToInject);
+  const resD = calculateComponentDScore(matchedRules);
   const resC = calculateComponentCScore();
 
   const ScoreB = scoringProfile.profileScore;

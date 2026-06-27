@@ -1,19 +1,13 @@
 import mongoose, { Document, Schema } from 'mongoose';
 import bcrypt from 'bcryptjs';
 
-// ─── Interface ────────────────────────────────────────────────────────────────
-
-/**
- * Represents the shape of a User document in MongoDB.
- * Aligns with PROJECT_SPEC.md § 6.1 — Users Collection.
- */
 export interface IUser extends Document {
-  username: string;      // unique handle, e.g. "@helloduongnha"
-  display_name: string;  // human-readable name shown on the UI
-  email: string;         // used for login — not exposed publicly
-  password: string;      // bcrypt-hashed — never returned in responses
-  avatar: string;        // URL to profile picture
-  bio: string;           // short user biography
+  username: string;
+  display_name: string;
+  email: string;
+  password: string;
+  avatar: string;
+  bio: string;
   follower_count: number;
   followers: any[];
   following: any[];
@@ -22,9 +16,8 @@ export interface IUser extends Document {
   defaultPrivacy: 'public' | 'private';
   followersPrivacy: 'everyone' | 'following' | 'only_me';
   followingPrivacy: 'everyone' | 'following' | 'only_me';
-  // ── Streak & Rank ─────────────────────────────────────────────────────────
   lastLoginDate: Date;
-  loginHistory: string[];    // 'YYYY-MM-DD' strings
+  loginHistory: string[];
   streakCount: number;
   highestStreak: number;
   rankPoints: number;
@@ -40,10 +33,6 @@ export interface IUser extends Document {
   totalTimeOnline: number;
   lastActiveDate: string;
   lastHeartbeatAt?: Date;
-  birth_date?: string;
-  birth_hour?: string;
-  fullName?: string;
-  gender?: string;
   sessions: {
     _id: mongoose.Types.ObjectId;
     userAgent: string;
@@ -55,11 +44,8 @@ export interface IUser extends Document {
   createdAt: Date;
   updatedAt: Date;
 
-  /** Instance method: compare a plaintext password against the stored hash */
   comparePassword(candidatePassword: string): Promise<boolean>;
 }
-
-// ─── Schema ───────────────────────────────────────────────────────────────────
 
 const UserSchema = new Schema<IUser>(
   {
@@ -89,7 +75,7 @@ const UserSchema = new Schema<IUser>(
       type: String,
       required: [true, 'Password is required'],
       minlength: [6, 'Password must be at least 6 characters'],
-      select: false, // never returned in query results by default
+      select: false,
     },
     avatar: {
       type: String,
@@ -139,7 +125,6 @@ const UserSchema = new Schema<IUser>(
       enum: ['everyone', 'following', 'only_me'],
       default: 'everyone',
     },
-    // ── Streak & Rank ─────────────────────────────────────────────────────
     lastLoginDate: {
       type: Date,
     },
@@ -188,22 +173,6 @@ const UserSchema = new Schema<IUser>(
     lastHeartbeatAt: {
       type: Date,
     },
-    birth_date: {
-      type: String,
-      default: '',
-    },
-    birth_hour: {
-      type: String,
-      default: '',
-    },
-    fullName: {
-      type: String,
-      default: '',
-    },
-    gender: {
-      type: String,
-      default: '',
-    },
     sessions: [
       {
         _id: {
@@ -234,34 +203,20 @@ const UserSchema = new Schema<IUser>(
     ],
   },
   {
-    timestamps: true, // auto-manages createdAt & updatedAt
-  },
+    timestamps: true,
+  }
 );
 
-// ─── Note on Indexes ─────────────────────────────────────────────────────────
-// `unique: true` on username and email (above) already instructs Mongoose to
-// create unique indexes for both fields automatically. No extra .index() calls
-// are needed — adding them would create duplicate indexes and trigger Mongoose
-// deprecation warnings under concurrent load.
-
-// ─── Pre-save Hook: Password Hashing ─────────────────────────────────────────
-
 UserSchema.pre('save', async function () {
-  // Only re-hash if the password field was actually modified
   if (!this.isModified('password')) return;
-
   const saltRounds = 12;
   this.password = await bcrypt.hash(this.password as string, saltRounds);
 });
-
-// ─── Instance Method: Password Comparison ────────────────────────────────────
 
 UserSchema.methods.comparePassword = async function (
   candidatePassword: string,
 ): Promise<boolean> {
   return bcrypt.compare(candidatePassword, this.password);
 };
-
-// ─── Model Export ─────────────────────────────────────────────────────────────
 
 export default mongoose.model<IUser>('User', UserSchema);

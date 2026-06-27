@@ -1,38 +1,24 @@
 import mongoose, { Document, Schema, Types } from 'mongoose';
 
-// ─── Interface ────────────────────────────────────────────────────────────────
-
-/**
- * A single edit history entry — stores the content before the edit.
- */
 export interface IEditHistoryEntry {
-  content:  string;
+  content: string;
   editedAt: Date;
 }
 
-/**
- * Represents the shape of a Dream document in MongoDB.
- * Aligns with PROJECT_SPEC.md § 6.2 — Dreams Collection.
- */
 export interface IDream extends Document {
-  userId:        Types.ObjectId;       // foreign key → User._id
-  content:       string;               // the dream text body
-  mood_tag:      string;               // e.g. "Lucid" | "Nightmare" | "Calm"
-  is_public:     boolean;              // public = appears in global feed
-  privacy:       'public' | 'private'; // granular privacy flag
-  likes:         string[];             // array of userId strings who liked this post
-  likes_count:   number;
+  userId: Types.ObjectId;
+  content: string;
+  mood_tag: string;
+  is_public: boolean;
+  privacy: 'public' | 'private';
+  likes: string[];
+  likes_count: number;
   comments_count: number;
-  created_at:    Date;                 // explicit field (used as cursor for pagination)
-  ai_status:     'pending' | 'sensing' | 'completed' | 'failed';
-  ai_result:     Record<string, unknown> | null; // placeholder for Phase 2 Oracle data
-  edit_history:  IEditHistoryEntry[];  // previous content versions before each edit
-  
-  // Auditable RAG analysis fields
-  dreamText?:       string;
-  sleepContext?:    Record<string, any>;
-  aiAnalysis?:      Record<string, any> | null;
-  visibility?:      'public' | 'private';
+  created_at: Date;
+  ai_status: 'pending' | 'sensing' | 'completed' | 'failed';
+  ai_result: Record<string, unknown> | null;
+  edit_history: IEditHistoryEntry[];
+  sleepContext?: Record<string, any>;
   retrievedContext?: Record<string, any> | null;
   analysisMetadata?: Record<string, any> | null;
   realLifeHypothesesFeedback?: Array<{
@@ -42,55 +28,50 @@ export interface IDream extends Document {
     userId: Types.ObjectId;
     updatedAt: Date;
   }> | null;
+  ruleFeedback?: Array<{
+    ruleId: string;
+    confirmed: boolean;
+    feedbackAt: Date;
+  }> | null;
 }
-
-// ─── Sub-Schema ───────────────────────────────────────────────────────────────
 
 const EditHistorySchema = new Schema<IEditHistoryEntry>(
   {
-    content:  { type: String, required: true },
+    content: { type: String, required: true },
     editedAt: { type: Date, default: Date.now },
   },
-  { _id: false }  // no _id needed per sub-document
+  { _id: false }
 );
-
-// ─── Schema ───────────────────────────────────────────────────────────────────
 
 const DreamSchema = new Schema<IDream>(
   {
     userId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
-      required: [true, 'userId is required'],
+      required: true,
       index: true,
     },
     content: {
       type: String,
-      required: [true, 'Dream content is required'],
+      required: true,
       trim: true,
-      minlength: [1, 'Content cannot be empty'],
-      maxlength: [2000, 'Content must not exceed 2000 characters'],
     },
     mood_tag: {
       type: String,
       trim: true,
       default: '',
-      maxlength: [50, 'Mood tag must not exceed 50 characters'],
     },
     is_public: {
       type: Boolean,
       default: true,
     },
-    // Granular privacy field — drives feed visibility
     privacy: {
-      type:    String,
-      enum:    ['public', 'private'],
+      type: String,
+      enum: ['public', 'private'],
       default: 'public',
     },
-    // Array of userId strings who liked this post.
-    // Enables O(1) membership check and drives likes_count.
     likes: {
-      type:    [String],
+      type: [String],
       default: [],
     },
     likes_count: {
@@ -103,8 +84,6 @@ const DreamSchema = new Schema<IDream>(
       default: 0,
       min: 0,
     },
-    // Explicit created_at — not delegated to Mongoose timestamps — because it
-    // is used as the pagination cursor and must be queryable as a Date field.
     created_at: {
       type: Date,
       default: () => new Date(),
@@ -118,29 +97,13 @@ const DreamSchema = new Schema<IDream>(
       type: Schema.Types.Mixed,
       default: null,
     },
-    // Stores previous content versions pushed before each edit operation.
-    // Allows displaying an "Edited" label when edit_history.length > 0.
     edit_history: {
-      type:    [EditHistorySchema],
+      type: [EditHistorySchema],
       default: [],
-    },
-    // Auditable RAG analysis fields
-    dreamText: {
-      type: String,
-      default: '',
     },
     sleepContext: {
       type: Schema.Types.Mixed,
       default: {},
-    },
-    visibility: {
-      type: String,
-      enum: ['public', 'private'],
-      default: 'public',
-    },
-    aiAnalysis: {
-      type: Schema.Types.Mixed,
-      default: null,
     },
     retrievedContext: {
       type: Schema.Types.Mixed,
@@ -151,32 +114,37 @@ const DreamSchema = new Schema<IDream>(
       default: {},
     },
     realLifeHypothesesFeedback: {
-      type: [{
-        hypothesisIndex: { type: Number, required: true },
-        answer: { type: String, enum: ['yes', 'no', 'unsure'], required: true },
-        questionText: { type: String, required: true },
-        userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-        updatedAt: { type: Date, default: Date.now }
-      }],
-      default: []
+      type: [
+        {
+          hypothesisIndex: { type: Number, required: true },
+          answer: { type: String, enum: ['yes', 'no', 'unsure'], required: true },
+          questionText: { type: String, required: true },
+          userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+          updatedAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
+    ruleFeedback: {
+      type: [
+        {
+          ruleId: { type: String, required: true },
+          confirmed: { type: Boolean, required: true },
+          feedbackAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
     },
   },
   {
-    // updatedAt only — created_at is managed explicitly above.
     timestamps: { createdAt: false, updatedAt: 'updated_at' },
-  },
+  }
 );
 
-// ─── Indexes ──────────────────────────────────────────────────────────────────
-// Compound index — covers personal timeline queries:
-//   db.dreams.find({ userId, is_public }).sort({ created_at: -1 })
-// The leading userId field also satisfies single-field lookups on userId.
+// Timeline Index
 DreamSchema.index({ userId: 1, created_at: -1 });
 
-// Standalone index — covers global feed queries:
-//   db.dreams.find({ is_public: true, created_at: { $lt: cursor } }).sort({ created_at: -1 })
+// Global Feed Index
 DreamSchema.index({ created_at: -1 });
-
-// ─── Model Export ─────────────────────────────────────────────────────────────
 
 export default mongoose.model<IDream>('Dream', DreamSchema);

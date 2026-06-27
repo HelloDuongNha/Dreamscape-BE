@@ -907,7 +907,7 @@ export const saveHypothesisFeedback = async (req: Request, res: Response): Promi
     }
 
     // 2. Validate index against stored hypotheses in ai_result / aiAnalysis
-    const activeAnalysis = dream.ai_result || dream.aiAnalysis || {};
+    const activeAnalysis = dream.ai_result || (dream as any).aiAnalysis || {};
     const hypotheses = (activeAnalysis as any).real_life_hypotheses;
     if (!Array.isArray(hypotheses) || hypothesisIndex >= hypotheses.length) {
       res.status(400).json({ success: false, message: 'Không tìm thấy giả thuyết tương ứng với index được cung cấp.' });
@@ -957,8 +957,8 @@ export const saveHypothesisFeedback = async (req: Request, res: Response): Promi
     }
 
     // Update aiAnalysis.real_life_hypotheses[index].userFeedback
-    if (dream.aiAnalysis && (dream.aiAnalysis as any).real_life_hypotheses) {
-      const activeHypotheses = (dream.aiAnalysis as any).real_life_hypotheses;
+    if ((dream as any).aiAnalysis && ((dream as any).aiAnalysis as any).real_life_hypotheses) {
+      const activeHypotheses = ((dream as any).aiAnalysis as any).real_life_hypotheses;
       if (activeHypotheses[hypothesisIndex]) {
         activeHypotheses[hypothesisIndex].userFeedback = answer;
         dream.markModified('aiAnalysis');

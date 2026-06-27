@@ -15,9 +15,9 @@ const AcademicSource = require('../src/models/AcademicSource').default;
 const AcademicFullText = require('../src/models/AcademicFullText').default;
 const AcademicFullTextSection = require('../src/models/AcademicFullTextSection').default;
 const AcademicChunk = require('../src/models/AcademicChunk').default;
-const KnowledgeRuleCandidate = require('../src/models/KnowledgeRuleCandidate').default;
-const KnowledgeRule = require('../src/models/KnowledgeRule').default;
-const KnowledgeRuleSource = require('../src/models/KnowledgeRuleSource').default;
+const PendingKnowledgeRule = require('../src/models/PendingKnowledgeRule').default;
+const VerifiedKnowledgeRule = require('../src/models/VerifiedKnowledgeRule').default;
+const KnowledgeRuleEvidence = require('../src/models/KnowledgeRuleEvidence').default;
 
 async function run() {
   const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017/dreamscape';
@@ -55,7 +55,7 @@ async function run() {
     });
 
     // 4. Delete candidates starting with d_test_ or linked to Validation Test Source Book
-    const deletedCandidates = await KnowledgeRuleCandidate.deleteMany({
+    const deletedCandidates = await PendingKnowledgeRule.deleteMany({
       $or: [
         { proposedRuleId: /^d_test_/ },
         { sourceTitle: "Validation Test Source Book" },
@@ -63,14 +63,14 @@ async function run() {
       ]
     });
 
-    // 5. Delete KnowledgeRule and KnowledgeRuleSource linked to d_test_*
-    const deletedRules = await KnowledgeRule.deleteMany({
+    // 5. Delete VerifiedKnowledgeRule and KnowledgeRuleEvidence linked to d_test_*
+    const deletedRules = await VerifiedKnowledgeRule.deleteMany({
       _id: /^d_test_/
     });
-    const deletedLinks = await KnowledgeRuleSource.deleteMany({
+    const deletedLinks = await KnowledgeRuleEvidence.deleteMany({
       $or: [
         { ruleId: /^d_test_/ },
-        { academicSourceId: { $in: fakeSourceIds } }
+        { sourceId: { $in: fakeSourceIds } }
       ]
     });
 

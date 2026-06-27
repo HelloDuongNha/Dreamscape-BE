@@ -42,10 +42,10 @@ const sanitizeUser = (user: InstanceType<typeof User>) => ({
   followersPrivacy: user.followersPrivacy || 'everyone',
   followingPrivacy: user.followingPrivacy || 'everyone',
   createdAt: user.createdAt,
-  birth_date: user.birth_date || '',
-  birth_hour: user.birth_hour || '',
-  fullName: user.fullName || '',
-  gender: user.gender || '',
+  birth_date: (user as any).birth_date || '',
+  birth_hour: (user as any).birth_hour || '',
+  fullName: (user as any).fullName || '',
+  gender: (user as any).gender || '',
   // ── Streak & Rank ─────────────────────────────────────────────────────────
   loginHistory: user.loginHistory || [],
   streakCount:  user.streakCount  ?? 0,
@@ -478,23 +478,24 @@ export const updateProfile = async (
     }
 
     // ── Update Birth Details & Full Name / Gender ───────────────────────
+    const u = user as any;
     if (birth_date !== undefined) {
-      user.birth_date = birth_date;
+      u.birth_date = birth_date;
     }
     if (birth_hour !== undefined) {
-      user.birth_hour = birth_hour;
+      u.birth_hour = birth_hour;
     }
     if (fullName !== undefined) {
-      user.fullName = fullName;
+      u.fullName = fullName;
     }
     if (gender !== undefined) {
-      user.gender = gender;
+      u.gender = gender;
     }
 
     await user.save();
 
     // Trigger deterministic user dream profile update/upsert
-    const computedCulturalData = buildCulturalProfile(user.birth_date || '', user.birth_hour || '');
+    const computedCulturalData = buildCulturalProfile(u.birth_date || '', u.birth_hour || '');
     try {
       const existingProfile = await UserDreamProfile.findOne({ userId: user._id });
       const measuredProfile = existingProfile ? existingProfile.measuredPsychologicalProfile : undefined;
@@ -505,11 +506,11 @@ export const updateProfile = async (
         {
           $set: {
             basicProfile: {
-              fullName: user.fullName || '',
-              gender: user.gender || 'unknown',
-              birthDate: user.birth_date || '',
-              birthHour: user.birth_hour || '',
-              birthTimeUnknown: !user.birth_hour || user.birth_hour === 'none'
+              fullName: u.fullName || '',
+              gender: u.gender || 'unknown',
+              birthDate: u.birth_date || '',
+              birthHour: u.birth_hour || '',
+              birthTimeUnknown: !u.birth_hour || u.birth_hour === 'none'
             },
             culturalProfile: computedCulturalData,
             scoringProfile: computedScoringProfile,
@@ -617,7 +618,8 @@ export const verifyOtp = async (
       const token = signToken(String(user._id), String(sessionId));
 
       // Initialize the deterministic User Dream Profile upon registration
-      const computedCulturalData = buildCulturalProfile(user.birth_date || '', user.birth_hour || '');
+      const u = user as any;
+      const computedCulturalData = buildCulturalProfile(u.birth_date || '', u.birth_hour || '');
       const computedScoringProfile = buildScoringProfile(undefined);
       try {
         await UserDreamProfile.updateOne(
@@ -625,11 +627,11 @@ export const verifyOtp = async (
           {
             $set: {
               basicProfile: {
-                fullName: user.fullName || '',
-                gender: user.gender || 'unknown',
-                birthDate: user.birth_date || '',
-                birthHour: user.birth_hour || '',
-                birthTimeUnknown: !user.birth_hour || user.birth_hour === 'none'
+                fullName: u.fullName || '',
+                gender: u.gender || 'unknown',
+                birthDate: u.birth_date || '',
+                birthHour: u.birth_hour || '',
+                birthTimeUnknown: !u.birth_hour || u.birth_hour === 'none'
               },
               culturalProfile: computedCulturalData,
               scoringProfile: computedScoringProfile,

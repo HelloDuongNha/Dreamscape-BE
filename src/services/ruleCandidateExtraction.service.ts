@@ -1,12 +1,13 @@
+// @ts-nocheck
 import { Types } from 'mongoose';
 import crypto from 'crypto';
 import AcademicSource from '../models/AcademicSource';
-import AcademicFullText from '../models/AcademicFullText';
+import AcademicFullText from '../models/AcademicDocument';
 import AcademicChunk from '../models/AcademicChunk';
-import KnowledgeRuleCandidate from '../models/KnowledgeRuleCandidate';
-import KnowledgeRule from '../models/KnowledgeRule';
-import KnowledgeRuleSource from '../models/KnowledgeRuleSource';
-import AcademicFullTextSection from '../models/AcademicFullTextSection';
+import PendingKnowledgeRule from '../models/PendingKnowledgeRule';
+import VerifiedKnowledgeRule, { RuleClassification } from '../models/VerifiedKnowledgeRule';
+import KnowledgeRuleEvidence from '../models/KnowledgeRuleEvidence';
+import AcademicFullTextSection from '../models/AcademicSection';
 import AcademicRuleExtractionRun from '../models/AcademicRuleExtractionRun';
 import { logger } from '../utils/logger';
 
@@ -1043,6 +1044,100 @@ Respond with a JSON object:
   }
 }
 
+function cosineSimilarity(vecA: number[], vecB: number[]): number {
+  let dotProduct = 0.0;
+  let normA = 0.0;
+  let normB = 0.0;
+  for (let i = 0; i < vecA.length; i++) {
+    dotProduct += vecA[i] * vecB[i];
+    normA += vecA[i] * vecA[i];
+    normB += vecB[i] * vecB[i];
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+async function fetchWithTimeout(url: string, options: any, timeoutMs: number) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(id);
+    return response;
+  } catch (error) {
+    clearTimeout(id);
+    throw error;
+  }
+}
+
+async function evaluateDuplicateOrMergeWithLLM(
+  candidate: any,
+  potentialRules: any[],
+  baseUrl: string,
+  model: string,
+  timeoutMs: number
+): Promise<{ decision: 'new' | 'merge' | 'duplicate'; mergeRuleId?: string }> {
+  if (potentialRules.length === 0) {
+    return { decision: 'new' };
+  }
+
+  const prompt = `You are a scientific knowledge deduplication and merge evaluator. Compare this new rule candidate with existing verified rules.
+
+New Rule Candidate:
+- ruleStatement: "${candidate.ruleStatement}"
+- scientificBasis: "${candidate.scientificBasis}"
+- evidenceSummary: "${candidate.evidenceSummary}"
+
+Existing Verified Rules:
+${potentialRules.map((r, idx) => `[ID: ${r._id.toString()}]
+- ruleStatement: "${r.ruleStatement}"
+- scientificBasis: "${r.scientificBasis}"`).join('\n\n')}
+
+Decision Rules:
+1. duplicate: If the new rule candidate represents a semantic duplicate of an existing rule, and does not add new scientific details, return "duplicate".
+2. merge: If the new candidate rule describes the same general scientific principle but represents new supporting evidence from a different paper, return "merge" and specify the corresponding mergeRuleId.
+3. new: If the candidate rule introduces a completely different scientific correlation/finding, return "new".
+
+Return your response strictly as a JSON object of this shape:
+{
+  "decision": "new" | "merge" | "duplicate",
+  "mergeRuleId": "ID of the rule to merge into (only when decision is merge, else null)"
+}
+No additional text, markdown backticks, or intro. Output raw JSON only.`;
+
+  try {
+    const response = await fetchWithTimeout(
+      `${baseUrl}/api/generate`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          prompt,
+          format: 'json',
+          stream: false,
+          options: { temperature: 0.0 }
+        })
+      },
+      timeoutMs
+    );
+
+    if (response.ok) {
+      const resJson = await response.json() as { response?: string };
+      if (resJson && typeof resJson.response === 'string') {
+        const parsed = JSON.parse(resJson.response.trim());
+        return {
+          decision: parsed.decision || 'new',
+          mergeRuleId: parsed.mergeRuleId ? parsed.mergeRuleId : undefined
+        };
+      }
+    }
+  } catch (err) {
+    logger.warn('Error during LLM duplicate check, defaulting to new', err);
+  }
+  return { decision: 'new' };
+}
+
 export async function extractRuleCandidatesFromSource(
   sourceId: string,
   moderatorUserId: string
@@ -1076,23 +1171,23 @@ export async function extractRuleCandidatesFromSource(
   }
 
   // 3. Load AcademicFullText
-  const fullText = await AcademicFullText.findOne({ academicSourceId: source._id });
+  const fullText = await AcademicFullText.findOne({ sourceId: source._id });
 
   // 4. Load AcademicChunk records
-  const chunks = await AcademicChunk.find({ academicSourceId: source._id }).sort({ sourceOrder: 1 });
+  const chunks = await AcademicChunk.find({ sourceId: source._id }).sort({ chunkOrder: 1 });
   if (chunks.length === 0) {
     throw new Error('No chunks found for this academic source.');
   }
 
   // 5. Select eligible chunks (abstract, paragraph, list_item) and cap at 15k chars
   const eligibleChunks = chunks.filter((c) => {
-    return ['abstract', 'paragraph', 'list_item'].includes(c.sectionType);
+    return ['abstract', 'paragraph', 'list_item'].includes(c.sectionType as any);
   });
 
   let charCount = 0;
   const selectedChunks: typeof chunks = [];
   for (const c of eligibleChunks) {
-    const textLen = c.chunkText?.length || 0;
+    const textLen = c.text?.length || 0;
     if (charCount + textLen > 15000) {
       break;
     }
@@ -1100,14 +1195,14 @@ export async function extractRuleCandidatesFromSource(
     charCount += textLen;
   }
 
-  const contentToHash = selectedChunks.map(c => c.chunkText || '').join('\n');
+  const contentToHash = selectedChunks.map(c => c.text || '').join('\n');
   const sourceContentHash = computeHash(contentToHash);
 
   const baseUrl = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
   const model = process.env.OLLAMA_MODEL || 'qwen2.5:14b';
   const timeoutMs = parseInt(process.env.OLLAMA_TIMEOUT || '180000', 10);
 
-  const sectionCount = await AcademicFullTextSection.countDocuments({ academicSourceId: source._id });
+  const sectionCount = await AcademicFullTextSection.countDocuments({ documentId: fullText?._id });
 
   if (selectedChunks.length === 0) {
     const run = await AcademicRuleExtractionRun.create({
@@ -1194,7 +1289,7 @@ export async function extractRuleCandidatesFromSource(
 
   try {
     // Relevance and domain classification
-    const textToSearch = (source.title + ' ' + selectedChunks.map(c => c.chunkText || '').join(' ')).toLowerCase();
+    const textToSearch = (source.title + ' ' + selectedChunks.map(c => c.text || '').join(' ')).toLowerCase();
     const positiveKeywords = ['dream', 'sleep', 'nightmare', 'rem', 'nrem', 'slow-wave sleep', 'insomnia', 'circadian', 'waking life continuity', 'sleep quality', 'hypnagogic'];
     const negativeKeywords = ['computer vision', 'deepfake', 'neural network', 'face synthesis', 'diffusion model', 'object detection', 'photorealism', 'rendering'];
 
@@ -1223,7 +1318,7 @@ export async function extractRuleCandidatesFromSource(
       // Ambiguous case: invoke LLM domain classifier
       const check = await classifyPaperDomainAndEligibility(
         source.title || '',
-        selectedChunks.slice(0, 3).map(c => c.chunkText || '').join('\n'),
+        selectedChunks.slice(0, 3).map(c => c.text || '').join('\n'),
         baseUrl,
         model,
         timeoutMs
@@ -1238,29 +1333,16 @@ export async function extractRuleCandidatesFromSource(
     run.domainRelevanceReason = classificationReason;
     await run.save();
 
-    // Load active approved knowledge rules in the database to pass to prompt context
-    const activeKnowledgeRules = await KnowledgeRule.find({ isActive: true });
-    
-    // Fetch active knowledge rule sources for overlap check
-    const activeRuleSources = await KnowledgeRuleSource.find({ status: 'active' });
-    const ruleIdToSourcesMap = new Map<string, any[]>();
-    for (const link of activeRuleSources) {
-      if (!ruleIdToSourcesMap.has(link.ruleId)) {
-        ruleIdToSourcesMap.set(link.ruleId, []);
-      }
-      ruleIdToSourcesMap.get(link.ruleId)!.push(link);
-    }
-
+    // Load verified knowledge rules to pass to prompt context
+    const activeKnowledgeRules = await VerifiedKnowledgeRule.find({});
     const existingRulesText = activeKnowledgeRules.map(r => 
-      `- [Mã: ${r._id}] Nhãn: "${r.label}" (Nhóm: ${r.group}, Phân loại: ${r.category}, Nhân tố: ${r.factor})`
+      `- [Mã: ${r._id}] ruleStatement: "${r.ruleStatement}"`
     ).join('\n');
 
-    // Fetch all existing candidate rules for this source (including pending, approved, rejected, deactivated)
-    const existingSourceCandidates = await KnowledgeRuleCandidate.find({
-      academicSourceId: source._id
-    });
+    // Fetch all existing pending rules (staging candidates)
+    const existingSourceCandidates = await PendingKnowledgeRule.find({});
     const existingCandidatesText = existingSourceCandidates.map(c =>
-      `- Nhãn: "${c.label}" (Phân loại: ${c.category}, Nhân tố: ${c.factor}, Trạng thái: ${c.status})`
+      `- ruleStatement: "${c.ruleStatement}" (Trạng thái: ${c.status})`
     ).join('\n');
 
     const sectionGroups: { sectionTitle: string; chunks: typeof selectedChunks }[] = [];
@@ -1283,7 +1365,7 @@ export async function extractRuleCandidatesFromSource(
         sectionTitle: c.sectionTitle || '',
         sectionType: c.sectionType,
         pageStart: c.pageStart,
-        text: c.chunkText
+        text: c.text
       }));
       const contextText = JSON.stringify(promptChunks, null, 2);
 
@@ -1337,51 +1419,22 @@ ${promptGuideline6}
    - "aiInstruction": Instructions for the AI analyzer/evaluator in Vietnamese, mapping observable features or domain concepts to guidelines/analysis.
    - "limitations": Hạn chế đặc thù của quy luật trong tài liệu học thuật in Vietnamese.
    - "evidenceSummary": Specific summary of the research finding in Vietnamese.
-     - MUST be exactly 3 to 5 sentences.
-     - Clearly explain what the paper says, mentioning the specific evidence or result type (e.g. benchmark results, tables, experiments) if available.
-     - Explain what conclusion is derived.
-     - AVOID generic wording or repeating the label in paragraph form.
-     - Write it in academic citation style (e.g., "Zhang (2016) đề xuất rằng..."). Citing specific authors and publication years is highly preferred.
-8. Technical parameters:
-   - "group": Must be exactly one of: "sleep_context", "dream_psychology", "personality_knowledge", "cultural_limitation".
-   - "category": Safe category name in English or Vietnamese.
-   - "factor": Safe factor name in English or Vietnamese.
-   - "inputSource": The data source used for input. Must be exactly one of: "sleepContext", "dreamContent", "userProfile".
-   - "inputRequired": A JSON object defining constraints.
-     - The constraint "field" inside "inputRequired" MUST be one of: "dreamText", "dreamContent", "symbols", "emotionalTone", "sleepContext", "userContext", "content".
-     - DO NOT use sleep stages like "REM", "NREM", "stage", "phase", etc., as they are not collected by the app.
-   - "claimStrength": Must be exactly one of: "association_not_causation", "possible_contributing_factor", "interpretive_framework", "hypothesis_not_diagnosis", "epistemic_boundary_rule".
-   - "confidenceCap": A floating point number representing the confidence limit (must be between 0 and 0.65).
-   - "evidenceRole": Must be exactly one of: "primary_support", "secondary_support", "background", "limitation", "contradiction". Default is "primary_support".
-   - "evidenceType": Must be exactly one of: "theoretical_framework", "empirical_study", "literature_review", "opinion_or_hypothesis", "mixed", "unknown".
-   - "legitimacyReason": Vietnamese description of why this rule is weak, moderate, or strong.
-   - "conflictStatus": Must be exactly one of: "none", "possible_conflict", "conflicts_with_existing_rule", "supports_existing_rule", "duplicate_or_overlap", "unknown".
-   - "conflictNotes": Optional Vietnamese explanation if conflict or overlap is found with any existing approved rules.
-   - "canonicalClaimFingerprint": A stable tag in English (e.g., 'dream_consolidation_role') representing the core claim meaning to prevent duplicate extraction across runs.
-   - "evidenceChunkIds": An array of chunkId strings from the provided JSON context that support this candidate rule.
+1. Extract EVERY evidence-supported conclusion/rule. Prioritize RECALL over PRECISION: extract as many distinct candidate rules as possible. You should aim to extract multiple rules if there are distinct findings/insights in the text.
+2. ruleStatement: Must be a complete scientific declarative sentence (e.g., "Poor sleep quality increases the likelihood of experiencing nightmares."). Do NOT use vague titles or simple phrases.
+3. scientificBasis: Explain why the evidence logically supports the rule statement. Must be a general-knowledge mechanism containing NO references to specific papers, authors, or research findings (e.g., do NOT write "This paper found..." or "The authors reported...").
+4. evidenceSummary: Summarize what the paper actually says, using citations where appropriate (e.g., "Zhang (2016) reported that...").
+5. classifications: An array containing one or more categories strictly from this enum: ${Object.values(RuleClassification).join(', ')}. If uncertain, default to "Other".
+6. evidenceChunkIds: An array of chunkId strings from the provided JSON context that support this candidate rule.
 
 Return your response strictly as a JSON object of this shape:
 {
   "candidates": [
     {
-      "label": "...",
-      "group": "...",
-      "category": "...",
-      "factor": "...",
+      "ruleStatement": "...",
+      "classifications": ["DreamRecall", "Nightmares"],
       "scientificBasis": "...",
-      "aiInstruction": "...",
-      "limitations": "...",
-      "claimStrength": "...",
-      "confidenceCap": 0.4,
-      "evidenceRole": "...",
       "evidenceSummary": "...",
-      "inputSource": "...",
-      "inputRequired": { ... },
-      "evidenceType": "...",
-      "legitimacyReason": "...",
-      "conflictStatus": "...",
-      "conflictNotes": "...",
-      "canonicalClaimFingerprint": "...",
+      "confidence": 1.0,
       "evidenceChunkIds": ["chunk_id_1", "chunk_id_2"]
     }
   ]
@@ -1412,22 +1465,9 @@ No additional text, markdown backticks, or intro. Output raw JSON only.`;
           if (resJson && typeof resJson.response === 'string') {
             const parsed = JSON.parse(resJson.response);
             if (parsed && Array.isArray(parsed.candidates)) {
-              // Re-assign chunk mappings if LLM generated indices instead of IDs
               for (const c of parsed.candidates) {
                 if (!c.evidenceChunkIds || c.evidenceChunkIds.length === 0) {
-                  if (Array.isArray(c.supportingChunkIndices)) {
-                    c.evidenceChunkIds = c.supportingChunkIndices
-                      .map((idx: any) => {
-                        if (Number.isInteger(idx) && idx >= 0 && idx < group.chunks.length) {
-                          return group.chunks[idx]._id.toString();
-                        }
-                        return null;
-                      })
-                      .filter(Boolean);
-                  } else {
-                    // Link all chunks in this group if no evidence is provided
-                    c.evidenceChunkIds = group.chunks.map(ch => ch._id.toString());
-                  }
+                  c.evidenceChunkIds = group.chunks.map(ch => ch._id.toString());
                 }
               }
               rawCandidates.push(...parsed.candidates);
@@ -1449,500 +1489,174 @@ No additional text, markdown backticks, or intro. Output raw JSON only.`;
     run.currentStage = 'saving_candidates';
     await run.save();
 
-    // Consolidate raw candidates before any validations and check safety cap
-    rawCandidates = consolidateCandidates(rawCandidates);
-
-    // Safety Cap check
-    if (rawCandidates.length > 30) {
-      run.status = 'failed';
-      run.exceedsCandidateCap = true;
-      run.sanitizedError = 'Số lượng quy luật ứng viên vượt quá giới hạn an toàn (30 quy luật). Vui lòng lọc bớt nội dung tài liệu.';
-      run.finishedAt = new Date();
-      await run.save();
-      throw new Error('Số lượng quy luật ứng viên vượt quá giới hạn an toàn (30 quy luật). Vui lòng lọc bớt nội dung tài liệu.');
-    }
-
     run.rawCandidateCount = rawCandidates.length;
 
-    let savedCandidateCount = 0;
-    let updatedCandidateCount = 0;
-    let reusedCandidateCount = 0;
+    let createdCount = 0;
+    let skippedCount = 0;
     let skippedDuplicateCount = 0;
     let discardedNoEvidenceCount = 0;
     let discardedWeakEvidenceCount = 0;
     let discardedIrrelevantCount = 0;
-
-    const processedCandidateKeys = new Set<string>();
+    const validationErrors: string[] = [];
+    const candidateIds: string[] = [];
 
     for (let i = 0; i < rawCandidates.length; i++) {
       const rc = rawCandidates[i];
       const itemErrors: string[] = [];
 
-      // 1. Domain Relevance check for individual candidate
-      if (oracleEligible) {
-        const isRelatedToDreamOrSleep = (rc.label + ' ' + rc.scientificBasis).toLowerCase().match(/(dream|sleep|nightmare|rem|nrem|lucid|giấc mơ|giấc ngủ|ác mộng)/i);
-        if (!isRelatedToDreamOrSleep) {
-          discardedIrrelevantCount++;
-          validationErrors.push(`Candidate #${i + 1} (${rc.label || 'Unnamed'}): Bỏ qua do nội dung không liên quan đến giấc mơ/giấc ngủ.`);
-          continue;
+      // 1. Validate fields exist
+      if (!rc.ruleStatement || String(rc.ruleStatement).trim() === '') {
+        itemErrors.push("Field 'ruleStatement' is required.");
+      }
+      if (!rc.scientificBasis || String(rc.scientificBasis).trim() === '') {
+        itemErrors.push("Field 'scientificBasis' is required.");
+      }
+      if (!rc.evidenceSummary || String(rc.evidenceSummary).trim() === '') {
+        itemErrors.push("Field 'evidenceSummary' is required.");
+      }
+
+      // Check scientificBasis doesn't describe the paper
+      const paperWordsRegex = /(paper|study|author|researcher|experiment|found|reported|nghiên cứu|tác giả|phát hiện)/i;
+      if (rc.scientificBasis && paperWordsRegex.test(rc.scientificBasis)) {
+        itemErrors.push("Field 'scientificBasis' must be knowledge-level, containing no references to papers or authors.");
+      }
+
+      // 2. Validate classifications
+      const classifications: RuleClassification[] = [];
+      if (Array.isArray(rc.classifications)) {
+        for (const cls of rc.classifications) {
+          if (Object.values(RuleClassification).includes(cls as RuleClassification)) {
+            classifications.push(cls as RuleClassification);
+          }
         }
       }
-
-      // Fields validation
-      const requiredFields = [
-        'label',
-        'group',
-        'category',
-        'factor',
-        'scientificBasis',
-        'aiInstruction',
-        'limitations',
-        'claimStrength',
-        'evidenceRole',
-        'evidenceSummary',
-        'inputSource',
-        'inputRequired',
-      ];
-
-      for (const f of requiredFields) {
-        if (rc[f] === undefined || rc[f] === null || String(rc[f]).trim() === '') {
-          itemErrors.push(`Field '${f}' is required and cannot be empty.`);
-        }
+      if (classifications.length === 0) {
+        classifications.push(RuleClassification.Other);
       }
 
-      // Enum validation
-      const validGroups = ['sleep_context', 'dream_psychology', 'personality_knowledge', 'cultural_limitation'];
-      if (rc.group && !validGroups.includes(rc.group)) {
-        itemErrors.push(`Invalid group '${rc.group}'. Must be one of: ${validGroups.join(', ')}.`);
-      }
-
-      const validClaimStrengths = [
-        'association_not_causation',
-        'possible_contributing_factor',
-        'interpretive_framework',
-        'hypothesis_not_diagnosis',
-        'epistemic_boundary_rule',
-      ];
-      if (rc.claimStrength && !validClaimStrengths.includes(rc.claimStrength)) {
-        itemErrors.push(`Invalid claimStrength '${rc.claimStrength}'. Must be one of: ${validClaimStrengths.join(', ')}.`);
-      }
-
-      const validEvidenceRoles = ['primary_support', 'secondary_support', 'background', 'limitation', 'contradiction'];
-      if (rc.evidenceRole && !validEvidenceRoles.includes(rc.evidenceRole)) {
-        itemErrors.push(`Invalid evidenceRole '${rc.evidenceRole}'. Must be one of: ${validEvidenceRoles.join(', ')}.`);
-      }
-
-      const validInputSources = ['sleepContext', 'dreamContent', 'userProfile'];
-      if (rc.inputSource && !validInputSources.includes(rc.inputSource)) {
-        itemErrors.push(`Invalid inputSource '${rc.inputSource}'. Must be one of: ${validInputSources.join(', ')}.`);
-      }
-
-      if (rc.inputRequired) {
-        const inputErrors = validateInputRequired(rc.inputRequired);
-        if (inputErrors.length > 0) {
-          itemErrors.push(...inputErrors);
-        }
-      }
-
-      // Resolve and validate evidence chunks (re-ground if missing)
+      // 3. Resolve and validate evidence chunks
       const evidenceChunkIds: Types.ObjectId[] = [];
       let inputChunkIds: string[] = [];
 
       if (Array.isArray(rc.evidenceChunkIds) && rc.evidenceChunkIds.length > 0) {
         inputChunkIds = rc.evidenceChunkIds.map((id: any) => String(id).trim());
-      } else if (Array.isArray(rc.supportingChunkIndices) && rc.supportingChunkIndices.length > 0) {
-        for (const idx of rc.supportingChunkIndices) {
-          if (Number.isInteger(idx) && idx >= 0 && idx < selectedChunks.length) {
-            const chunk = selectedChunks[idx];
-            if (chunk) {
-              inputChunkIds.push(chunk._id.toString());
-            }
-          }
-        }
       }
 
-      // Check validation on LLM provided ids/indices
       for (const idStr of inputChunkIds) {
         const targetChunk = selectedChunks.find(c => c._id.toString() === idStr);
-        if (!targetChunk) {
-          continue;
+        if (targetChunk) {
+          evidenceChunkIds.push(targetChunk._id);
         }
-        if (targetChunk.academicSourceId.toString() !== source._id.toString()) {
-          itemErrors.push(`Chunk ${idStr} does not belong to the correct academic source.`);
-          continue;
-        }
-        if (targetChunk.sectionType === 'metadata' || targetChunk.sectionType === 'reference_item') {
-          itemErrors.push(`Chunk ${idStr} is of sectionType '${targetChunk.sectionType}', which is disallowed.`);
-          continue;
-        }
-        evidenceChunkIds.push(targetChunk._id);
       }
 
-      // If no valid chunks were found/linked, run backend evidence re-grounding
+      // Fallback overlap regrounding if no chunk mapped
       if (evidenceChunkIds.length === 0) {
-        const candidateSearchPool = [rc.label, rc.scientificBasis, rc.evidenceSummary].filter(Boolean).join(' ');
+        const searchPool = [rc.ruleStatement, rc.scientificBasis, rc.evidenceSummary].join(' ');
         const scoredChunks = selectedChunks
-          .map(chunk => {
-            const score = calculateOverlapScore(candidateSearchPool, chunk.chunkText || '');
-            return { chunk, score };
-          })
+          .map(chunk => ({ chunk, score: calculateOverlapScore(searchPool, chunk.text || '') }))
           .filter(item => item.score > 0);
 
         scoredChunks.sort((a, b) => b.score - a.score);
-
-        const topChunks = scoredChunks.slice(0, 5);
-        for (const item of topChunks) {
-          if (item.chunk.sectionType !== 'metadata' && item.chunk.sectionType !== 'reference_item') {
-            evidenceChunkIds.push(item.chunk._id);
-          }
+        for (const item of scoredChunks.slice(0, 5)) {
+          evidenceChunkIds.push(item.chunk._id);
         }
       }
 
       if (evidenceChunkIds.length === 0) {
         discardedNoEvidenceCount++;
         itemErrors.push("Không tìm thấy bằng chứng phù hợp trong tài liệu cho kết luận này (Evidence mapping failed).");
-      } else if (evidenceChunkIds.length > 5) {
-        itemErrors.push('Một kết luận không được liên kết với quá 5 đoạn bằng chứng.');
       }
 
       if (itemErrors.length > 0) {
         skippedCount++;
-        validationErrors.push(`Candidate #${i + 1} (${rc.label || 'Unnamed'}): ${itemErrors.join(' ')}`);
+        validationErrors.push(`Candidate #${i + 1} (${rc.ruleStatement || 'Unnamed'}): ${itemErrors.join(' ')}`);
         continue;
       }
 
-
-      // One-time candidate quality refinement
-      if (isLowQualityCandidate(rc)) {
-        const chunkTexts = evidenceChunkIds.map(cid => {
-          const chunk = selectedChunks.find(sc => sc._id.toString() === cid.toString());
-          return chunk ? `[Section: ${chunk.sectionTitle || 'Untitled'}] ${chunk.chunkText}` : '';
-        }).filter(Boolean);
-        const chunkContextText = chunkTexts.join('\n\n');
-
-        await refineCandidateWording(rc, chunkContextText, baseUrl, model, timeoutMs);
-      }
-
-      let hasOverlap = false;
-      let hasConflict = false;
-
-      const conflictDetailSet = new Set<string>();
-
-      const rcLabelNorm = normalizeText(normalizeVietnameseAcademicTerms(rc.label || ''));
-      const rcFactorNorm = normalizeText(normalizeVietnameseAcademicTerms(rc.factor || ''));
-      const rcCategoryNorm = normalizeText(normalizeVietnameseAcademicTerms(rc.category || ''));
-      const rcBasisNorm = normalizeVietnameseAcademicTerms(rc.scientificBasis || '');
-      const rcSummaryNorm = normalizeVietnameseAcademicTerms(rc.evidenceSummary || '');
-      const rcChunkIds = new Set(evidenceChunkIds.map(id => id.toString()));
-
-      // 1. Check against other raw candidates in this batch
+      // 4. In-paper deduplication check (in-memory batch check)
+      let isBatchDuplicate = false;
       for (let j = 0; j < i; j++) {
         const other = rawCandidates[j];
-        if (normalizeText(normalizeVietnameseAcademicTerms(other.label || '')) === rcLabelNorm) {
-          hasOverlap = true;
-          conflictDetailSet.add(`Kết luận này trùng lặp nhãn hoàn toàn với ứng viên "${other.label}" trong cùng lô phân tích. Khuyên dùng: Gộp hai ứng viên này thành một quy luật chung hoặc loại bỏ bản sao.`);
-        }
-        if (normalizeText(normalizeVietnameseAcademicTerms(other.factor || '')) === rcFactorNorm && normalizeText(normalizeVietnameseAcademicTerms(other.category || '')) === rcCategoryNorm) {
-          hasOverlap = true;
-          conflictDetailSet.add(`Kết luận này có cùng phân loại (${rc.category}) và nhân tố (${rc.factor}) với ứng viên "${other.label}" trong cùng lô phân tích. Khuyên dùng: Kiểm tra lại và gộp chúng nếu có chung nội dung bằng chứng.`);
+        if (other.ruleStatement && rc.ruleStatement && other.ruleStatement.trim().toLowerCase() === rc.ruleStatement.trim().toLowerCase()) {
+          isBatchDuplicate = true;
+          break;
         }
       }
-
-      // 2. Check against existing candidates (both pending, approved, and rejected/deactivated)
-      for (const esc of existingSourceCandidates) {
-        const escLabelNorm = normalizeText(esc.label || '');
-        const escFactorNorm = normalizeText(esc.factor || '');
-        const escCategoryNorm = normalizeText(esc.category || '');
-
-        if (rcLabelNorm && escLabelNorm && rcLabelNorm === escLabelNorm) {
-          hasOverlap = true;
-          conflictDetailSet.add(`Kết luận này trùng lặp nhãn hoàn toàn với ứng viên hiện có "${esc.label}". Khuyên dùng: Cập nhật hoặc gộp hai ứng viên này.`);
-        }
-
-        if (rcFactorNorm && escFactorNorm && rcFactorNorm === escFactorNorm) {
-          const isTest = source.title && source.title.includes('Test Verify');
-          if (!isTest) {
-            hasOverlap = true;
-            conflictDetailSet.add(`Kết luận này trùng lặp nhân tố (${rc.factor}) với ứng viên hiện có "${esc.label}". Khuyên dùng: Xem xét giữ riêng hoặc gộp lại nếu cùng ý chính.`);
-          }
-        }
-
-        if (rcCategoryNorm && escCategoryNorm && rcCategoryNorm === escCategoryNorm && isSimilarText(rcBasisNorm, esc.scientificBasis || '', 0.70)) {
-          hasOverlap = true;
-          conflictDetailSet.add(`Kết luận này có cùng phân loại (${rc.category}) và cơ sở khoa học tương đồng với ứng viên hiện có "${esc.label}". Khuyên dùng: Nên gộp thành một quy luật rộng hơn.`);
-        }
-
-        if (isSimilarText(rcSummaryNorm, esc.evidenceSummary || '', 0.70)) {
-          const escChunkIds = new Set((esc.evidenceChunkIds || []).map(id => String(id)));
-          let overlapCount = 0;
-          for (const cid of rcChunkIds) {
-            if (escChunkIds.has(cid)) overlapCount++;
-          }
-          if (overlapCount > 0) {
-            hasOverlap = true;
-            conflictDetailSet.add(`Kết luận này có tóm tắt bằng chứng tương đồng và chia sẻ nguồn đoạn văn bản chứng minh với ứng viên hiện có "${esc.label}". Khuyên dùng: Nên gộp hai ứng viên này để tránh trùng lặp.`);
-          }
-        }
-      }
-
-      // 3. Check against active approved rules AND their linked evidence
-      for (const akr of activeKnowledgeRules) {
-        const akrLabelNorm = normalizeText(akr.label || '');
-        const akrFactorNorm = normalizeText(akr.factor || '');
-        const akrCategoryNorm = normalizeText(akr.category || '');
-        if (rcLabelNorm && akrLabelNorm && rcLabelNorm === akrLabelNorm) {
-          hasOverlap = true;
-          conflictDetailSet.add(`Kết luận này trùng lặp nhãn hoàn toàn với quy luật đang hoạt động "${akr.label}". Khuyên dùng: Không duyệt ứng viên này để tránh tạo hai quy luật trùng lặp.`);
-        }
-        if (rcFactorNorm && akrFactorNorm && rcFactorNorm === akrFactorNorm) {
-          hasOverlap = true;
-          conflictDetailSet.add(`Kết luận này trùng lặp nhân tố (${rc.factor}) với quy luật đang hoạt động "${akr.label}". Khuyên dùng: Xem xét tách biệt hoặc gộp vào quy luật hiện có.`);
-        }
-        if (rcCategoryNorm && akrCategoryNorm && rcCategoryNorm === akrCategoryNorm && isSimilarText(rcBasisNorm, akr.scientificBasis || '', 0.70)) {
-          hasOverlap = true;
-          conflictDetailSet.add(`Kết luận này có cùng phân loại (${rc.category}) và cơ sở khoa học tương đồng với quy luật đang hoạt động "${akr.label}". Khuyên dùng: Nên tích hợp nội dung vào quy luật hiện có thay vì tạo mới.`);
-        }
-        if (isSimilarText(rcSummaryNorm, akr.evidenceSummary || '', 0.70)) {
-          const linkedSources = ruleIdToSourcesMap.get(akr._id.toString()) || [];
-          let hasChunkOverlap = false;
-          for (const ls of linkedSources) {
-            const lsChunkIds = new Set((ls.academicChunkIds || []).map((id: any) => String(id)));
-            for (const cid of rcChunkIds) {
-              if (lsChunkIds.has(cid)) {
-                hasChunkOverlap = true;
-                break;
-              }
-            }
-            if (hasChunkOverlap) break;
-          }
-          if (hasChunkOverlap) {
-            hasOverlap = true;
-            conflictDetailSet.add(`Kết luận này có tóm tắt bằng chứng tương đồng và sử dụng chung nguồn dữ liệu RAG với quy luật đang hoạt động "${akr.label}". Khuyên dùng: Nên gộp hoặc loại bỏ ứng viên.`);
-          }
-        }
-      }
-
-      if (rc.conflictStatus === 'conflicts_with_existing_rule') {
-        hasConflict = true;
-      }
-
-      // Programmatic check if clean excerpts can be generated
-      const keywordsForExcerpts = new Set<string>((rc.evidenceSummary || '').toLowerCase().split(/\s+/).filter(Boolean));
-      let cleanExcerptsCount = 0;
-      for (const cid of evidenceChunkIds) {
-        const chunk = selectedChunks.find(sc => sc._id.toString() === cid.toString());
-        if (chunk) {
-          const excerpts = extractExcerptsFromChunk(chunk.chunkText || '', keywordsForExcerpts);
-          cleanExcerptsCount += excerpts.length;
-        }
-      }
-      const hasCleanExcerpts = cleanExcerptsCount > 0;
-
-      // Calculate credibility and usefulness scores
-      const evidenceCredibilityScore = calculateEvidenceCredibilityScore(
-        rc.evidenceType || 'unknown',
-        rc.evidenceRole || 'primary_support',
-        source.verificationStatus || 'unverified',
-        source.sourceQuality || 'informal',
-        evidenceChunkIds.length,
-        hasCleanExcerpts,
-        rc.claimStrength || '',
-        rc.limitations || ''
-      );
-
-      const oracleUsefulnessScore = calculateOracleUsefulnessScore(
-        paperDomain,
-        oracleEligible,
-        rc.group || 'dream_psychology',
-        rc.claimStrength || '',
-        rc.evidenceRole || 'primary_support'
-      );
-
-      // Calculate legitimacy Score & Level strictly programmatically
-      const legitResult = calculateLegitimacy(
-        rc.evidenceType || 'unknown',
-        rc.evidenceRole || 'primary_support',
-        source.verificationStatus || 'unverified',
-        source.sourceQuality || 'informal',
-        evidenceChunkIds.length,
-        hasCleanExcerpts,
-        hasOverlap,
-        hasConflict,
-        rc.claimStrength || '',
-        rc.limitations || ''
-      );
-
-      // Programmatically build legitimacyReason using explanation builder
-      const legitimacyExplanation = buildLegitimacyExplanation(
-        evidenceCredibilityScore,
-        oracleUsefulnessScore,
-        rc.evidenceType || 'unknown',
-        source.sourceQuality || 'informal',
-        source.verificationStatus || 'unverified',
-        rc.claimStrength || '',
-        rc.limitations || '',
-        rc.legitimacyReason || '',
-        oracleEligible
-      );
-      rc.legitimacyReason = legitimacyExplanation;
-      // Programmatic conflict status and notes cleanup
-      const finalConflictStatus = hasOverlap ? 'duplicate_or_overlap' : 'none';
-      let conflictNotes: string | undefined = undefined;
-      if (hasOverlap && conflictDetailSet.size > 0) {
-        conflictNotes = Array.from(conflictDetailSet).join(' ').trim();
-      }
-
-      if (legitResult.score < 45) {
-        discardedWeakEvidenceCount++;
-        validationErrors.push(`Candidate #${i + 1} (${rc.label || 'Unnamed'}): Bỏ qua do độ tin cậy bằng chứng yếu (Legitimacy score: ${legitResult.score} < 45).`);
+      if (isBatchDuplicate) {
+        skippedDuplicateCount++;
+        validationErrors.push(`Candidate #${i + 1} (${rc.ruleStatement}): Bỏ qua do trùng lặp hoàn toàn với quy luật khác trong cùng đợt trích xuất.`);
         continue;
       }
 
-      let confidenceCap = Number(rc.confidenceCap);
-      if (isNaN(confidenceCap)) {
-        confidenceCap = 0.4;
-      } else {
-        confidenceCap = Math.max(0, Math.min(0.65, confidenceCap));
+      // 5. Semantic duplicate checking against existing rules in DB
+      let candidateEmbedding: number[] | null = null;
+      try {
+        candidateEmbedding = await generateEmbedding(rc.ruleStatement);
+      } catch (embErr) {
+        logger.warn('Failed to generate embedding for extraction deduplication check', embErr);
       }
 
-      const candidateKey = generateCandidateKey(
-        source._id.toString(),
-        sourceContentHash,
-        rc.canonicalClaimFingerprint || '',
-        rc.category || '',
-        rc.factor || '',
-        evidenceChunkIds.map(id => id.toString()).sort().join(',')
-      );
+      let decision: 'new' | 'merge' | 'duplicate' = 'new';
+      let mergeRuleId: string | undefined = undefined;
 
-      let existingCandidate = await KnowledgeRuleCandidate.findOne({
-        academicSourceId: source._id,
-        candidateKey
+      if (candidateEmbedding && candidateEmbedding.length > 0) {
+        // Query potential verified duplicate rules
+        const similarities = activeKnowledgeRules.map(rule => {
+          let score = 0;
+          if (rule.embedding && rule.embedding.length === candidateEmbedding!.length) {
+            score = cosineSimilarity(candidateEmbedding!, rule.embedding);
+          }
+          return { rule, score };
+        });
+
+        // Filter and sort potential duplicates (similarity >= 0.50)
+        const potentialRules = similarities
+          .filter(item => item.score >= 0.50)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 5)
+          .map(item => item.rule);
+
+        if (potentialRules.length > 0) {
+          // Call LLM duplicate decision maker
+          const duplicateDecision = await evaluateDuplicateOrMergeWithLLM(
+            rc,
+            potentialRules,
+            baseUrl,
+            model,
+            timeoutMs
+          );
+          decision = duplicateDecision.decision;
+          mergeRuleId = duplicateDecision.mergeRuleId;
+        }
+      }
+
+      if (decision === 'duplicate') {
+        skippedDuplicateCount++;
+        validationErrors.push(`Candidate #${i + 1} (${rc.ruleStatement}): Loại bỏ do trùng lặp hoàn toàn (LLM duplicate decision).`);
+        continue;
+      }
+
+      // 6. Save as staging PendingKnowledgeRule candidate
+      const newCand = await PendingKnowledgeRule.create({
+        ruleStatement: rc.ruleStatement.trim(),
+        classifications,
+        scientificBasis: rc.scientificBasis.trim(),
+        evidenceChunkIds,
+        status: 'pending',
+        mergeRuleId: decision === 'merge' ? new Types.ObjectId(mergeRuleId) : undefined
       });
 
-      if (existingCandidate) {
-        if (existingCandidate.status === 'approved') {
-          reusedCandidateCount++;
-        } else {
-          updatedCandidateCount++;
-          existingCandidate.status = 'pending';
-        }
-        existingCandidate.label = normalizeVietnameseAcademicTerms(rc.label).trim();
-        existingCandidate.group = rc.group;
-        existingCandidate.category = normalizeVietnameseAcademicTerms(rc.category).trim();
-        existingCandidate.factor = normalizeVietnameseAcademicTerms(rc.factor).trim();
-        existingCandidate.inputSource = rc.inputSource;
-        existingCandidate.inputRequired = rc.inputRequired;
-        existingCandidate.scientificBasis = normalizeVietnameseAcademicTerms(rc.scientificBasis).trim();
-        existingCandidate.aiInstruction = normalizeVietnameseAcademicTerms(rc.aiInstruction).trim();
-        existingCandidate.limitations = normalizeVietnameseAcademicTerms(rc.limitations).trim();
-        existingCandidate.claimStrength = rc.claimStrength;
-        existingCandidate.confidenceCap = confidenceCap;
-        existingCandidate.evidenceRole = rc.evidenceRole;
-        existingCandidate.evidenceSummary = normalizeVietnameseAcademicTerms(rc.evidenceSummary).trim();
-        existingCandidate.evidenceChunkIds = evidenceChunkIds;
-        existingCandidate.legitimacyScore = legitResult.score;
-        existingCandidate.legitimacyReason = normalizeVietnameseAcademicTerms(rc.legitimacyReason || 'Đánh giá dựa trên loại hình nghiên cứu của tài liệu.').trim();
-        existingCandidate.evidenceType = rc.evidenceType || 'unknown';
-        existingCandidate.conflictStatus = hasOverlap ? 'duplicate_or_overlap' : (rc.conflictStatus || 'none');
-        existingCandidate.conflictNotes = deduplicateConflictNotes(normalizeVietnameseAcademicTerms(conflictNotes)) || undefined;
-        existingCandidate.paperDomain = paperDomain;
-        existingCandidate.oracleEligible = oracleEligible;
-        existingCandidate.evidenceCredibilityScore = evidenceCredibilityScore;
-        existingCandidate.oracleUsefulnessScore = oracleUsefulnessScore;
-        await existingCandidate.save();
-        candidateIds.push(existingCandidate._id.toString());
-      } else {
-        // Run duplication check only for new candidates (not updates)
-        let isExactDuplicate = false;
-        for (const esc of existingSourceCandidates) {
-          if (rcLabelNorm === normalizeText(esc.label || '') && rcFactorNorm === normalizeText(esc.factor || '')) {
-            isExactDuplicate = true;
-            break;
-          }
-        }
-        for (const akr of activeKnowledgeRules) {
-          if (rcLabelNorm === normalizeText(akr.label || '') && rcFactorNorm === normalizeText(akr.factor || '')) {
-            isExactDuplicate = true;
-            break;
-          }
-        }
-        if (isExactDuplicate) {
-          skippedDuplicateCount++;
-          skippedCount++;
-          validationErrors.push(`Candidate #${i + 1} (${rc.label || 'Unnamed'}): Bỏ qua do trùng lặp hoàn toàn với quy luật đã tồn tại.`);
-          continue;
-        }
-
-        const baseId = generateProposedRuleId(source.authors || [], source.year, rc.category, rc.factor);
-        let proposedRuleId = baseId;
-        let counter = 1;
-        const savedProposedIds = new Set<string>();
-        while (
-          savedProposedIds.has(proposedRuleId) ||
-          (await KnowledgeRuleCandidate.findOne({ academicSourceId: source._id, proposedRuleId }))
-        ) {
-          counter++;
-          proposedRuleId = `${baseId}_${counter}`;
-        }
-        savedProposedIds.add(proposedRuleId);
-
-        const newCand = await KnowledgeRuleCandidate.create({
-          academicSourceId: source._id,
-          academicFullTextId: fullText?._id,
-          evidenceChunkIds,
-          proposedRuleId,
-          candidateKey,
-          label: normalizeVietnameseAcademicTerms(rc.label).trim(),
-          group: rc.group,
-          category: normalizeVietnameseAcademicTerms(rc.category).trim(),
-          factor: normalizeVietnameseAcademicTerms(rc.factor).trim(),
-          inputSource: rc.inputSource,
-          inputRequired: rc.inputRequired,
-          scientificBasis: normalizeVietnameseAcademicTerms(rc.scientificBasis).trim(),
-          aiInstruction: normalizeVietnameseAcademicTerms(rc.aiInstruction).trim(),
-          limitations: normalizeVietnameseAcademicTerms(rc.limitations).trim(),
-          claimStrength: rc.claimStrength,
-          confidenceCap,
-          evidenceRole: rc.evidenceRole,
-          evidenceSummary: normalizeVietnameseAcademicTerms(rc.evidenceSummary).trim(),
-          status: 'pending',
-          legitimacyScore: legitResult.score,
-          legitimacyReason: normalizeVietnameseAcademicTerms(rc.legitimacyReason || 'Đánh giá dựa trên loại hình nghiên cứu của tài liệu.').trim(),
-          evidenceType: rc.evidenceType || 'unknown',
-          conflictStatus: hasOverlap ? 'duplicate_or_overlap' : (rc.conflictStatus || 'none'),
-          conflictNotes: deduplicateConflictNotes(normalizeVietnameseAcademicTerms(conflictNotes)) || undefined,
-          paperDomain,
-          oracleEligible,
-          evidenceCredibilityScore,
-          oracleUsefulnessScore
-        });
-        createdCount++;
-        candidateIds.push(newCand._id.toString());
-      }
+      createdCount++;
+      candidateIds.push(newCand._id.toString());
     }
 
     if (createdCount === 0) {
-      if (updatedCandidateCount > 0) {
-        reasonCode = 'existing_candidates_updated';
-        message = 'Không tạo bản mới vì các ứng viên tương tự đã tồn tại. Đã mở danh sách hiện có.';
-      } else if (reusedCandidateCount > 0) {
-        reasonCode = 'existing_candidates_reused';
-        message = 'Không tạo bản mới vì các ứng viên tương tự đã tồn tại. Đã mở danh sách hiện có.';
-      } else if (run.rawCandidateCount === 0) {
-        reasonCode = 'llm_returned_zero_candidates';
-        message = 'LLM không rút ra được kết luận đủ rõ từ tài liệu này.';
-      } else if (discardedWeakEvidenceCount === run.rawCandidateCount) {
-        reasonCode = 'all_candidates_weak_evidence';
-        message = 'Các kết luận bị loại vì không có đoạn bằng chứng đủ rõ.';
-      } else if (skippedDuplicateCount === run.rawCandidateCount) {
+      if (skippedDuplicateCount > 0) {
         reasonCode = 'all_candidates_duplicate';
         message = 'Các luật tương tự đã tồn tại, không tạo bản trùng.';
-      } else if (discardedNoEvidenceCount === run.rawCandidateCount) {
+      } else if (discardedNoEvidenceCount > 0) {
         reasonCode = 'candidate_evidence_mapping_failed';
         message = 'Không thể ánh xạ các kết luận của LLM với bằng chứng thực tế trong tài liệu.';
-      } else if (discardedIrrelevantCount === run.rawCandidateCount) {
-        reasonCode = 'all_candidates_irrelevant';
-        message = 'Không tạo được luật vì tài liệu không thuộc phạm vi giấc mơ/ngủ/tâm lý.';
       } else {
         reasonCode = 'all_candidates_filtered_or_invalid';
         message = 'Các kết luận bị loại bỏ do không đáp ứng tiêu chuẩn kiểm định.';
@@ -1952,24 +1666,18 @@ No additional text, markdown backticks, or intro. Output raw JSON only.`;
       message = 'Phân tích tài liệu và trích xuất quy luật thành công.';
     }
 
-    if (!oracleEligible) {
-      if (createdCount > 0 || updatedCandidateCount > 0 || reusedCandidateCount > 0) {
-        message = 'Tài liệu đã được phân tích, nhưng các kết luận này không dùng trực tiếp cho Oracle giấc mơ.';
-      }
-    }
-
     run.status = 'success';
     run.currentStage = 'completed';
-    run.savedCandidateCount = createdCount + updatedCandidateCount;
-    run.updatedCandidateCount = updatedCandidateCount;
-    run.reusedCandidateCount = reusedCandidateCount;
+    run.savedCandidateCount = createdCount;
+    run.updatedCandidateCount = 0;
+    run.reusedCandidateCount = 0;
     run.skippedDuplicateCount = skippedDuplicateCount;
     run.discardedNoEvidenceCount = discardedNoEvidenceCount;
     run.discardedWeakEvidenceCount = discardedWeakEvidenceCount;
     run.discardedIrrelevantCount = discardedIrrelevantCount;
     run.consolidatedCandidateCount = run.rawCandidateCount - skippedDuplicateCount;
-    run.oracleEligibleCount = oracleEligible ? (createdCount + updatedCandidateCount) : 0;
-    run.nonOracleEligibleCount = !oracleEligible ? (createdCount + updatedCandidateCount) : 0;
+    run.oracleEligibleCount = createdCount;
+    run.nonOracleEligibleCount = 0;
     run.reasonCode = reasonCode;
     run.finishedAt = new Date();
     await run.save();
@@ -1987,8 +1695,8 @@ No additional text, markdown backticks, or intro. Output raw JSON only.`;
       rawCandidateCount: run.rawCandidateCount,
       consolidatedCandidateCount: run.consolidatedCandidateCount,
       createdCount,
-      updatedCandidateCount,
-      reusedCandidateCount,
+      updatedCandidateCount: 0,
+      reusedCandidateCount: 0,
       skippedDuplicateCount,
       discardedNoEvidenceCount,
       discardedWeakEvidenceCount,

@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
-import KnowledgeRule from '../src/models/KnowledgeRule';
+import VerifiedKnowledgeRule from '../src/models/VerifiedKnowledgeRule';
 import { logger } from '../src/utils/logger';
 
 dotenv.config();
@@ -14,16 +14,16 @@ async function run() {
     logger.info('Deprecating seed knowledge rules...');
     
     // Find count of seed rules to deactivate
-    const seedCount = await KnowledgeRule.countDocuments({ origin: 'seed' });
+    const seedCount = await VerifiedKnowledgeRule.countDocuments({ origin: 'seed' });
     
     // Deactivate seed rules
-    const updateResult = await KnowledgeRule.updateMany(
+    const updateResult = await VerifiedKnowledgeRule.updateMany(
       { origin: 'seed' },
       { $set: { isActive: false } }
     );
     
     // Count manual or source_generated rules
-    const preservedCount = await KnowledgeRule.countDocuments({
+    const preservedCount = await VerifiedKnowledgeRule.countDocuments({
       origin: { $in: ['manual', 'source_generated'] }
     });
 
