@@ -19,7 +19,7 @@ SMTP_HOST=smtp.gmail.com
 SMTP_PORT=465
 SMTP_USER=dreamscape.app.service@gmail.com
 SMTP_PASS=uojojprejzyrzojg
-MODERATOR_USER_IDS=6a0f43ab4891b428d4bb7729
+MODERATOR_USER_IDS=6a0fc84bd37aacb66092be0e
 UNPAYWALL_EMAIL=dreamscape.app.service@gmail.com
 OLLAMA_EMBED_MODEL=nomic-embed-text:latest
 

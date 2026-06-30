@@ -2,11 +2,14 @@ import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import SourceContribution from '../models/SourceContribution';
 import AcademicSource from '../models/AcademicSource';
-import AcademicFullText from '../models/AcademicDocument';
-import AcademicFullTextSection from '../models/AcademicSection';
+import AcademicDocument from '../models/AcademicDocument';
+import AcademicSection from '../models/AcademicSection';
+import AcademicChunk from '../models/AcademicChunk';
+import { buildReaderResponse } from '../services/academic/readerResponseBuilder.service';
 import { normalizeDoi, fetchUnpaywallMetadata } from '../services/openAccess.service';
 import { incrementSubmitted } from '../services/contributionStats.service';
 import { resolveSourceImport } from '../services/sourceImportResolver.service';
+import { buildResolverReport } from '../services/academic/resolverDiagnostics.service';
 import { fetchUrlWithSafeRedirects, SsrfError } from '../utils/ssrfGuard';
 import fs from 'fs';
 import { processPdfUpload, computeFileHash } from '../services/pdfUpload.service';
@@ -52,7 +55,8 @@ export function mapSourceOriginAndUrls(doc: any) {
   // Project isbn if available in metadata
   obj.isbn = obj.isbn || obj.metadata?.isbn || '';
 
-  if (obj.originalFile) {
+  const hasOriginalFile = obj.originalFile && (obj.originalFile.originalFileName || obj.originalFile.cloudinarySecureUrl);
+  if (hasOriginalFile) {
     const orig = { ...obj.originalFile };
     
     // Map alternative names inside originalFile
@@ -82,6 +86,7 @@ export function mapSourceOriginAndUrls(doc: any) {
     obj.sourceOrigin = 'uploaded_pdf';
   } else {
     // If no originalFile, still set defaults/sourceType if available
+    obj.originalFile = undefined;
     obj.contributionType = obj.doi ? 'doi' : 'metadata';
     obj.sourceType = obj.doi ? 'doi' : 'metadata';
     obj.sourceOrigin = obj.sourceOrigin || (obj.doi ? 'doi_import' : 'unspecified');
@@ -208,6 +213,9 @@ function isValidHttpUrl(urlString: string): boolean {
 export const previewSource = async (req: Request, res: Response): Promise<void> => {
   try {
     const result = await resolveSourceImport(req.body, req.user?._id);
+    const rawInput = req.body.doi || req.body.pmcid || req.body.url || '';
+    const resolverReport = await buildResolverReport(rawInput, result);
+    
     res.status(200).json({
       success: true,
       message: 'Thông tin tài liệu resolved thành công.',
@@ -218,6 +226,7 @@ export const previewSource = async (req: Request, res: Response): Promise<void> 
         journal: result.journal,
         publisher: result.publisher,
         doi: result.doi,
+        pmcid: result.pmcid,
         isbn: result.isbn,
         url: result.sourceUrl,
         pdfUrl: result.pdfUrl,
@@ -236,7 +245,8 @@ export const previewSource = async (req: Request, res: Response): Promise<void> 
         fullTextStatus: result.fullTextAvailable ? 'available' : 'none',
         fullTextUrl: result.pdfUrl || result.htmlUrl || result.sourceUrl || '',
         readableInApp: false,
-        fullTextSourceType: result.sourceType === 'pdf_upload' ? 'pdf' : 'unknown'
+        fullTextSourceType: result.sourceType === 'pdf_upload' ? 'pdf' : 'unknown',
+        resolverReport
       }
     });
   } catch (err: any) {
@@ -281,6 +291,10 @@ export const contributeSource = async (req: Request, res: Response): Promise<voi
       orConditions.push({ normalizedDoi: result.doi });
       orConditions.push({ doi: result.doi });
     }
+    if (result.pmcid) {
+      orConditions.push({ normalizedPmcid: result.pmcid });
+      orConditions.push({ pmcid: result.pmcid });
+    }
     if (result.isbn) {
       orConditions.push({ isbn: result.isbn });
       orConditions.push({ 'metadata.isbn': result.isbn });
@@ -300,7 +314,7 @@ export const contributeSource = async (req: Request, res: Response): Promise<voi
     }
 
     if (orConditions.length > 0) {
-      const existingCont = await SourceContribution.findOne({ $or: orConditions });
+      const existingCont = await SourceContribution.findOne({ reviewStatus: { $ne: 'rejected' }, $or: orConditions });
       const existingSrc = await AcademicSource.findOne({ $or: orConditions });
       if (existingCont || existingSrc) {
         res.status(409).json({
@@ -316,6 +330,8 @@ export const contributeSource = async (req: Request, res: Response): Promise<voi
       submittedBy,
       doi: result.doi || undefined,
       normalizedDoi: result.doi || undefined,
+      pmcid: result.pmcid || undefined,
+      normalizedPmcid: result.pmcid || undefined,
       url: result.sourceUrl || undefined,
       normalizedUrl: result.sourceUrl ? normalizeUrl(result.sourceUrl) : undefined,
       submittedNote: cleanNote || undefined,
@@ -353,7 +369,9 @@ export const contributeSource = async (req: Request, res: Response): Promise<voi
       year: result.year,
       journal: result.journal,
       publisher: result.publisher,
-      originalFile: result.originalFile
+      originalFile: result.originalFile,
+      pdfUrl: result.pdfUrl || undefined,
+      htmlUrl: result.htmlUrl || undefined
     });
 
     await contribution.save();
@@ -364,10 +382,14 @@ export const contributeSource = async (req: Request, res: Response): Promise<voi
       console.error('Failed to increment contribution stats:', statsErr);
     }
 
+    const rawInput = req.body.doi || req.body.pmcid || req.body.url || '';
+    const resolverReport = await buildResolverReport(rawInput, result);
+
     res.status(201).json({
       success: true,
       message: 'Source contribution submitted successfully.',
       data: contribution,
+      resolverReport
     });
   } catch (err: any) {
     res.status(400).json({
@@ -537,7 +559,7 @@ export const getApprovedSourceRead = async (req: Request, res: Response): Promis
     }
 
     // Query full text metadata
-    const fullText = await AcademicFullText.findOne({ sourceId: source._id });
+    const fullText = await AcademicDocument.findOne({ sourceId: source._id });
     if (!fullText) {
       res.status(404).json({
         success: false,
@@ -556,7 +578,9 @@ export const getApprovedSourceRead = async (req: Request, res: Response): Promis
 
     const skip = (page - 1) * limit;
 
-    const total = await AcademicFullTextSection.countDocuments({ documentId: fullText._id });
+    const { sections: apiSections, total } = await buildReaderResponse(fullText, skip, limit);
+    const pages = Math.ceil(total / limit);
+
     if (total === 0) {
       res.status(409).json({
         success: false,
@@ -564,14 +588,6 @@ export const getApprovedSourceRead = async (req: Request, res: Response): Promis
       });
       return;
     }
-
-    const pages = Math.ceil(total / limit);
-
-    // Retrieve sorted sections
-    const sections = await AcademicFullTextSection.find({ documentId: fullText._id })
-      .sort({ sectionIndex: 1 })
-      .skip(skip)
-      .limit(limit);
 
     const ftAny = fullText as any;
     res.status(200).json({
@@ -587,13 +603,13 @@ export const getApprovedSourceRead = async (req: Request, res: Response): Promis
           license: source.license
         },
         fullText: {
-          wordCount: ftAny.wordCount,
-          characterCount: ftAny.characterCount,
-          sectionCount: ftAny.sectionCount,
-          importedAt: ftAny.importedAt,
-          extractionEngine: ftAny.extractionEngine,
-          extractionQuality: ftAny.extractionQuality,
-          structureVersion: ftAny.structureVersion,
+          wordCount: ftAny.wordCount || 0,
+          characterCount: ftAny.characterCount || 0,
+          sectionCount: total,
+          importedAt: ftAny.importedAt || ftAny.createdAt,
+          extractionEngine: ftAny.extractionEngine || ftAny.parserEngine,
+          extractionQuality: ftAny.extractionQuality || 'high',
+          structureVersion: ftAny.structureVersion || 'smart-reader-v2',
           hasStructuredReferences: ftAny.hasStructuredReferences,
           hasDetectedSections: ftAny.hasDetectedSections,
           sourceUsedUrl: ftAny.sourceUsedUrl,
@@ -604,21 +620,7 @@ export const getApprovedSourceRead = async (req: Request, res: Response): Promis
           layoutQuality: ftAny.layoutQuality,
           warnings: ftAny.warnings
         },
-        sections: sections.map(s => {
-          const sAny = s as any;
-          return {
-            sectionIndex: sAny.sectionIndex,
-            title: sAny.title,
-            text: sAny.text,
-            html: sAny.html || undefined,
-            wordCount: sAny.wordCount,
-            characterCount: sAny.characterCount,
-            pageStart: sAny.pageStart,
-            pageEnd: sAny.pageEnd,
-            sectionType: sAny.sectionType || 'unknown',
-            style: sAny.style
-          };
-        }),
+        sections: apiSections,
         pagination: {
           page,
           limit,
@@ -953,7 +955,7 @@ export const contributePdfSource = async (req: Request, res: Response): Promise<
         return;
       }
       
-      const doiDuplicateCont = await SourceContribution.findOne({ $or: [{ normalizedDoi: cleanDoi }, { doi: cleanDoi }] });
+      const doiDuplicateCont = await SourceContribution.findOne({ reviewStatus: { $ne: 'rejected' }, $or: [{ normalizedDoi: cleanDoi }, { doi: cleanDoi }] });
       if (doiDuplicateCont) {
         res.status(409).json({
           success: false,
@@ -982,7 +984,7 @@ export const contributePdfSource = async (req: Request, res: Response): Promise<
       orConditions.push({ url: finalUrl });
     }
 
-    const existingCont = await SourceContribution.findOne({ $or: orConditions });
+    const existingCont = await SourceContribution.findOne({ reviewStatus: { $ne: 'rejected' }, $or: orConditions });
     const existingSrc = await AcademicSource.findOne({ $or: orConditions });
 
     if (existingSrc) {
@@ -1164,5 +1166,4 @@ export const contributePdfSource = async (req: Request, res: Response): Promise<
     }
   }
 };
-
 

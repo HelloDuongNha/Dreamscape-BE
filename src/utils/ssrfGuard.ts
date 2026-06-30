@@ -63,7 +63,7 @@ export function isValidHttpUrl(urlString: string): boolean {
 export async function fetchUrlWithSafeRedirects(
   initialUrl: string,
   requirePdf = false,
-  maxRedirects = 3
+  maxRedirects = 5
 ): Promise<{ buffer: Buffer, finalUrl: string, contentType: string }> {
   let currentUrl = initialUrl;
   let redirectCount = 0;
@@ -80,7 +80,7 @@ export async function fetchUrlWithSafeRedirects(
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15-second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 20000); // 20-second timeout
 
     let response: Response;
     try {
@@ -88,7 +88,7 @@ export async function fetchUrlWithSafeRedirects(
         method: 'GET',
         redirect: 'manual',
         headers: {
-          'User-Agent': 'DreamScapeAcademicBot/1.0 (mailto:dreamscape.app.service@gmail.com)'
+          'User-Agent': 'DreamScapeAcademicBot/1.0 (mailto:dreamscape.app.service@gmail.com; polite fetch)'
         },
         signal: controller.signal
       });

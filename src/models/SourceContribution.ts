@@ -4,6 +4,8 @@ export interface ISourceContribution extends Document {
   submittedBy: Types.ObjectId;
   doi?: string;
   normalizedDoi?: string;
+  pmcid?: string;
+  normalizedPmcid?: string;
   url?: string;
   normalizedUrl?: string;
   submittedNote?: string;
@@ -29,6 +31,9 @@ export interface ISourceContribution extends Document {
     uploadedAt?: Date;
     fileHash?: string;
   };
+  fullTextStatus?: 'none' | 'importing' | 'imported' | 'failed' | 'available';
+  pdfUrl?: string;
+  htmlUrl?: string;
 }
 
 const SourceContributionSchema = new Schema<ISourceContribution>(
@@ -47,6 +52,18 @@ const SourceContributionSchema = new Schema<ISourceContribution>(
       type: String,
       trim: true,
       index: true,
+    },
+    pmcid: {
+      type: String,
+      trim: true,
+    },
+    normalizedPmcid: {
+      type: String,
+      trim: true,
+      index: {
+        unique: true,
+        sparse: true,
+      },
     },
     url: {
       type: String,
@@ -110,6 +127,19 @@ const SourceContributionSchema = new Schema<ISourceContribution>(
       uploadedBy: Schema.Types.ObjectId,
       uploadedAt: Date,
       fileHash: String,
+    },
+    fullTextStatus: {
+      type: String,
+      enum: ['none', 'importing', 'imported', 'failed', 'available'],
+      default: 'none',
+    },
+    pdfUrl: {
+      type: String,
+      trim: true,
+    },
+    htmlUrl: {
+      type: String,
+      trim: true,
     },
   },
   {

@@ -4,9 +4,7 @@ import mongoose from 'mongoose';
 import SourceContribution from '../models/SourceContribution';
 import AcademicSource from '../models/AcademicSource';
 import AcademicDocument from '../models/AcademicDocument';
-import AcademicFullText from '../models/AcademicDocument';
 import AcademicSection from '../models/AcademicSection';
-import AcademicFullTextSection from '../models/AcademicSection';
 import AcademicChunk from '../models/AcademicChunk';
 import PendingKnowledgeRule from '../models/PendingKnowledgeRule';
 import VerifiedKnowledgeRule from '../models/VerifiedKnowledgeRule';
@@ -34,6 +32,7 @@ import { importFullTextForSource } from '../services/fullTextImport.service';
 import { resolveSourceImport } from '../services/sourceImportResolver.service';
 import { recordApproval, recordRejection } from '../services/contributionStats.service';
 import multer from 'multer';
+import { v2 as cloudinary } from 'cloudinary';
 import { uploadPdf, deleteAsset } from '../services/cloudinaryStorage.service';
 import { sanitizeAcademicSourceData } from '../utils/sourceSanitizer';
 import { processPdfUpload } from '../services/pdfUpload.service';
@@ -56,7 +55,8 @@ export function mapSourceContribution(doc: any) {
   if (!doc) return doc;
   const obj = doc.toObject ? doc.toObject() : { ...doc };
   
-  if (obj.originalFile) {
+  const hasOriginalFile = obj.originalFile && (obj.originalFile.originalFileName || obj.originalFile.cloudinarySecureUrl);
+  if (hasOriginalFile) {
     const orig = { ...obj.originalFile };
     
     // Map alternative names inside originalFile
@@ -86,6 +86,7 @@ export function mapSourceContribution(doc: any) {
     obj.sourceOrigin = 'uploaded_pdf';
   } else {
     // If no originalFile, still set defaults/sourceType if available
+    obj.originalFile = undefined;
     obj.contributionType = obj.doi ? 'doi' : 'metadata';
     obj.sourceType = obj.doi ? 'doi' : 'metadata';
     obj.sourceOrigin = obj.sourceOrigin || (obj.doi ? 'doi_import' : 'unspecified');
@@ -249,7 +250,7 @@ export const reviewSource = async (req: Request, res: Response): Promise<void> =
         license: contribution.license || rawMetadata.license,
       });
 
-      const isUploadedPdf = !!contribution.originalFile;
+      const isUploadedPdf = !!(contribution.originalFile && (contribution.originalFile.originalFileName || contribution.originalFile.cloudinarySecureUrl));
 
       // Update SourceContribution's own metadata with sanitized fields to match
       contribution.metadata = { ...rawMetadata, ...sanitizedMeta };
@@ -261,6 +262,8 @@ export const reviewSource = async (req: Request, res: Response): Promise<void> =
       contribution.openAccessStatus = sanitizedMeta.openAccessStatus;
       contribution.oaStatus = sanitizedMeta.oaStatus;
       contribution.license = sanitizedMeta.license || contribution.license || 'all-rights-reserved';
+      contribution.pdfUrl = sanitizedMeta.pdfUrl || contribution.pdfUrl;
+      contribution.htmlUrl = sanitizedMeta.htmlUrl || contribution.htmlUrl;
       
       if (isUploadedPdf) {
         contribution.allowedUse = 'open_access_fulltext';
@@ -335,50 +338,76 @@ export const reviewSource = async (req: Request, res: Response): Promise<void> =
       let details = undefined;
       let importResult = null;
 
-      // Handle custom warning message logic for FE
-      if (sanitizedMeta.openAccessStatus === 'hybrid') {
-        resMessage = "Hybrid Open Access metadata saved. Full text import is available only if a direct public PDF/HTML URL exists.";
-        warning = true;
-        code = "HYBRID_OA_METADATA_ONLY";
-      } else if (academicSource.allowedUse !== 'open_access_fulltext' || (!academicSource.pdfUrl && !academicSource.url && !academicSource.fullTextUrl)) {
-        resMessage = "Nguồn đã được duyệt, nhưng chưa có toàn văn để nhập.";
-        warning = true;
-        code = "APPROVED_METADATA_ONLY";
+      // Promotion Check: check if preview document exists
+      const previewDoc = await AcademicDocument.findOne({ previewContributionId: contribution._id });
+      if (previewDoc) {
+        console.log(`Promoting preview full text data for source ${academicSource._id}`);
+        // Promotes all preview records: set sourceId and unset previewContributionId
+        await AcademicDocument.updateOne({ previewContributionId: contribution._id }, { $set: { sourceId: academicSource._id }, $unset: { previewContributionId: 1 } });
+        await AcademicSection.updateMany({ previewContributionId: contribution._id }, { $set: { sourceId: academicSource._id }, $unset: { previewContributionId: 1 } });
+        await AcademicChunk.updateMany({ previewContributionId: contribution._id }, { $set: { sourceId: academicSource._id }, $unset: { previewContributionId: 1 } });
+
+        const ragCount = await AcademicChunk.countDocuments({ sourceId: academicSource._id, chunkPurpose: 'rag' });
+
+        // Copy lightweight metadata flags
+        academicSource.fullTextStatus = contribution.fullTextStatus || 'imported';
+        academicSource.readableInApp = contribution.readableInApp || true;
+        academicSource.chunkBuildStatus = 'completed';
+        academicSource.chunkCount = ragCount;
+        academicSource.chunkEmbeddingModel = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
+        academicSource.chunkBuiltAt = new Date();
+        academicSource.fullTextImportedAt = new Date();
+        academicSource.fullTextImportedBy = reviewerId;
+        academicSource.fullTextImportError = undefined;
+        await academicSource.save();
+
+        resMessage = 'Nguồn đã được duyệt và dữ liệu xem trước đã được chuyển giao thành công.';
       } else {
-        // Automatically attempt full-text import on approval if eligible and copyright permits
-        const isUploadedPdf = !!academicSource.originalFile;
-        const hasAllowedCopyright = isUploadedPdf || academicSource.copyrightStatus === 'copyrighted_with_open_access' || academicSource.copyrightStatus === 'public_domain' || academicSource.allowedUse === 'open_access_fulltext';
-        if (hasAllowedCopyright) {
-          try {
-            console.log(`Auto-importing full text on approval for source ${academicSource._id}`);
-            const result = await importFullTextInternal(academicSource, reviewerId);
-            if (result.success) {
-              if (result.warning) {
-                resMessage = result.message || 'Nguồn đã được duyệt, nhưng nhập bản đọc tự động bị chặn.';
-                warning = true;
-                code = result.code;
-                details = result.details;
-              } else {
-                resMessage = 'Nguồn đã được duyệt và nhập bản đọc thành công.';
-                importResult = result.data;
-              }
-            } else {
-              resMessage = 'Nguồn đã được duyệt, nhưng nhập bản đọc tự động thất bại.';
-              warning = true;
-              code = "FULLTEXT_IMPORT_FAILED";
-              details = { error: result.error || result.message };
-            }
-          } catch (importErr: any) {
-            console.error('Auto-import on approval crashed:', importErr);
-            resMessage = 'Nguồn đã được duyệt, nhưng nhập bản đọc tự động gặp lỗi hệ thống.';
-            warning = true;
-            code = "FULLTEXT_IMPORT_SYSTEM_ERROR";
-            details = { error: importErr.message || importErr };
-          }
-        } else {
+        // Handle custom warning message logic for FE
+        if (sanitizedMeta.openAccessStatus === 'hybrid') {
+          resMessage = "Hybrid Open Access metadata saved. Full text import is available only if a direct public PDF/HTML URL exists.";
+          warning = true;
+          code = "HYBRID_OA_METADATA_ONLY";
+        } else if (academicSource.allowedUse !== 'open_access_fulltext' || (!academicSource.pdfUrl && !academicSource.url && !academicSource.fullTextUrl)) {
           resMessage = "Nguồn đã được duyệt, nhưng chưa có toàn văn để nhập.";
           warning = true;
           code = "APPROVED_METADATA_ONLY";
+        } else {
+          // Automatically attempt full-text import on approval if eligible and copyright permits
+          const isUploadedPdf = !!(academicSource.originalFile && (academicSource.originalFile.originalFileName || academicSource.originalFile.cloudinarySecureUrl));
+          const hasAllowedCopyright = isUploadedPdf || academicSource.copyrightStatus === 'copyrighted_with_open_access' || academicSource.copyrightStatus === 'public_domain' || academicSource.allowedUse === 'open_access_fulltext';
+          if (hasAllowedCopyright) {
+            try {
+              console.log(`Auto-importing full text on approval for source ${academicSource._id}`);
+              const result = await importFullTextInternal(academicSource, reviewerId);
+              if (result.success) {
+                if (result.warning) {
+                  resMessage = result.message || 'Nguồn đã được duyệt, nhưng nhập bản đọc tự động bị chặn.';
+                  warning = true;
+                  code = result.code;
+                  details = result.details;
+                } else {
+                  resMessage = 'Nguồn đã được duyệt và nhập bản đọc thành công.';
+                  importResult = result.data;
+                }
+              } else {
+                resMessage = 'Nguồn đã được duyệt, nhưng nhập bản đọc tự động thất bại.';
+                warning = true;
+                code = "FULLTEXT_IMPORT_FAILED";
+                details = { error: result.error || result.message };
+              }
+            } catch (importErr: any) {
+              console.error('Auto-import on approval crashed:', importErr);
+              resMessage = 'Nguồn đã được duyệt, nhưng nhập bản đọc tự động gặp lỗi hệ thống.';
+              warning = true;
+              code = "FULLTEXT_IMPORT_SYSTEM_ERROR";
+              details = { error: importErr.message || importErr };
+            }
+          } else {
+            resMessage = "Nguồn đã được duyệt, nhưng chưa có toàn văn để nhập.";
+            warning = true;
+            code = "APPROVED_METADATA_ONLY";
+          }
         }
       }
 
@@ -405,6 +434,17 @@ export const reviewSource = async (req: Request, res: Response): Promise<void> =
       contribution.reviewNote = cleanNote || undefined;
     }
     await contribution.save();
+
+    // Retrieve chunk IDs linked to the contribution
+    const chunkIds = await AcademicChunk.find({ previewContributionId: contribution._id }).distinct('_id');
+
+    // Clean up preview staging records on rejection
+    await AcademicDocument.deleteMany({ previewContributionId: contribution._id });
+    await AcademicSection.deleteMany({ previewContributionId: contribution._id });
+    await AcademicChunk.deleteMany({ previewContributionId: contribution._id });
+    await AcademicRuleExtractionRun.deleteMany({ academicSourceId: contribution._id });
+    await PendingKnowledgeRule.deleteMany({ evidenceChunkIds: { $in: chunkIds } });
+    await KnowledgeRuleEvidence.deleteMany({ chunkId: { $in: chunkIds } });
 
     if (previousStatus !== 'rejected') {
       try {
@@ -518,7 +558,15 @@ export const importFullText = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    const source = await AcademicSource.findById(cleanId);
+    let source = await AcademicSource.findById(cleanId);
+    let isContribution = false;
+    if (!source) {
+      source = await SourceContribution.findById(cleanId);
+      if (source) {
+        isContribution = true;
+      }
+    }
+
     if (!source) {
       res.status(404).json({ success: false, message: 'Không tìm thấy tài liệu này.' });
       return;
@@ -530,14 +578,15 @@ export const importFullText = async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    const isUploadedPdf = !!source.originalFile;
-    const hasAllowedCopyright = isUploadedPdf || source.copyrightStatus === 'copyrighted_with_open_access' || source.copyrightStatus === 'public_domain' || source.allowedUse === 'open_access_fulltext';
+    const isUploadedPdf = !!(source.originalFile && (source.originalFile.originalFileName || source.originalFile.cloudinarySecureUrl));
+    const hasAllowedCopyright = isContribution || isUploadedPdf || source.copyrightStatus === 'copyrighted_with_open_access' || source.copyrightStatus === 'public_domain' || source.allowedUse === 'open_access_fulltext';
     if (!hasAllowedCopyright) {
       res.status(400).json({ success: false, message: 'Tài liệu không có bản quyền thích hợp để nhập.' });
       return;
     }
 
-    if (source.fullTextStatus !== 'available' && source.fullTextStatus !== 'failed' && source.fullTextStatus !== 'imported') {
+    const statusVal = source.fullTextStatus;
+    if (statusVal !== 'none' && statusVal !== 'available' && statusVal !== 'failed' && statusVal !== 'imported') {
       res.status(400).json({ success: false, message: 'Trạng thái tài liệu hiện tại không hỗ trợ nhập bản đọc.' });
       return;
     }
@@ -578,7 +627,15 @@ export const buildChunks = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    const source = await AcademicSource.findById(cleanId);
+    let source = await AcademicSource.findById(cleanId);
+    let isContribution = false;
+    if (!source) {
+      source = await SourceContribution.findById(cleanId);
+      if (source) {
+        isContribution = true;
+      }
+    }
+
     if (!source) {
       res.status(404).json({ success: false, message: 'Không tìm thấy tài liệu này.' });
       return;
@@ -590,20 +647,27 @@ export const buildChunks = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
-    if (source.fullTextStatus !== 'imported' || !source.readableInApp) {
+    const statusVal = source.fullTextStatus;
+    const isReadable = source.readableInApp;
+    if (statusVal !== 'imported' || !isReadable) {
       res.status(400).json({ success: false, message: 'Tài liệu chưa được nhập bản đọc đầy đủ.' });
       return;
     }
 
-    const fullText = await AcademicFullText.findOne({ sourceId: source._id });
+    const fullText = isContribution
+      ? await AcademicDocument.findOne({ previewContributionId: source._id })
+      : await AcademicDocument.findOne({ sourceId: source._id });
+
     if (!fullText) {
       res.status(400).json({ success: false, message: 'Không tìm thấy thông tin bản đọc đầy đủ.' });
       return;
     }
 
-    // Set build status to building first
-    source.chunkBuildStatus = 'building';
-    await source.save();
+    // Set build status to building first on AcademicSource only
+    if (!isContribution) {
+      source.chunkBuildStatus = 'building';
+      await source.save();
+    }
 
     interface TempChunk {
       text: string;
@@ -617,8 +681,13 @@ export const buildChunks = async (req: Request, res: Response): Promise<void> =>
     let tempChunks: TempChunk[] = [];
 
     try {
-      // 1. Fetch sections
-      const sections = await AcademicFullTextSection.find({ documentId: fullText._id }).sort({ sectionIndex: 1 });
+      // 1. Fetch sections and sort them by sectionIds array
+      const sectionIds = fullText.sectionIds || [];
+      const rawSections = await AcademicSection.find({ documentId: fullText._id });
+      const sections = sectionIds.map(sid => 
+        rawSections.find(s => s._id.toString() === sid.toString())
+      ).filter(Boolean);
+
       if (sections.length === 0) {
         throw new Error('Tài liệu không chứa phân đoạn văn bản nào.');
       }
@@ -789,7 +858,9 @@ export const buildChunks = async (req: Request, res: Response): Promise<void> =>
 
         finalChunks.push({
           _id: chunkId,
-          sourceId: source._id,
+          sourceId: isContribution ? undefined : source._id,
+          previewContributionId: isContribution ? source._id : undefined,
+          chunkPurpose: 'rag',
           documentId: fullText._id,
           sectionId: tc.academicFullTextSectionId,
           sectionOrder: currentSecOrder,
@@ -798,7 +869,7 @@ export const buildChunks = async (req: Request, res: Response): Promise<void> =>
           embedding: embedding,
           tokenCount: Math.round(wordCount * 1.3),
           // legacy compatibility fields:
-          academicSourceId: source._id,
+          academicSourceId: isContribution ? undefined : source._id,
           academicFullTextId: fullText._id,
           academicFullTextSectionId: tc.academicFullTextSectionId,
           chunkIndex: i,
@@ -816,24 +887,25 @@ export const buildChunks = async (req: Request, res: Response): Promise<void> =>
       }
 
       // 4. Database atomic swap: Delete old, insert new
-      await AcademicChunk.deleteMany({ sourceId: source._id });
-      await AcademicChunk.insertMany(finalChunks);
-
-      // Update chunkIds in AcademicSection
-      for (const [secIdStr, chunkIds] of chunkIdsBySection.entries()) {
-        await AcademicSection.updateOne(
-          { _id: new mongoose.Types.ObjectId(secIdStr) },
-          { $set: { chunkIds: chunkIds } }
-        );
+      if (isContribution) {
+        await AcademicChunk.deleteMany({ previewContributionId: source._id, chunkPurpose: 'rag' });
+      } else {
+        await AcademicChunk.deleteMany({ sourceId: source._id, chunkPurpose: 'rag' });
+      }
+      
+      if (finalChunks.length > 0) {
+        await AcademicChunk.insertMany(finalChunks);
       }
 
-      // 5. Update source status
-      source.chunkBuildStatus = 'completed';
-      source.chunkBuiltAt = new Date();
-      source.chunkEmbeddingModel = embedModel;
-      source.chunkCount = finalChunks.length;
-      source.chunkBuildError = undefined;
-      await source.save();
+      // 5. Update status
+      if (!isContribution) {
+        source.chunkBuildStatus = 'completed';
+        source.chunkBuiltAt = new Date();
+        source.chunkEmbeddingModel = embedModel;
+        source.chunkCount = finalChunks.length;
+        source.chunkBuildError = undefined;
+        await source.save();
+      }
 
       res.status(200).json({
         success: true,
@@ -1375,7 +1447,7 @@ export const analyzeRules = async (req: Request, res: Response): Promise<void> =
 
     // Run chunking and extraction sequentially
     try {
-      const fullText = await AcademicFullText.findOne({ sourceId: source._id });
+      const fullText = await AcademicDocument.findOne({ sourceId: source._id });
       if (!fullText) {
         throw new Error('Không tìm thấy thông tin bản đọc đầy đủ.');
       }
@@ -1397,7 +1469,7 @@ export const analyzeRules = async (req: Request, res: Response): Promise<void> =
         }
 
         let tempChunks: TempChunk[] = [];
-        const sections = await AcademicFullTextSection.find({ documentId: fullText._id }).sort({ sectionIndex: 1 });
+        const sections = await AcademicSection.find({ documentId: fullText._id }).sort({ sectionIndex: 1 });
         if (sections.length === 0) {
           throw new Error('Tài liệu không chứa phân đoạn văn bản nào.');
         }
@@ -1588,7 +1660,7 @@ export const analyzeRules = async (req: Request, res: Response): Promise<void> =
           });
         }
 
-        await AcademicChunk.deleteMany({ sourceId: source._id });
+        await AcademicChunk.deleteMany({ sourceId: source._id, chunkPurpose: 'rag' });
         await AcademicChunk.insertMany(finalChunks);
 
         // Update chunkIds in AcademicSection
@@ -2263,13 +2335,118 @@ export const deleteSource = async (req: Request, res: Response): Promise<void> =
   }
 
   // 1. Load AcademicSource
-  const source = await AcademicSource.findById(cleanId);
+  let source = await AcademicSource.findById(cleanId);
+  
   if (!source) {
-    res.status(404).json({ success: false, message: 'Không tìm thấy tài liệu này.' });
+    // Check if it is a pending SourceContribution
+    const contribution = await SourceContribution.findById(cleanId);
+    if (!contribution) {
+      res.status(404).json({ success: false, message: 'Không tìm thấy tài liệu này.' });
+      return;
+    }
+
+    const publicId = contribution.originalFile?.cloudinaryPublicId;
+    const storageProvider = contribution.originalFile?.storageProvider;
+    let isAssetShared = false;
+    if (publicId && storageProvider === 'cloudinary') {
+      const otherSourceCount = await AcademicSource.countDocuments({
+        'originalFile.cloudinaryPublicId': publicId
+      });
+      const otherContributionCount = await SourceContribution.countDocuments({
+        _id: { $ne: contribution._id },
+        'originalFile.cloudinaryPublicId': publicId
+      });
+      if (otherSourceCount > 0 || otherContributionCount > 0) {
+        isAssetShared = true;
+      }
+    }
+
+    const deletedCounts = {
+      contribution: 1,
+      fullText: 0,
+      sections: 0,
+      chunks: 0,
+      cloudinaryAssets: 0
+    };
+
+    const session = await mongoose.startSession();
+    let useTransaction = false;
+    try {
+      const hello = await mongoose.connection.db?.command({ hello: 1 }).catch(() => null);
+      if (hello && (hello.setName || hello.msg === 'isdbgrid')) {
+        await session.startTransaction();
+        useTransaction = true;
+      }
+    } catch {}
+
+    try {
+      const opt = useTransaction ? { session } : {};
+      const sess = useTransaction ? session : null;
+
+      const chunkIds = await AcademicChunk.find({ previewContributionId: contribution._id }).session(sess).distinct('_id');
+
+      const doc = await AcademicDocument.findOne({ previewContributionId: contribution._id }).session(sess);
+      const docId = doc ? doc._id : null;
+
+      deletedCounts.fullText = doc ? 1 : 0;
+      deletedCounts.sections = docId ? await AcademicSection.countDocuments({ documentId: docId }).session(sess) : 0;
+      deletedCounts.chunks = chunkIds.length;
+
+      if (docId) {
+        await AcademicSection.deleteMany({ documentId: docId }, opt);
+      }
+      await AcademicDocument.deleteMany({ previewContributionId: contribution._id }, opt);
+      await AcademicChunk.deleteMany({ previewContributionId: contribution._id }, opt);
+      await AcademicRuleExtractionRun.deleteMany({ academicSourceId: contribution._id }, opt);
+      await PendingKnowledgeRule.deleteMany({ evidenceChunkIds: { $in: chunkIds } }, opt);
+      await KnowledgeRuleEvidence.deleteMany({ chunkId: { $in: chunkIds } }, opt);
+
+      if (contribution.doi) {
+        await SourceContribution.deleteMany({
+          $or: [
+            { doi: contribution.doi },
+            { normalizedDoi: contribution.doi }
+          ]
+        }, opt);
+      } else {
+        await SourceContribution.deleteOne({ _id: contribution._id }, opt);
+      }
+
+      if (useTransaction) {
+        await session.commitTransaction();
+      }
+    } catch (err: any) {
+      if (useTransaction) {
+        await session.abortTransaction();
+      }
+      res.status(500).json({
+        success: false,
+        message: 'Có lỗi xảy ra khi xóa đóng góp.',
+        error: err.message || err
+      });
+      return;
+    } finally {
+      await session.endSession();
+    }
+
+    if (publicId && storageProvider === 'cloudinary' && !isAssetShared) {
+      try {
+        await deleteAsset(publicId, contribution.originalFile?.cloudinaryResourceType || 'raw');
+        deletedCounts.cloudinaryAssets = 1;
+      } catch (cloudinaryErr: any) {
+        console.error('Failed to delete Cloudinary asset after DB commit:', cloudinaryErr);
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      deleted: deletedCounts,
+      warnings: []
+    });
     return;
   }
 
-  // 2. Check Cloudinary asset reuse
+  // 2. Check Cloudinary asset reuse for AcademicSource
   const publicId = source.originalFile?.cloudinaryPublicId;
   const storageProvider = source.originalFile?.storageProvider;
   let isAssetShared = false;
@@ -2317,25 +2494,27 @@ export const deleteSource = async (req: Request, res: Response): Promise<void> =
     const sess = useTransaction ? session : null;
 
     // Counts collections before deletion
-    const doc = await AcademicFullText.findOne({ sourceId: source._id }).session(sess);
+    const chunkIds = await AcademicChunk.find({ sourceId: source._id }).session(sess).distinct('_id');
+
+    const doc = await AcademicDocument.findOne({ sourceId: source._id }).session(sess);
     const docId = doc ? doc._id : null;
 
     deletedCounts.fullText = doc ? 1 : 0;
-    deletedCounts.sections = docId ? await AcademicFullTextSection.countDocuments({ documentId: docId }).session(sess) : 0;
-    deletedCounts.chunks = await AcademicChunk.countDocuments({ sourceId: source._id }).session(sess);
-    deletedCounts.ruleCandidates = await PendingKnowledgeRule.countDocuments({ academicSourceId: source._id }).session(sess);
+    deletedCounts.sections = docId ? await AcademicSection.countDocuments({ documentId: docId }).session(sess) : 0;
+    deletedCounts.chunks = chunkIds.length;
+    deletedCounts.ruleCandidates = await PendingKnowledgeRule.countDocuments({ evidenceChunkIds: { $in: chunkIds } }).session(sess);
 
     // Delete extraction runs
     await AcademicRuleExtractionRun.deleteMany({ academicSourceId: source._id }, opt);
 
     // Load KnowledgeRuleEvidence links to find rule candidates & orphans
-    const ruleSourcesList = await KnowledgeRuleEvidence.find({ sourceId: source._id }).session(sess);
+    const ruleSourcesList = await KnowledgeRuleEvidence.find({ chunkId: { $in: chunkIds } }).session(sess);
     deletedCounts.ruleSources = ruleSourcesList.length;
 
     const ruleIdsToCheck = ruleSourcesList.map(rs => rs.ruleId).filter(Boolean);
 
     // Delete the KnowledgeRuleEvidence records
-    await KnowledgeRuleEvidence.deleteMany({ sourceId: source._id }, opt);
+    await KnowledgeRuleEvidence.deleteMany({ chunkId: { $in: chunkIds } }, opt);
 
     // Check & delete orphaned source-generated rules
     for (const ruleId of ruleIdsToCheck) {
@@ -2353,20 +2532,24 @@ export const deleteSource = async (req: Request, res: Response): Promise<void> =
 
     // Cascade delete other collections
     if (docId) {
-      await AcademicFullTextSection.deleteMany({ documentId: docId }, opt);
+      await AcademicSection.deleteMany({ documentId: docId }, opt);
     }
-    await AcademicFullText.deleteMany({ sourceId: source._id }, opt);
+    await AcademicDocument.deleteMany({ sourceId: source._id }, opt);
     await AcademicChunk.deleteMany({ sourceId: source._id }, opt);
-    await PendingKnowledgeRule.deleteMany({ academicSourceId: source._id }, opt);
+    await PendingKnowledgeRule.deleteMany({ evidenceChunkIds: { $in: chunkIds } }, opt);
 
     // Delete SourceContribution & duplicate submissions if they exist
+    const orContributionConditions: any[] = [];
     if (source.sourceContributionId) {
-      await SourceContribution.deleteMany({
-        $or: [
-          { _id: source.sourceContributionId },
-          { duplicateOf: source.sourceContributionId }
-        ]
-      }, opt);
+      orContributionConditions.push({ _id: source.sourceContributionId });
+      orContributionConditions.push({ duplicateOf: source.sourceContributionId });
+    }
+    if (source.doi) {
+      orContributionConditions.push({ doi: source.doi });
+      orContributionConditions.push({ normalizedDoi: source.doi });
+    }
+    if (orContributionConditions.length > 0) {
+      await SourceContribution.deleteMany({ $or: orContributionConditions }, opt);
     }
 
     // Delete the AcademicSource itself
@@ -2425,8 +2608,11 @@ export const reimportFullText = async (req: Request, res: Response): Promise<voi
     return;
   }
 
-  // 1. Load AcademicSource
-  const source = await AcademicSource.findById(cleanId);
+  // 1. Load AcademicSource or SourceContribution
+  let source = await AcademicSource.findById(cleanId);
+  if (!source) {
+    source = await SourceContribution.findById(cleanId);
+  }
   if (!source) {
     res.status(404).json({ success: false, message: 'Không tìm thấy tài liệu này.' });
     return;
@@ -2465,13 +2651,13 @@ export const reimportFullText = async (req: Request, res: Response): Promise<voi
     }
 
     if (!importCandidateUrl) {
-      const oldFt = await AcademicFullText.findOne({ sourceId: source._id });
+      const oldFt = await AcademicDocument.findOne({ sourceId: source._id });
       if (oldFt) {
         const ftUrlCandidates = [
-          { val: oldFt.sourceUrl, label: 'AcademicFullText.sourceUrl' },
-          { val: (oldFt as any).url, label: 'AcademicFullText.url' },
-          { val: (oldFt as any).metadata?.sourceUrl, label: 'AcademicFullText.metadata.sourceUrl' },
-          { val: (oldFt as any).metadata?.pdfUrl, label: 'AcademicFullText.metadata.pdfUrl' }
+          { val: oldFt.sourceUrl, label: 'AcademicDocument.sourceUrl' },
+          { val: (oldFt as any).url, label: 'AcademicDocument.url' },
+          { val: (oldFt as any).metadata?.sourceUrl, label: 'AcademicDocument.metadata.sourceUrl' },
+          { val: (oldFt as any).metadata?.pdfUrl, label: 'AcademicDocument.metadata.pdfUrl' }
         ];
         for (const cand of ftUrlCandidates) {
           if (cand.val && typeof cand.val === 'string' && cand.val.trim().startsWith('http')) {
@@ -2563,110 +2749,377 @@ export const reimportFullText = async (req: Request, res: Response): Promise<voi
     orphanRules: 0
   };
 
-  // 2. Perform database cleanup inside transaction if supported
-  const session = await mongoose.startSession();
-  let useTransaction = false;
+  const isContribution = source.constructor.modelName === 'SourceContribution';
+
+  // Check if we have an existing reader chunks presence
+  const existingChunksCount = await AcademicChunk.countDocuments({
+    chunkPurpose: 'reader',
+    ...(isContribution ? { previewContributionId: source._id } : { sourceId: source._id })
+  });
+  const hasExistingReader = existingChunksCount > 0;
+
+  // 3. Trigger the import FullText service
   try {
-    const hello = await mongoose.connection.db?.command({ hello: 1 }).catch(() => null);
-    if (hello && (hello.setName || hello.msg === 'isdbgrid')) {
-      await session.startTransaction();
-      useTransaction = true;
-    } else {
-      console.log('MongoDB standalone detected. Running reimport reset without transaction.');
-    }
-  } catch (txErr) {
-    console.log('Failed to check replica set status, running reimport reset without session.');
-  }
+    const importResult = await importFullTextForSource(source, moderatorId, true);
 
-  try {
-    const opt = useTransaction ? { session } : {};
-    const sess = useTransaction ? session : null;
+    if (importResult.success) {
+      // Clear derived metadata only after new parsed output passes validation
+      const docClear = await AcademicDocument.findOne(
+        isContribution ? { previewContributionId: source._id } : { sourceId: source._id }
+      );
+      const docClearId = docClear ? docClear._id : null;
 
-    // Counts collections before clearing
-    const docClear = await AcademicFullText.findOne({ sourceId: source._id }).session(sess);
-    const docClearId = docClear ? docClear._id : null;
+      clearedCounts.fullText = docClear ? 1 : 0;
+      clearedCounts.sections = docClearId ? await AcademicSection.countDocuments({ documentId: docClearId }) : 0;
+      clearedCounts.chunks = await AcademicChunk.countDocuments(
+        isContribution ? { previewContributionId: source._id } : { sourceId: source._id }
+      );
+      clearedCounts.ruleCandidates = await PendingKnowledgeRule.countDocuments({ academicSourceId: source._id });
 
-    clearedCounts.fullText = docClear ? 1 : 0;
-    clearedCounts.sections = docClearId ? await AcademicFullTextSection.countDocuments({ documentId: docClearId }).session(sess) : 0;
-    clearedCounts.chunks = await AcademicChunk.countDocuments({ sourceId: source._id }).session(sess);
-    clearedCounts.ruleCandidates = await PendingKnowledgeRule.countDocuments({ academicSourceId: source._id }).session(sess);
+      // Delete extraction runs
+      await AcademicRuleExtractionRun.deleteMany({ academicSourceId: source._id });
 
-    // Delete extraction runs
-    await AcademicRuleExtractionRun.deleteMany({ academicSourceId: source._id }, opt);
+      // Load KnowledgeRuleEvidence links to identify orphans
+      const ruleSourcesList = await KnowledgeRuleEvidence.find({ sourceId: source._id });
+      clearedCounts.ruleSources = ruleSourcesList.length;
 
-    // Load KnowledgeRuleEvidence links to identify orphans
-    const ruleSourcesList = await KnowledgeRuleEvidence.find({ sourceId: source._id }).session(sess);
-    clearedCounts.ruleSources = ruleSourcesList.length;
+      const ruleIdsToCheck = ruleSourcesList.map(rs => rs.ruleId).filter(Boolean);
 
-    const ruleIdsToCheck = ruleSourcesList.map(rs => rs.ruleId).filter(Boolean);
+      // Delete the KnowledgeRuleEvidence links
+      await KnowledgeRuleEvidence.deleteMany({ sourceId: source._id });
 
-    // Delete the KnowledgeRuleEvidence links
-    await KnowledgeRuleEvidence.deleteMany({ sourceId: source._id }, opt);
-
-    // Check & delete orphaned source-generated rules
-    for (const ruleId of ruleIdsToCheck) {
-      const remainingLinks = await KnowledgeRuleEvidence.countDocuments({ ruleId }).session(sess);
-      if (remainingLinks === 0) {
-        const rule = await VerifiedKnowledgeRule.findById(ruleId).session(sess);
-        if (rule) {
-          if (rule.origin === 'source_generated') {
-            await VerifiedKnowledgeRule.deleteOne({ _id: ruleId }, opt);
+      // Check & delete orphaned source-generated rules
+      for (const ruleId of ruleIdsToCheck) {
+        const remainingLinks = await KnowledgeRuleEvidence.countDocuments({ ruleId });
+        if (remainingLinks === 0) {
+          const rule = await VerifiedKnowledgeRule.findById(ruleId);
+          if (rule && rule.origin === 'source_generated') {
+            await VerifiedKnowledgeRule.deleteOne({ _id: ruleId });
             clearedCounts.orphanRules++;
           }
         }
       }
+
+      await PendingKnowledgeRule.deleteMany({ academicSourceId: source._id });
+
+      res.status(200).json({
+        success: true,
+        reimported: true,
+        cleared: clearedCounts,
+        importResult,
+        warnings
+      });
+    } else {
+      // Reimport failed
+      if (hasExistingReader) {
+        // Restore/preserve old reader status
+        source.fullTextStatus = 'imported';
+        source.readableInApp = true;
+        source.chunkBuildStatus = 'completed';
+        await source.save();
+
+        res.status(422).json({
+          success: false,
+          error: importResult.error || 'candidate_fetch_failed',
+          message: importResult.message || 'Phân tích văn bản thất bại. Giữ lại bản đọc cũ.',
+          resolverReport: importResult.resolverReport,
+          preservedExistingReader: true,
+          warnings
+        });
+      } else {
+        source.fullTextStatus = 'failed';
+        source.readableInApp = false;
+        source.chunkBuildStatus = 'failed';
+        await source.save();
+
+        res.status(422).json({
+          success: false,
+          error: importResult.error || 'candidate_fetch_failed',
+          message: importResult.message || 'Phân tích văn bản thất bại.',
+          resolverReport: importResult.resolverReport,
+          preservedExistingReader: false,
+          warnings
+        });
+      }
+    }
+  } catch (importErr: any) {
+    if (hasExistingReader) {
+      source.fullTextStatus = 'imported';
+      source.readableInApp = true;
+      source.chunkBuildStatus = 'completed';
+      await source.save();
+    }
+    res.status(422).json({
+      success: false,
+      error: 'candidate_fetch_failed',
+      message: importErr.message || importErr,
+      preservedExistingReader: hasExistingReader,
+      warnings: [...warnings, `Quá trình nạp bản đọc gặp lỗi: ${importErr.message || importErr}`]
+    });
+  }
+};
+
+export const getSourcePreview = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      res.status(404).json({ success: false, message: 'Không tìm thấy tài liệu này.' });
+      return;
     }
 
-    // Cascade delete derived data
-    if (docClearId) {
-      await AcademicFullTextSection.deleteMany({ documentId: docClearId }, opt);
+    const contribution = await SourceContribution.findById(id);
+    if (!contribution) {
+      res.status(404).json({ success: false, message: 'Không tìm thấy đóng góp này.' });
+      return;
     }
-    await AcademicFullText.deleteMany({ sourceId: source._id }, opt);
-    await AcademicChunk.deleteMany({ sourceId: source._id }, opt);
-    await PendingKnowledgeRule.deleteMany({ academicSourceId: source._id }, opt);
 
-    // Reset status flags on AcademicSource (preserves original metadata: title, doi, isbn, originalFile, etc.)
-    source.fullTextStatus = 'available'; // Set status to 'available' representing ready-for-import state
-    source.readableInApp = false;
-    source.fullTextImportError = undefined;
-    source.fullTextImportedAt = undefined;
-    source.fullTextImportedBy = undefined;
-    await source.save(opt);
+    const escapeHtml = (text: string): string => {
+      return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    };
 
-    if (useTransaction) {
-      await session.commitTransaction();
+    // Query chunk counts dynamically
+    const readerChunkCount = await AcademicChunk.countDocuments({
+      previewContributionId: contribution._id,
+      chunkPurpose: 'reader',
+    });
+    const ragChunkCount = await AcademicChunk.countDocuments({
+      previewContributionId: contribution._id,
+      chunkPurpose: 'rag',
+    });
+    const totalChunkCount = readerChunkCount + ragChunkCount;
+
+    // Build the preview source payload compatible with LibrarySourceDetailView FE
+    const sourceData: any = {
+      _id: contribution._id,
+      title: contribution.title,
+      authors: contribution.authors,
+      year: contribution.year,
+      journal: contribution.journal || contribution.publisher || '',
+      publisher: contribution.publisher || '',
+      doi: contribution.doi,
+      url: contribution.url,
+      pdfUrl: contribution.pdfUrl || contribution.originalFile?.cloudinarySecureUrl || '',
+      htmlUrl: contribution.htmlUrl || '',
+      allowedUse: contribution.allowedUse,
+      license: contribution.license,
+      reviewStatus: contribution.reviewStatus,
+      submittedNote: contribution.submittedNote,
+      originalFile: contribution.originalFile,
+      fullTextStatus: contribution.fullTextStatus || 'none',
+      previewStatus: readerChunkCount > 0 ? 'imported' : 'none',
+      chunkBuildStatus: ragChunkCount > 0 ? 'completed' : 'none',
+      // Factual quality metrics
+      metadataResolved: !!(contribution.title && contribution.authors && contribution.authors.length > 0),
+      fullTextAvailable: contribution.allowedUse === 'open_access_fulltext',
+      originalPdfAvailable: !!(contribution.originalFile && (contribution.originalFile.originalFileName || contribution.originalFile.cloudinarySecureUrl)) || !!contribution.pdfUrl,
+      smartReaderAvailable: contribution.fullTextStatus === 'imported',
+      hasPdf: !!(contribution.pdfUrl || (contribution.originalFile && (contribution.originalFile.originalFileName || contribution.originalFile.cloudinarySecureUrl))),
+      canInlinePreview: !!(contribution.pdfUrl || (contribution.originalFile && (contribution.originalFile.originalFileName || contribution.originalFile.cloudinarySecureUrl))),
+      inlineProxyUrl: !!(contribution.pdfUrl || (contribution.originalFile && (contribution.originalFile.originalFileName || contribution.originalFile.cloudinarySecureUrl))) ? `/moderation/sources/${contribution._id}/pdf-inline` : '',
+      externalOpenUrl: contribution.pdfUrl || contribution.url || '',
+      failureReason: contribution.fullTextStatus === 'failed' ? 'Lỗi khi nhập bản đọc.' : '',
+      readerChunkCount,
+      ragChunkCount,
+      totalChunkCount,
+      parserWarnings: [],
+      ocrNeeded: false,
+      sourceType: contribution.doi ? 'doi' : ((contribution.originalFile && (contribution.originalFile.originalFileName || contribution.originalFile.cloudinarySecureUrl)) ? 'uploaded_pdf' : 'web_url')
+    };
+
+    // Query preview AcademicDocument
+    const doc = await AcademicDocument.findOne({ previewContributionId: contribution._id });
+    
+    let sectionsPayload: any[] = [];
+    let fullTextPayload: any = null;
+
+    if (doc) {
+      // Reconstruct sections and reader chunks on-the-fly using the same logic as the approved reader response
+      const sections = await AcademicSection.find({ documentId: doc._id }).sort({ sectionOrder: 1 });
+      const sectionMap = new Map<string, typeof sections[0]>();
+      for (const sec of sections) {
+        sectionMap.set(sec._id.toString(), sec);
+      }
+
+      // Query reader chunks
+      const chunks = await AcademicChunk.find({
+        documentId: doc._id,
+        chunkPurpose: 'reader',
+      }).sort({ chunkOrder: 1 });
+
+      sectionsPayload = chunks.map((chunk, idx) => {
+        const parentSec = chunk.sectionId ? sectionMap.get(chunk.sectionId.toString()) : undefined;
+        const sectionType = chunk.blockType || (parentSec ? parentSec.sectionType : 'paragraph');
+
+        return {
+          sectionIndex: idx,
+          sectionType: sectionType,
+          text: chunk.text,
+          html: chunk.html || null,
+          marker: chunk.marker || null,
+          pageStart: 1,
+          pageEnd: 1
+        };
+      });
+
+      fullTextPayload = {
+        wordCount: chunks.reduce((acc, c) => acc + (c.text.split(/\s+/).filter(Boolean).length), 0),
+        characterCount: chunks.reduce((acc, c) => acc + c.text.length, 0),
+        sectionCount: chunks.length,
+        importedAt: doc.createdAt,
+        extractionEngine: doc.parserEngine || 'pymupdf',
+        extractionQuality: 'high',
+        structureVersion: 'smart-reader-v2'
+      };
+    } else if (readerChunkCount > 0) {
+      // Query reader chunks directly by previewContributionId
+      const chunks = await AcademicChunk.find({
+        previewContributionId: contribution._id,
+        chunkPurpose: 'reader'
+      }).sort({ chunkOrder: 1 });
+
+      sectionsPayload = chunks.map((chunk, idx) => {
+        return {
+          sectionIndex: idx,
+          sectionType: chunk.blockType || 'paragraph',
+          text: chunk.text,
+          html: chunk.html || null,
+          marker: chunk.marker || null,
+          pageStart: 1,
+          pageEnd: 1
+        };
+      });
+
+      fullTextPayload = {
+        wordCount: chunks.reduce((acc, c) => acc + (c.text.split(/\s+/).filter(Boolean).length), 0),
+        characterCount: chunks.reduce((acc, c) => acc + c.text.length, 0),
+        sectionCount: chunks.length,
+        importedAt: contribution.updatedAt,
+        extractionEngine: 'GenericHtmlParser',
+        extractionQuality: 'high',
+        structureVersion: 'smart-reader-v2'
+      };
     }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        source: sourceData,
+        fullText: fullTextPayload,
+        sections: sectionsPayload
+      }
+    });
+
   } catch (err: any) {
-    if (useTransaction) {
-      await session.abortTransaction();
+    res.status(500).json({
+      success: false,
+      message: 'Có lỗi xảy ra khi tải dữ liệu xem trước.',
+      error: err.message || err
+    });
+  }
+};
+
+const isUrlPdfLike = (urlString: string): boolean => {
+  try {
+    const parsed = new URL(urlString.trim());
+    const pathname = parsed.pathname.toLowerCase();
+    if (pathname.endsWith('.pdf')) return true;
+    if (pathname.endsWith('/pdf') || pathname.endsWith('/pdf/')) return true;
+    if (parsed.hostname.includes('frontiersin.org') && pathname.includes('/pdf')) return true;
+    if (parsed.hostname.includes('plos.org') && parsed.searchParams.get('type') === 'printable') return true;
+    return false;
+  } catch (e) {
+    return false;
+  }
+};
+
+export const getContributionPdfInline = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const id = req.params.id as string;
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      res.status(404).json({ success: false, message: 'Không tìm thấy tài liệu này.' });
+      return;
+    }
+
+    const contribution = await SourceContribution.findById(id);
+    if (!contribution) {
+      res.status(404).json({ success: false, message: 'Không tìm thấy tài liệu này.' });
+      return;
+    }
+
+    let pdfUrl = '';
+    let isCloudinary = false;
+    let cloudinaryPublicId = '';
+
+    // Check Cloudinary RAW
+    if (contribution.originalFile?.storageProvider === 'cloudinary' && contribution.originalFile?.cloudinarySecureUrl) {
+      const mime = contribution.originalFile.mimeType || '';
+      const name = contribution.originalFile.originalFileName || '';
+      const format = contribution.originalFile.cloudinaryFormat || '';
+      if (mime === 'application/pdf' || name.toLowerCase().endsWith('.pdf') || format === 'pdf') {
+        pdfUrl = contribution.originalFile.cloudinarySecureUrl;
+        isCloudinary = true;
+        cloudinaryPublicId = contribution.originalFile.cloudinaryPublicId || '';
+      }
+    }
+
+    // Check pdfUrl
+    if (!pdfUrl && contribution.pdfUrl && contribution.pdfUrl.trim().startsWith('http')) {
+      pdfUrl = contribution.pdfUrl.trim();
+    }
+
+    // Fallback to url only if PDF-like
+    if (!pdfUrl) {
+      const fallbackUrl = contribution.url;
+      if (fallbackUrl && fallbackUrl.trim().startsWith('http') && isUrlPdfLike(fallbackUrl.trim())) {
+        pdfUrl = fallbackUrl.trim();
+      }
+    }
+
+    if (!pdfUrl) {
+      res.status(404).json({ success: false, message: 'Tài liệu này không có tệp PDF.' });
+      return;
+    }
+
+    // Secure fetch and redirect checks
+    let buffer: Buffer;
+    if (isCloudinary && cloudinaryPublicId) {
+      const signedDownloadUrl = cloudinary.utils.private_download_url(cloudinaryPublicId, '', {
+        resource_type: 'raw',
+        type: 'upload'
+      });
+      const response = await fetch(signedDownloadUrl);
+      if (!response.ok) {
+        throw new Error(`Fetch Cloudinary PDF error: ${response.status}`);
+      }
+      buffer = Buffer.from(await response.arrayBuffer());
+    } else {
+      const result = await fetchUrlWithSafeRedirects(pdfUrl.trim(), true);
+      buffer = result.buffer;
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="document.pdf"');
+    res.status(200).send(buffer);
+
+  } catch (err: any) {
+    console.error('Error streaming preview PDF inline:', err);
+    if (err instanceof SsrfError) {
+      res.status(400).json({
+        success: false,
+        code: 'SSRF_BLOCKED',
+        message: 'URL bị chặn bởi kiểm tra an toàn SSRF.'
+      });
+      return;
     }
     res.status(500).json({
       success: false,
-      message: 'Có lỗi xảy ra khi dọn dẹp dữ liệu để nhập lại.',
+      message: 'Lỗi hệ thống khi tải tệp PDF.',
       error: err.message || err
-    });
-    return;
-  } finally {
-    await session.endSession();
-  }
-
-  // 3. Now run the importFullTextForSource service (destructive reset chosen intentionally by moderator)
-  try {
-    const importResult = await importFullTextForSource(source, moderatorId, true);
-    res.status(200).json({
-      success: true,
-      reimported: importResult.success,
-      cleared: clearedCounts,
-      importResult,
-      warnings
-    });
-  } catch (importErr: any) {
-    res.status(200).json({
-      success: true,
-      reimported: false,
-      cleared: clearedCounts,
-      importResult: { success: false, error: importErr.message || importErr },
-      warnings: [...warnings, `Quá trình nạp bản đọc gặp lỗi: ${importErr.message || importErr}`]
     });
   }
 };

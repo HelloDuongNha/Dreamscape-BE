@@ -20,7 +20,9 @@ import {
   uploadPdfMiddleware,
   uploadPdfFile,
   deleteSource,
-  reimportFullText
+  reimportFullText,
+  getSourcePreview,
+  getContributionPdfInline
 } from '../controllers/moderationController';
 import { getKnowledgeRules } from '../controllers/knowledgeEvidenceController';
 
@@ -109,6 +111,8 @@ router.get('/sources', authMiddleware, isModerator, getPendingSources);
  *         description: Contribution already reviewed or duplicate exists
  */
 router.patch('/sources/:id/status', authMiddleware, isModerator, reviewSource);
+router.get('/sources/:id/preview', authMiddleware, isModerator, getSourcePreview);
+router.get('/sources/:id/pdf-inline', authMiddleware, isModerator, getContributionPdfInline);
 router.post('/sources/upload-pdf', authMiddleware, isModerator, uploadPdfMiddleware, uploadPdfFile);
 router.post('/sources/:id/import-fulltext', authMiddleware, isModerator, importFullText);
 router.post('/sources/:id/build-chunks', authMiddleware, isModerator, buildChunks);

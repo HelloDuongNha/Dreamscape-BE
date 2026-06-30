@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import VerifiedKnowledgeRule from '../models/VerifiedKnowledgeRule';
 import AcademicSource from '../models/AcademicSource';
-import AcademicFullText from '../models/AcademicDocument';
+import AcademicDocument from '../models/AcademicDocument';
 import AcademicChunk from '../models/AcademicChunk';
 import KnowledgeRuleEvidence from '../models/KnowledgeRuleEvidence';
 
@@ -280,7 +280,7 @@ export const removeEvidenceLink = async (req: Request, res: Response): Promise<v
     return;
   }
 
-  const adminIdsStr = process.env.ADMIN_USER_IDS || '6a0f43ab4891b428d4bb7729';
+  const adminIdsStr = process.env.ADMIN_USER_IDS || '6a0fc84bd37aacb66092be0e';
   const adminIds = adminIdsStr.split(',').map(id => id.trim().toLowerCase());
   const isAdmin = adminIds.includes(String(moderatorId).toLowerCase());
 

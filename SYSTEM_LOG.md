@@ -2355,7 +2355,7 @@ TypeScript: 0 errors (BE) | Tests: success | Extraction: CV (6 candidates, oracl
 ### Task 3 — RAG Link UX Polish & Admin-Only Deletion Protection
 - **Sidebar Navigation:** Fully removed the sidebar navigation entry for "Liên kết RAG" in `AppSidebar.vue` to keep the normal moderator flow clean.
 - **Page Cleanup:** Hidden technical tags (rule IDs, `GENERATED` tags, status badges) and the "Hủy liên kết" action buttons from the normal moderator view in `KnowledgeEvidenceView.vue`.
-- **Admin-Only Unlink:** Restricted the `removeEvidenceLink` delete API (`BE/src/controllers/knowledgeEvidenceController.ts`) to administrator accounts (matching `process.env.ADMIN_USER_IDS` or fallback developer ID `6a0f43ab4891b428d4bb7729`), returning `403 Forbidden` to normal moderators.
+- **Admin-Only Unlink:** Restricted the `removeEvidenceLink` delete API (`BE/src/controllers/knowledgeEvidenceController.ts`) to administrator accounts (matching `process.env.ADMIN_USER_IDS` or fallback developer ID `6a0fc84bd37aacb66092be0e`), returning `403 Forbidden` to normal moderators.
 
 ### Task 4 — E2E Oracle RAG Rule Verification
 - **Oracle Rule Matching:** Successfully verified through automated integration tests (`BE/scratch/verify_oracle_rag.js`) that approving a candidate creates the appropriate `KnowledgeRule` (retaining `oracleEligible: true`, `isActive: true`) and active `KnowledgeRuleSource` link.

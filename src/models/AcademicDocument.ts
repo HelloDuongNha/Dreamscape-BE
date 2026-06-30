@@ -1,7 +1,8 @@
 import mongoose, { Document, Schema, Types } from 'mongoose';
 
 export interface IAcademicDocument extends Document {
-  sourceId: Types.ObjectId;
+  sourceId?: Types.ObjectId;
+  previewContributionId?: Types.ObjectId;
   parserVersion: number;
   parserEngine: string;
   sectionIds: Types.ObjectId[];
@@ -14,8 +15,12 @@ const AcademicDocumentSchema = new Schema<IAcademicDocument>(
     sourceId: {
       type: Schema.Types.ObjectId,
       ref: 'AcademicSource',
-      required: true,
-      unique: true,
+      required: false,
+    },
+    previewContributionId: {
+      type: Schema.Types.ObjectId,
+      ref: 'SourceContribution',
+      required: false,
       index: true,
     },
     parserVersion: {
@@ -35,6 +40,12 @@ const AcademicDocumentSchema = new Schema<IAcademicDocument>(
     timestamps: true,
     collection: 'academic_documents',
   }
+);
+
+// Custom validation constraint: Must have either sourceId or previewContributionId
+AcademicDocumentSchema.index(
+  { sourceId: 1 },
+  { unique: true, partialFilterExpression: { sourceId: { $gt: null } } }
 );
 
 export default mongoose.model<IAcademicDocument>('AcademicDocument', AcademicDocumentSchema);

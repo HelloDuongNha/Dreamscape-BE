@@ -11,6 +11,7 @@ import {
 
 export interface SourceImportResolverInput {
   doi?: string;
+  pmcid?: string;
   url?: string;
   isbn?: string;
   uploadedFileRef?: {
@@ -26,17 +27,20 @@ export interface SourceImportResolverInput {
 }
 
 export interface SourceImportResolverResult {
-  sourceType: 'doi' | 'web_url' | 'pdf_url' | 'pdf_upload' | 'isbn';
+  sourceType: 'doi' | 'pmcid' | 'web_url' | 'pdf_url' | 'pdf_upload' | 'isbn';
   title?: string;
   authors: string[];
   year?: number;
   journal?: string;
   publisher?: string;
   doi?: string;
+  pmcid?: string;
+  normalizedPmcid?: string;
   isbn?: string;
   sourceUrl?: string;
   pdfUrl?: string;
   htmlUrl?: string;
+  xmlUrl?: string;
   openAccessStatus: 'hybrid' | 'gold' | 'green' | 'bronze' | 'open' | 'closed' | 'restricted' | 'unknown';
   license?: string;
   allowedUse: 'metadata_only' | 'abstract_only' | 'open_access_fulltext';
@@ -134,6 +138,56 @@ async function fetchCrossrefMetadata(doi: string): Promise<any> {
 }
 
 /**
+ * Helper to fetch PMCID metadata from EuropePMC REST API.
+ */
+async function fetchEuropePmcMetadata(pmcid: string): Promise<any> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 9000);
+
+  try {
+    const url = `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(pmcid)}&format=json&resultType=core`;
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'DreamScapeAcademicBot/1.0 (mailto:dreamscape.app.service@gmail.com)'
+      },
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) return null;
+    const data = await response.json() as any;
+    if (data && data.hitCount > 0 && data.resultList?.result?.[0]) {
+      const res = data.resultList.result[0];
+      const title = res.title || 'Không có tiêu đề';
+      
+      const authors = Array.isArray(res.authorList?.author)
+        ? res.authorList.author.map((a: any) => `${a.firstName || ''} ${a.lastName || ''}`.trim()).filter(Boolean)
+        : [];
+      
+      const year = res.journalInfo?.yearOfPublication || (res.pubYear ? parseInt(res.pubYear, 10) : undefined);
+      const journal = res.journalInfo?.journal?.title || '';
+      const publisher = 'PMC';
+
+      return {
+        title,
+        authors,
+        year,
+        journal,
+        publisher,
+        pmcid: res.pmcid || pmcid,
+        doi: res.doi || undefined,
+        abstract: res.abstractText || undefined
+      };
+    }
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    console.warn('[EuropePMC] Failed to fetch PMC metadata:', err.message || err);
+  }
+  return null;
+}
+
+/**
  * Google Books and Open Library metadata search for ISBN inputs.
  */
 async function fetchIsbnMetadata(isbn: string): Promise<any> {
@@ -213,8 +267,62 @@ export async function resolveSourceImport(
 ): Promise<SourceImportResolverResult> {
   const warnings: string[] = [];
   const cleanDoi = (input.doi || '').trim();
+  const cleanPmcidInput = (input.pmcid || '').trim();
   const cleanUrl = (input.url || '').trim();
   const cleanIsbn = (input.isbn || '').trim();
+
+  let targetPmcid = '';
+  if (/^PMC\d+$/i.test(cleanDoi)) {
+    targetPmcid = cleanDoi.toUpperCase();
+  } else if (/^PMC\d+$/i.test(cleanPmcidInput)) {
+    targetPmcid = cleanPmcidInput.toUpperCase();
+  }
+
+  // ─── Case 0: PMCID Resolution (EuropePMC) ──────────────────────────────────
+  if (targetPmcid) {
+    const pmcMetadata = await fetchEuropePmcMetadata(targetPmcid);
+    if (!pmcMetadata) {
+      throw new Error(`Không thể tìm thấy tài liệu PMC ID ${targetPmcid} từ EuropePMC.`);
+    }
+
+    const sanitized = sanitizeAcademicSourceData({
+      title: pmcMetadata.title,
+      authors: pmcMetadata.authors,
+      journal: pmcMetadata.journal,
+      publisher: pmcMetadata.publisher,
+      year: pmcMetadata.year,
+      doi: pmcMetadata.doi || undefined,
+      url: `https://europepmc.org/articles/${targetPmcid}`,
+      pdfUrl: `https://europepmc.org/articles/${targetPmcid}?pdf=render`,
+      htmlUrl: `https://europepmc.org/articles/${targetPmcid}`,
+      xmlUrl: `https://www.ebi.ac.uk/europepmc/webservices/rest/${targetPmcid}/fullTextXML`,
+      openAccessStatus: 'gold',
+      allowedUse: 'open_access_fulltext',
+      license: 'open-access'
+    });
+
+    return {
+      sourceType: 'pmcid',
+      title: sanitized.title,
+      authors: sanitized.authors || [],
+      year: sanitized.year,
+      journal: sanitized.journal,
+      publisher: sanitized.publisher,
+      doi: sanitized.doi,
+      pmcid: targetPmcid,
+      normalizedPmcid: targetPmcid,
+      sourceUrl: sanitized.url,
+      pdfUrl: sanitized.pdfUrl,
+      htmlUrl: sanitized.htmlUrl,
+      xmlUrl: `https://www.ebi.ac.uk/europepmc/webservices/rest/${targetPmcid}/fullTextXML`,
+      openAccessStatus: sanitized.openAccessStatus,
+      license: sanitized.license,
+      allowedUse: sanitized.allowedUse,
+      fullTextAvailable: true,
+      metadataProvider: 'europe_pmc',
+      warnings
+    };
+  }
 
   // ─── Case 1: DOI Resolution ────────────────────────────────────────────────
   if (cleanDoi) {

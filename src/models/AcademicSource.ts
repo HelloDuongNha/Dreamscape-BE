@@ -4,6 +4,8 @@ export interface IAcademicSource extends Document {
   sourceContributionId: Types.ObjectId;
   doi?: string;
   normalizedDoi?: string;
+  pmcid?: string;
+  normalizedPmcid?: string;
   url?: string;
   normalizedUrl?: string;
   metadata: Record<string, any>;
@@ -68,6 +70,19 @@ const AcademicSourceSchema = new Schema<IAcademicSource>(
       maxlength: [100, 'DOI must not exceed 100 characters.'],
     },
     normalizedDoi: {
+      type: String,
+      trim: true,
+      index: {
+        unique: true,
+        sparse: true,
+      },
+    },
+    pmcid: {
+      type: String,
+      trim: true,
+      maxlength: [100, 'PMCID must not exceed 100 characters.'],
+    },
+    normalizedPmcid: {
       type: String,
       trim: true,
       index: {

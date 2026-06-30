@@ -2,12 +2,12 @@
 import { Types } from 'mongoose';
 import crypto from 'crypto';
 import AcademicSource from '../models/AcademicSource';
-import AcademicFullText from '../models/AcademicDocument';
+import AcademicDocument from '../models/AcademicDocument';
 import AcademicChunk from '../models/AcademicChunk';
 import PendingKnowledgeRule from '../models/PendingKnowledgeRule';
 import VerifiedKnowledgeRule, { RuleClassification } from '../models/VerifiedKnowledgeRule';
 import KnowledgeRuleEvidence from '../models/KnowledgeRuleEvidence';
-import AcademicFullTextSection from '../models/AcademicSection';
+import AcademicSection from '../models/AcademicSection';
 import AcademicRuleExtractionRun from '../models/AcademicRuleExtractionRun';
 import { logger } from '../utils/logger';
 
@@ -1170,8 +1170,8 @@ export async function extractRuleCandidatesFromSource(
     throw new Error('Academic source full text is not imported or chunk build is incomplete.');
   }
 
-  // 3. Load AcademicFullText
-  const fullText = await AcademicFullText.findOne({ sourceId: source._id });
+  // 3. Load AcademicDocument
+  const fullText = await AcademicDocument.findOne({ sourceId: source._id });
 
   // 4. Load AcademicChunk records
   const chunks = await AcademicChunk.find({ sourceId: source._id }).sort({ chunkOrder: 1 });
@@ -1202,7 +1202,7 @@ export async function extractRuleCandidatesFromSource(
   const model = process.env.OLLAMA_MODEL || 'qwen2.5:14b';
   const timeoutMs = parseInt(process.env.OLLAMA_TIMEOUT || '180000', 10);
 
-  const sectionCount = await AcademicFullTextSection.countDocuments({ documentId: fullText?._id });
+  const sectionCount = await AcademicSection.countDocuments({ documentId: fullText?._id });
 
   if (selectedChunks.length === 0) {
     const run = await AcademicRuleExtractionRun.create({

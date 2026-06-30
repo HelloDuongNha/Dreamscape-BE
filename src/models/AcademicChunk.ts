@@ -1,11 +1,16 @@
 import mongoose, { Document, Schema, Types } from 'mongoose';
 
 export interface IAcademicChunk extends Document {
-  sourceId: Types.ObjectId;
+  sourceId?: Types.ObjectId;
+  previewContributionId?: Types.ObjectId;
+  chunkPurpose: 'reader' | 'rag';
   documentId: Types.ObjectId;
   sectionId: Types.ObjectId;
   text: string;
-  embedding: number[];
+  html?: string;
+  marker?: string;
+  blockType?: string;
+  embedding?: number[];
   tokenCount: number;
   sectionOrder: number;
   chunkOrder: number;
@@ -16,7 +21,20 @@ const AcademicChunkSchema = new Schema<IAcademicChunk>(
     sourceId: {
       type: Schema.Types.ObjectId,
       ref: 'AcademicSource',
+      required: false,
+      index: true,
+    },
+    previewContributionId: {
+      type: Schema.Types.ObjectId,
+      ref: 'SourceContribution',
+      required: false,
+      index: true,
+    },
+    chunkPurpose: {
+      type: String,
+      enum: ['reader', 'rag'],
       required: true,
+      default: 'reader',
       index: true,
     },
     documentId: {
@@ -35,9 +53,22 @@ const AcademicChunkSchema = new Schema<IAcademicChunk>(
       type: String,
       required: true,
     },
+    html: {
+      type: String,
+      required: false,
+    },
+    marker: {
+      type: String,
+      required: false,
+    },
+    blockType: {
+      type: String,
+      required: false,
+    },
     embedding: {
       type: [Number],
-      required: true,
+      required: false,
+      default: [],
     },
     tokenCount: {
       type: Number,
@@ -59,6 +90,7 @@ const AcademicChunkSchema = new Schema<IAcademicChunk>(
 );
 
 // Query Optimization Indexes
-AcademicChunkSchema.index({ documentId: 1, chunkOrder: 1 }, { unique: true });
+// Allow multiple chunks per document, chunkPurpose, chunkOrder
+AcademicChunkSchema.index({ documentId: 1, chunkPurpose: 1, chunkOrder: 1 }, { unique: true });
 
 export default mongoose.model<IAcademicChunk>('AcademicChunk', AcademicChunkSchema);
