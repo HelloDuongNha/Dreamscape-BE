@@ -21,6 +21,10 @@ async function run() {
     {
       name: 'A Supplement to Self-Organization Theory of Dreaming',
       doi: '10.3389/fpsyg.2016.00332'
+    },
+    {
+      name: 'Brain basis of self: self-organization and lessons from dreaming',
+      doi: '10.3389/fpsyg.2013.00408'
     }
   ];
 

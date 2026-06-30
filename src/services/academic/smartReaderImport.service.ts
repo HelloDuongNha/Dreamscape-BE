@@ -137,7 +137,7 @@ function deduplicateAndMergeFigures(blocks: any[]): any[] {
   const seenFigures = new Map<string, any>();
 
   const getSubfigureKey = (text: string): string => {
-    const m = (text || '').match(/(figure|fig|hình)\.?\s*(\d+[a-z]?)/i);
+    const m = (text || '').match(/(?:supplementary\s+)?(figure|figs?|fig|hình)\.?\s*(\d+[a-z]?)/i);
     return m ? m[2].toLowerCase() : '';
   };
 
@@ -218,7 +218,7 @@ function deduplicateAndMergeTables(blocks: any[]): any[] {
   const seenTables = new Map<string, any>();
 
   const getTableKey = (text: string): string => {
-    const m = (text || '').match(/(table|bảng)\.?\s*(\d+[a-z]?)/i);
+    const m = (text || '').match(/(?:supplementary\s+)?(table|tabs?|bảng)\.?\s*(\d+[a-z]?)/i);
     return m ? m[2].toLowerCase() : '';
   };
 
@@ -293,6 +293,18 @@ export function classifyBlock(b: any, index: number, total: number, selectedSour
   // Early return for structural reference blocks
   if (b.blockType === 'reference' || b.semanticType === 'reference' || b.blockType === 'reference_item') {
     return 'article_reference';
+  }
+
+  if (b.blockType === 'figure') {
+    return 'article_figure';
+  }
+
+  if (b.blockType === 'table') {
+    return 'article_table';
+  }
+
+  if (b.blockType === 'caption') {
+    return 'article_caption';
   }
 
   // 1. navigation_or_widget
@@ -623,7 +635,7 @@ export async function importSmartReaderForSource(
   let documentTitle = source.title;
 
   const getNumberSuffix = (text: string): string => {
-    const m = (text || '').match(/(figure|fig|table|hình|bảng)\.?\s*(\d+[a-z]?)/i);
+    const m = (text || '').match(/(?:supplementary\s+)?(figure|figs?|fig|table|tabs?|hình|bảng)\.?\s*(\d+[a-z]?)/i);
     return m ? m[2].toLowerCase() : '';
   };
 

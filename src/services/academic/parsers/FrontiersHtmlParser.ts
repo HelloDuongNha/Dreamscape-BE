@@ -40,9 +40,14 @@ export function parseFrontiersHtml(htmlText: string): CanonicalBlocksOutput {
     let currentHeading: string | null = null;
 
     // Traverse DOM child elements sequentially
-    container.find('h1, h2, h3, h4, p, ul, ol, .figure, .table').each((_, el) => {
+    container.find('h1, h2, h3, h4, p, ul, ol, .figure, .table, .ArticleFigure, .ArticleTable, figure, table').each((_, el) => {
       const $el = $(el);
       const tagName = el.tagName?.toLowerCase();
+
+      // Skip descendants of figures or tables to prevent duplicate parsing
+      if ($el.parent().closest('.ArticleFigure, .ArticleTable, figure, table').length > 0) {
+        return;
+      }
 
       // Skip descendants of list items or nested list nodes under broad traversal to prevent duplicates
       if (tagName !== 'ul' && tagName !== 'ol' && $el.closest('li, ul, ol').length > 0) {
@@ -115,6 +120,93 @@ export function parseFrontiersHtml(htmlText: string): CanonicalBlocksOutput {
 
       // Skip author card initials signature
       if (/^[A-Z]{2,}[A-Z][a-z]+/g.test(text)) {
+        return;
+      }
+
+      if (tagName === 'figure' || $el.hasClass('figure') || $el.hasClass('ArticleFigure')) {
+        const titleEl = $el.find('.ArticleFigure__title, figcaption [class*="title" i], figcaption [class*="caption" i]').first();
+        let titleText = titleEl.length > 0 ? titleEl.text().trim() : '';
+        if (!titleText) {
+          const possibleTitle = $el.find('.ArticleFigure__header').text().trim();
+          if (possibleTitle) {
+            titleText = possibleTitle;
+          }
+        }
+
+        const clone = $el.clone();
+        clone.find('script, style').remove();
+        clone.find('.ArticleFigure__header, .ArticleFigure__title, button.ButtonIcon, [aria-label*="Download" i], [aria-label*="Expand" i]').remove();
+        
+        let descText = clone.text().trim();
+        
+        descText = descText.replace(/^[:|.]\s*/, '').trim();
+
+        let captionText = titleText;
+        if (descText) {
+          if (captionText) {
+            captionText += ': ' + descText;
+          } else {
+            captionText = descText;
+          }
+        }
+        if (!captionText) {
+          captionText = text;
+        }
+
+        const img = $el.find('img').first();
+        let src = img.attr('src') || img.attr('data-src') || '';
+        if (src && src.startsWith('/')) {
+          src = new URL(src, 'https://www.frontiersin.org').href;
+        }
+
+        blocks.push({
+          blockType: 'figure',
+          semanticType: 'figure',
+          sectionHeading: currentHeading,
+          text: captionText,
+          html: `<div class="figure-block">${src ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(captionText)}" class="figure-img" />` : '<p class="placeholder-error"><em>[Figure image unavailable]</em></p>'}<p class="caption"><strong>${escapeHtml(captionText)}</strong></p></div>`,
+          imageUrl: src || undefined,
+          order: order++
+        });
+        return;
+      }
+
+      if (tagName === 'table' || $el.hasClass('table') || $el.hasClass('ArticleTable')) {
+        const titleEl = $el.find('.ArticleTable__title, caption, [class*="title" i], [class*="caption" i]').first();
+        const titleText = titleEl.length > 0 ? titleEl.text().trim() : '';
+
+        const clone = $el.clone();
+        clone.find('.ArticleTable__header, .ArticleTable__title, caption, [class*="title" i], [class*="caption" i], table, .ArticleTable__content').remove();
+        let descText = clone.text().trim();
+        descText = descText.replace(/^[:|.]\s*/, '').trim();
+
+        let captionText = titleText;
+        if (descText) {
+          if (captionText) {
+            captionText += ': ' + descText;
+          } else {
+            captionText = descText;
+          }
+        }
+        if (!captionText) {
+          captionText = text;
+        }
+
+        const tableTag = $el.find('table').first();
+        let tableHtml = '';
+        if (tableTag.length > 0) {
+          tableHtml = $.html(tableTag);
+        }
+
+        blocks.push({
+          blockType: 'table',
+          semanticType: 'table',
+          sectionHeading: currentHeading,
+          text: captionText,
+          tableHtmlContent: tableHtml || undefined,
+          html: tableHtml ? `<div class="table-block"><p class="caption"><strong>${escapeHtml(captionText)}</strong></p><div class="table-wrapper">${tableHtml}</div></div>` : '',
+          order: order++
+        });
         return;
       }
 
