@@ -791,6 +791,60 @@ export async function importSmartReaderForSource(
     return clean;
   };
 
+  const cleanOrphanWrapperHeadings = (blocks: any[]): any[] => {
+    const wrapperKeywords = [
+      'statements', 'declarations', 'notes', 'additional information', 'author information',
+      'ethics declarations', 'competing interests', 'conflict of interest', 'author contributions',
+      'contributions', 'funding', 'acknowledgements', 'acknowledgments', 'correspondence',
+      'supplementary information', 'rights and permissions', 'publisher’s note', 'ethics statement'
+    ];
+
+    const coreAcademicHeadings = [
+      'abstract', 'introduction', 'background', 'methods', 'materials and methods', 'results',
+      'discussion', 'conclusion', 'data availability', 'code availability', 'references',
+      'tài liệu tham khảo'
+    ];
+
+    let result = [...blocks];
+    for (let i = result.length - 1; i >= 0; i--) {
+      const b = result[i];
+      if (!b || b.blockType !== 'heading') {
+        continue;
+      }
+
+      const lowerText = (b.text || '').toLowerCase().trim();
+      const isWrapper = wrapperKeywords.some(kw => lowerText.includes(kw));
+      const isCore = coreAcademicHeadings.some(kw => lowerText.includes(kw));
+
+      if (isWrapper && !isCore) {
+        let nextHeadingIdx = result.length;
+        for (let j = i + 1; j < result.length; j++) {
+          if (result[j] && result[j].blockType === 'heading') {
+            nextHeadingIdx = j;
+            break;
+          }
+        }
+
+        let hasContent = false;
+        for (let j = i + 1; j < nextHeadingIdx; j++) {
+          const cb = result[j];
+          if (!cb) continue;
+          if (cb.blockType !== 'heading' && cb.blockType !== 'reference' && cb.semanticType !== 'reference' && cb.blockType !== 'reference_item') {
+            hasContent = true;
+            break;
+          }
+        }
+
+        if (!hasContent) {
+          console.log(`[Endmatter Cleanup] Removing orphan wrapper heading: "${b.text}"`);
+          result[i] = null;
+        }
+      }
+    }
+
+    return result.filter(Boolean);
+  };
+
   // Deterministic source reconciliation winner logic (No Scoring)
   let selectedSource: any = null;
   if (parsedXml && hasCleanFullBody(parsedXml)) {
@@ -981,6 +1035,7 @@ export async function importSmartReaderForSource(
   }
 
   reconciledBlocks = cleanReferencesList(reconciledBlocks);
+  reconciledBlocks = cleanOrphanWrapperHeadings(reconciledBlocks);
   reconciledBlocks = cleanDuplicateConsecutiveParagraphs(reconciledBlocks);
 
   const totalLength = reconciledBlocks.reduce((acc, b) => acc + (b.text || '').length, 0);
