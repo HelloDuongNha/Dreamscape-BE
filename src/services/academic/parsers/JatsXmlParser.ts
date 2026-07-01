@@ -1,7 +1,7 @@
 import * as cheerio from 'cheerio';
 import { CanonicalBlocksOutput, CanonicalBlock } from '../types';
 
-export function parseJatsXml(xmlText: string): CanonicalBlocksOutput {
+export function parseJatsXml(xmlText: string, pmcImageMap?: Map<string, string>): CanonicalBlocksOutput {
   const blocks: CanonicalBlock[] = [];
   const warnings: string[] = [];
   let title = 'Untitled Article';
@@ -9,6 +9,7 @@ export function parseJatsXml(xmlText: string): CanonicalBlocksOutput {
 
   try {
     const $ = cheerio.load(xmlText, { xmlMode: true });
+    const doi = $('article-id[pub-id-type="doi"]').first().text().trim();
 
     // 1. Title Extraction
     const articleTitle = $('article-title').first().text().trim();
@@ -151,20 +152,102 @@ export function parseJatsXml(xmlText: string): CanonicalBlocksOutput {
         if (tagName === 'sec') {
           processSection(child, currentHeading);
         } else if (tagName === 'p') {
-          const text = $(child).text().trim();
-          if (text) {
-            const splitItems = splitInlineListParagraphInJats(text, currentHeading);
-            if (splitItems) {
-              blocks.push(...splitItems);
-            } else {
+          // Extract nested fig and table-wrap before emitting paragraph
+          const nestedFigs = $(child).find('fig');
+          const nestedTableWraps = $(child).find('table-wrap');
+
+          if (nestedFigs.length > 0 || nestedTableWraps.length > 0) {
+            // Emit any text content before/between nested elements as paragraph
+            const clone = $(child).clone();
+            clone.find('fig, table-wrap').remove();
+            const remainingText = clone.text().trim();
+            if (remainingText) {
+              const splitItems = splitInlineListParagraphInJats(remainingText, currentHeading);
+              if (splitItems) {
+                blocks.push(...splitItems);
+              } else {
+                blocks.push({
+                  blockType: 'paragraph',
+                  semanticType: 'paragraph',
+                  sectionHeading: currentHeading,
+                  text: remainingText,
+                  html: `<p>${escapeHtml(remainingText)}</p>`,
+                  order: order++
+                });
+              }
+            }
+            // Process nested figs
+            nestedFigs.each((_, figEl) => {
+              const fLabel = $(figEl).find('label').text().trim();
+              const fCaption = $(figEl).find('caption').text().trim();
+              const fText = `${fLabel ? fLabel + ': ' : ''}${fCaption}`;
+              const fGraphic = $(figEl).find('graphic').first();
+              const fHref = fGraphic.attr('xlink:href') || fGraphic.attr('href') || '';
+              let fImgUrl = '';
+              let fImgHtml = '';
+              if (fHref) {
+                const pmcIdText = $('article-id[pub-id-type="pmcid"], article-id[pub-id-type="pmc"]').first().text().trim();
+                const pmcId = pmcIdText ? (pmcIdText.toUpperCase().startsWith('PMC') ? pmcIdText : `PMC${pmcIdText}`) : '';
+                const cleanHref = fHref.replace(/^PMC\d+\//, '');
+                const filename = cleanHref.split('/').pop() || '';
+                if (fHref.startsWith('http')) {
+                  fImgUrl = fHref;
+                } else if (pmcImageMap && pmcImageMap.has(filename.toLowerCase())) {
+                  fImgUrl = pmcImageMap.get(filename.toLowerCase()) || '';
+                } else if (pmcImageMap && pmcImageMap.has(cleanHref.toLowerCase())) {
+                  fImgUrl = pmcImageMap.get(cleanHref.toLowerCase()) || '';
+                } else if (pmcId) {
+                  fImgUrl = `https://www.ncbi.nlm.nih.gov/pmc/articles/${pmcId}/bin/${cleanHref}`;
+                }
+                if (fImgUrl) {
+                  fImgHtml = `<img src="${escapeHtml(fImgUrl)}" alt="${escapeHtml(fText)}" class="figure-image" style="max-width: 100%; height: auto; display: block; margin: 12px auto;" />`;
+                }
+              }
               blocks.push({
-                blockType: 'paragraph',
-                semanticType: 'paragraph',
+                blockType: 'figure',
+                semanticType: 'figure',
                 sectionHeading: currentHeading,
-                text,
-                html: `<p>${escapeHtml(text)}</p>`,
+                text: fText,
+                html: `<div class="figure-block"><p class="caption"><strong>${escapeHtml(fText)}</strong></p>${fImgHtml || '<p class="placeholder-error"><em>[Figure image unavailable]</em></p>'}</div>`,
+                imageUrl: fImgUrl || undefined,
                 order: order++
               });
+            });
+            // Process nested table-wraps
+            nestedTableWraps.each((_, twEl) => {
+              const tLabel = $(twEl).find('label').text().trim();
+              const tCaption = $(twEl).find('caption').text().trim();
+              const tText = `${tLabel ? tLabel + ': ' : ''}${tCaption}`;
+              const rawTable = $(twEl).find('table').first();
+              let tableHtml = '';
+              if (rawTable.length > 0) {
+                tableHtml = $.html(rawTable);
+              }
+              blocks.push({
+                blockType: 'table',
+                semanticType: 'table',
+                sectionHeading: currentHeading,
+                text: tText,
+                html: `<div class="table-block"><p class="caption"><strong>${escapeHtml(tText)}</strong></p>${tableHtml ? `<div class="table-wrapper">${tableHtml}</div>` : '<p class="placeholder-error"><em>[Table data unavailable]</em></p>'}</div>`,
+                order: order++
+              });
+            });
+          } else {
+            const text = $(child).text().trim();
+            if (text) {
+              const splitItems = splitInlineListParagraphInJats(text, currentHeading);
+              if (splitItems) {
+                blocks.push(...splitItems);
+              } else {
+                blocks.push({
+                  blockType: 'paragraph',
+                  semanticType: 'paragraph',
+                  sectionHeading: currentHeading,
+                  text,
+                  html: `<p>${escapeHtml(text)}</p>`,
+                  order: order++
+                });
+              }
             }
           }
         } else if (tagName === 'list') {
@@ -176,11 +259,38 @@ export function parseJatsXml(xmlText: string): CanonicalBlocksOutput {
           const graphic = $(child).find('graphic').first();
           const href = graphic.attr('xlink:href') || graphic.attr('href') || '';
           let imgHtml = '';
+          let imgUrl = '';
           if (href) {
-            const pmcIdText = $('article-id[pub-id-type="pmc"]').first().text().trim();
+            const pmcIdText = $('article-id[pub-id-type="pmcid"], article-id[pub-id-type="pmc"]').first().text().trim();
             const pmcId = pmcIdText ? (pmcIdText.toUpperCase().startsWith('PMC') ? pmcIdText : `PMC${pmcIdText}`) : '';
             const cleanHref = href.replace(/^PMC\d+\//, '');
-            const imgUrl = href.startsWith('http') ? href : (pmcId ? `https://www.ebi.ac.uk/europepmc/webservices/rest/${pmcId}/bin/${cleanHref}` : '');
+            const filename = cleanHref.split('/').pop() || '';
+
+            if (href.startsWith('http')) {
+              imgUrl = href;
+            } else if (pmcImageMap && pmcImageMap.has(filename.toLowerCase())) {
+              imgUrl = pmcImageMap.get(filename.toLowerCase()) || '';
+            } else if (pmcImageMap && pmcImageMap.has(cleanHref.toLowerCase())) {
+              imgUrl = pmcImageMap.get(cleanHref.toLowerCase()) || '';
+            } else if (href.includes('10.1371/') || (doi && doi.startsWith('10.1371/'))) {
+              let cleanDoi = href.replace(/^info:doi\//, '');
+              if (!cleanDoi.includes('10.1371/')) {
+                const doiBase = doi || '';
+                cleanDoi = `${doiBase}.${cleanDoi}`.replace(/\.\.+/g, '.');
+              }
+              imgUrl = `https://journals.plos.org/plosone/article/figure/image?id=${cleanDoi}&size=large`;
+            } else if (doi && doi.startsWith('10.3389/')) {
+              const publisherId = $('article-id[pub-id-type="publisher-id"]').first().text().trim();
+              if (publisherId) {
+                const frontiersFilename = cleanHref.replace(/\.[a-zA-Z0-9]+$/, '.webp');
+                imgUrl = `https://www.frontiersin.org/files/Articles/${publisherId}/xml-images/${frontiersFilename}`;
+              }
+            }
+
+            if (!imgUrl && pmcId) {
+              imgUrl = `https://www.ncbi.nlm.nih.gov/pmc/articles/${pmcId}/bin/${cleanHref}`;
+            }
+
             if (imgUrl) {
               imgHtml = `<img src="${escapeHtml(imgUrl)}" alt="${escapeHtml(text)}" class="figure-image" style="max-width: 100%; height: auto; display: block; margin: 12px auto;" />`;
             }
@@ -191,6 +301,7 @@ export function parseJatsXml(xmlText: string): CanonicalBlocksOutput {
             sectionHeading: currentHeading,
             text,
             html: `<div class="figure-block"><p class="caption"><strong>${escapeHtml(text)}</strong></p>${imgHtml || '<p class="placeholder-error"><em>[Figure image unavailable]</em></p>'}</div>`,
+            imageUrl: imgUrl || undefined,
             order: order++
           });
         } else if (tagName === 'table-wrap') {
@@ -215,7 +326,13 @@ export function parseJatsXml(xmlText: string): CanonicalBlocksOutput {
     };
 
     // 2. Body Sections
+    const hasRefList = $('ref-list').length > 0;
     $('body > sec').each((_, sec) => {
+      // Skip body <sec> titled "references" if <ref-list> exists in back matter
+      const secTitle = $(sec).children('title').first().text().trim().toLowerCase();
+      if (hasRefList && (secTitle === 'references' || secTitle === 'bibliography')) {
+        return;
+      }
       processSection(sec, null);
     });
 

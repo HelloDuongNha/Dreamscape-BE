@@ -29,6 +29,13 @@ export function collectCandidates(source: any): FullTextCandidate[] {
       reason: 'PMC JATS XML từ EuropePMC API'
     });
     candidates.push({
+      sourceType: 'pmc_html',
+      url: `https://pmc.ncbi.nlm.nih.gov/articles/${pmcid}/`,
+      contentType: 'html',
+      confidence: 0.95,
+      reason: 'Đường dẫn NCBI PMC HTML chính thức'
+    });
+    candidates.push({
       sourceType: 'publisher_html',
       url: `https://europepmc.org/articles/${pmcid}`,
       contentType: 'html',
@@ -95,10 +102,10 @@ export function collectCandidates(source: any): FullTextCandidate[] {
   if (source.doi && source.doi.startsWith('10.1371/')) {
     candidates.push({
       sourceType: 'jats_xml',
-      url: `https://journals.plos.org/plosone/article/file?id=${source.doi}&type=printable`,
-      contentType: 'html',
+      url: `https://journals.plos.org/plosone/article/file?id=${source.doi}&type=manuscript`,
+      contentType: 'xml',
       confidence: 1.0,
-      reason: 'Đường dẫn PLOS HTML full text'
+      reason: 'PLOS JATS XML từ Nhà xuất bản'
     });
     candidates.push({
       sourceType: 'publisher_html',

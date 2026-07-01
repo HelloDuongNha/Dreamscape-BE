@@ -10,7 +10,8 @@ import { CanonicalBlocksOutput } from './types';
 export async function parseSourceFile(
   filePath: string,
   contentType: string,
-  sourceType: string
+  sourceType: string,
+  pmcImageMap?: Map<string, string>
 ): Promise<CanonicalBlocksOutput> {
   // If PDF, parse binary content via Python script
   if (contentType === 'pdf' || sourceType === 'pdf' || sourceType === 'uploaded_pdf') {
@@ -20,7 +21,7 @@ export async function parseSourceFile(
   const content = fs.readFileSync(filePath, 'utf8');
 
   if (sourceType === 'jats_xml' || contentType === 'xml') {
-    return parseJatsXml(content);
+    return parseJatsXml(content, pmcImageMap);
   }
   if (sourceType === 'frontiers_html') {
     return parseFrontiersHtml(content);

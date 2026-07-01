@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 
 export interface FullTextCandidate {
-  sourceType: "jats_xml" | "publisher_html" | "pdf" | "uploaded_pdf" | "generic_html";
+  sourceType: "jats_xml" | "publisher_html" | "pdf" | "uploaded_pdf" | "generic_html" | "pmc_html";
   url: string;
   contentType: string;
   confidence: number;

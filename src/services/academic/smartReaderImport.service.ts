@@ -483,11 +483,70 @@ function splitEmbeddedHeadings(blocks: any[]): any[] {
   return results;
 }
 
+async function fetchPmcImageMap(pmcId: string): Promise<Map<string, string>> {
+  const imageMap = new Map<string, string>();
+  try {
+    const cleanId = pmcId.toUpperCase().startsWith('PMC') ? pmcId : `PMC${pmcId}`;
+    console.log(`[PMC Image Resolver] Fetching PMC page for image mapping: ${cleanId}`);
+    const url = `https://pmc.ncbi.nlm.nih.gov/articles/${cleanId}/`;
+    const res = await fetchUrlWithSafeRedirects(url);
+    if (res && res.buffer) {
+      const html = res.buffer.toString('utf8');
+      const regex = /(?:https?:)?\/\/cdn\.ncbi\.nlm\.nih\.gov\/pmc\/blobs\/[^\s"'`>]+/gi;
+      let match;
+      while ((match = regex.exec(html)) !== null) {
+        let fullUrl = match[0];
+        if (fullUrl.startsWith('//')) {
+          fullUrl = 'https:' + fullUrl;
+        }
+        const parts = fullUrl.split('/');
+        const filename = parts[parts.length - 1];
+        if (filename) {
+          imageMap.set(filename.toLowerCase(), fullUrl);
+          const nameWithoutExt = filename.replace(/\.[a-zA-Z0-9]+$/, '');
+          imageMap.set(nameWithoutExt.toLowerCase(), fullUrl);
+        }
+      }
+      console.log(`[PMC Image Resolver] Resolved ${imageMap.size} image mappings from PMC page.`);
+    }
+  } catch (err: any) {
+    console.warn(`[PMC Image Resolver] Failed to resolve image mappings for ${pmcId}: ${err.message}`);
+  }
+  return imageMap;
+}
+
 export async function importSmartReaderForSource(
   source: any,
   moderatorId: mongoose.Types.ObjectId,
   isReimport = false
 ): Promise<ImportResult> {
+  if (!source.pmcid && source.doi) {
+    try {
+      console.log(`[PMC Resolver] Resolving PMCID for DOI: ${source.doi}`);
+      const convUrl = `https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids=${encodeURIComponent(source.doi)}&format=json&tool=dreamscape&email=admin@dreamscape.io`;
+      const convRes = await fetch(convUrl);
+      if (convRes.ok) {
+        const convData = await convRes.json() as any;
+        const record = convData.records?.[0];
+        if (record && record.pmcid) {
+          console.log(`[PMC Resolver] Resolved PMCID: ${record.pmcid} for DOI: ${source.doi}`);
+          source.pmcid = record.pmcid;
+          source.normalizedPmcid = record.pmcid.toUpperCase();
+          if (source.save && typeof source.save === 'function') {
+            await source.save();
+          }
+        }
+      }
+    } catch (e: any) {
+      console.warn(`[PMC Resolver] PMCID conversion failed for DOI ${source.doi}:`, e.message);
+    }
+  }
+
+  let pmcImageMap: Map<string, string> | undefined = undefined;
+  if (source.pmcid) {
+    pmcImageMap = await fetchPmcImageMap(source.pmcid);
+  }
+
   const candidates = collectCandidates(source);
   console.log(`[Collector] Collected ${candidates.length} candidates for source: ${source.title}`);
 
@@ -542,7 +601,7 @@ export async function importSmartReaderForSource(
         fs.writeFileSync(tempPath, buffer);
         hasTempFile = true;
 
-        const parseOutput = await parseSourceFile(tempPath, cand.contentType, cand.sourceType);
+        const parseOutput = await parseSourceFile(tempPath, cand.contentType, cand.sourceType, pmcImageMap);
         if (parseOutput.success && parseOutput.blocks.length > 0) {
           const normalized = normalizeDocument(parseOutput.blocks, source.title || parseOutput.title);
           const processingTimeMs = Date.now() - startTime;
@@ -792,31 +851,22 @@ export async function importSmartReaderForSource(
   };
 
   const cleanOrphanWrapperHeadings = (blocks: any[]): any[] => {
-    const wrapperKeywords = [
-      'statements', 'declarations', 'notes', 'additional information', 'author information',
-      'ethics declarations', 'competing interests', 'conflict of interest', 'author contributions',
-      'contributions', 'funding', 'acknowledgements', 'acknowledgments', 'correspondence',
-      'supplementary information', 'rights and permissions', 'publisher’s note', 'ethics statement'
-    ];
-
-    const coreAcademicHeadings = [
-      'abstract', 'introduction', 'background', 'methods', 'materials and methods', 'results',
-      'discussion', 'conclusion', 'data availability', 'code availability', 'references',
-      'tài liệu tham khảo'
-    ];
-
     let result = [...blocks];
-    for (let i = result.length - 1; i >= 0; i--) {
-      const b = result[i];
-      if (!b || b.blockType !== 'heading') {
-        continue;
-      }
 
-      const lowerText = (b.text || '').toLowerCase().trim();
-      const isWrapper = wrapperKeywords.some(kw => lowerText.includes(kw));
-      const isCore = coreAcademicHeadings.some(kw => lowerText.includes(kw));
+    for (let pass = 0; pass < 3; pass++) {
+      for (let i = result.length - 1; i >= 0; i--) {
+        const b = result[i];
+        if (!b || b.blockType !== 'heading') {
+          continue;
+        }
 
-      if (isWrapper && !isCore) {
+        const lowerText = (b.text || '').toLowerCase().trim();
+        const protectedKeywords = [
+          'references', 'tài liệu tham khảo', 'introduction', 'methods', 'results',
+          'discussion', 'conclusion', 'abstract', 'data availability', 'materials and methods'
+        ];
+        const isProtected = protectedKeywords.some(kw => lowerText.includes(kw));
+
         let nextHeadingIdx = result.length;
         for (let j = i + 1; j < result.length; j++) {
           if (result[j] && result[j].blockType === 'heading') {
@@ -829,20 +879,21 @@ export async function importSmartReaderForSource(
         for (let j = i + 1; j < nextHeadingIdx; j++) {
           const cb = result[j];
           if (!cb) continue;
-          if (cb.blockType !== 'heading' && cb.blockType !== 'reference' && cb.semanticType !== 'reference' && cb.blockType !== 'reference_item') {
+          if (cb.blockType === 'paragraph' || cb.blockType === 'table' || cb.blockType === 'figure' || cb.blockType === 'list_item' || cb.blockType === 'reference') {
             hasContent = true;
             break;
           }
         }
 
-        if (!hasContent) {
-          console.log(`[Endmatter Cleanup] Removing orphan wrapper heading: "${b.text}"`);
+        if (!hasContent && !isProtected) {
+          console.log(`[Endmatter Cleanup] Removing empty/orphan heading: "${b.text}"`);
           result[i] = null;
         }
       }
+      result = result.filter(Boolean);
     }
 
-    return result.filter(Boolean);
+    return result;
   };
 
   // Deterministic source reconciliation winner logic (No Scoring)
@@ -1153,16 +1204,22 @@ export async function importSmartReaderForSource(
   });
 
   let failMessage = 'Tất cả các nguồn full text đều không đạt tiêu chuẩn chất lượng tối thiểu.';
-  if (isChallengePage) {
+  let errorType = 'metadata_only';
+  if (has403Block) {
+    failMessage = 'Không thể tải toàn văn tự động do máy chủ tài liệu chặn truy cập (403/Forbidden).';
+    errorType = 'publisher_blocked';
+  } else if (isChallengePage) {
     failMessage = 'Không thể truy cập do bị chặn bởi hệ thống Cloudflare / bảo vệ chống bot.';
+    errorType = 'publisher_blocked';
   } else if (isMetadataOnly) {
     failMessage = 'Nguồn bài viết chỉ chứa thông tin mô tả (Metadata), không có nội dung toàn văn để nhập.';
+    errorType = 'metadata_only';
   }
 
   return {
     success: false,
     message: failMessage,
-    error: isChallengePage ? 'blocked_by_publisher' : 'metadata_only',
+    error: errorType,
     resolverReport,
     candidateAttempts
   };

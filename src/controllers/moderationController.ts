@@ -560,11 +560,14 @@ export const importFullText = async (req: Request, res: Response): Promise<void>
 
     let source = await AcademicSource.findById(cleanId);
     let isContribution = false;
-    if (!source) {
-      source = await SourceContribution.findById(cleanId);
-      if (source) {
-        isContribution = true;
-      }
+    if (source) {
+      // AcademicSource delegate to unified polished reimportFullText pipeline!
+      return reimportFullText(req, res);
+    }
+
+    source = await SourceContribution.findById(cleanId);
+    if (source) {
+      isContribution = true;
     }
 
     if (!source) {
@@ -2830,6 +2833,7 @@ export const reimportFullText = async (req: Request, res: Response): Promise<voi
         source.fullTextStatus = 'failed';
         source.readableInApp = false;
         source.chunkBuildStatus = 'failed';
+        source.fullTextImportError = importResult.message || 'Lỗi không xác định.';
         await source.save();
 
         res.status(422).json({
