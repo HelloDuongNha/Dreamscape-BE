@@ -426,13 +426,34 @@ export const reviewSource = async (req: Request, res: Response): Promise<void> =
       return;
     }
 
-    // 6. If rejected, update SourceContribution status only
+    // 6. If rejected, update SourceContribution status and clean up Cloudinary asset
     contribution.reviewStatus = 'rejected';
     contribution.reviewedBy = reviewerId;
     contribution.reviewedAt = new Date();
     if (reviewNote !== undefined) {
       contribution.reviewNote = cleanNote || undefined;
     }
+
+    if (
+      contribution.originalFile?.storageProvider === 'cloudinary' &&
+      contribution.originalFile?.cloudinaryPublicId
+    ) {
+      try {
+        const publicId = contribution.originalFile.cloudinaryPublicId;
+        const resourceType = contribution.originalFile.cloudinaryResourceType || 'raw';
+        await deleteAsset(publicId, resourceType);
+        console.log(`Successfully deleted Cloudinary asset for rejected contribution: ${publicId}`);
+        
+        // Safely clear Cloudinary-specific fields from originalFile to prevent pointing to dead assets
+        contribution.originalFile.cloudinaryPublicId = undefined;
+        contribution.originalFile.cloudinarySecureUrl = undefined;
+        contribution.originalFile.cloudinaryResourceType = undefined;
+        contribution.originalFile.cloudinaryFormat = undefined;
+      } catch (cloudinaryErr: any) {
+        console.error('Failed to delete Cloudinary asset on contribution rejection:', cloudinaryErr);
+      }
+    }
+
     await contribution.save();
 
     // Retrieve chunk IDs linked to the contribution

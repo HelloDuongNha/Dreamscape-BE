@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import authMiddleware from '../middleware/authMiddleware';
-import { contributeSource, previewSource, getApprovedSources, getApprovedSourceById, getApprovedSourceRead, getApprovedSourceOriginalDocument, getApprovedSourcePdfInline, contributePdfSource } from '../controllers/sourceController';
+import authMiddleware, { isModerator } from '../middleware/authMiddleware';
+import { contributeSource, previewSource, getApprovedSources, getApprovedSourceById, getApprovedSourceRead, getApprovedSourceOriginalDocument, getApprovedSourcePdfInline, contributePdfSource, cacheOriginalPdf } from '../controllers/sourceController';
 import { uploadPdfMiddleware } from '../controllers/moderationController';
 
 const router = Router();
@@ -78,5 +78,6 @@ router.get('/approved/:id', authMiddleware, getApprovedSourceById);
 router.get('/approved/:id/read', authMiddleware, getApprovedSourceRead);
 router.get('/approved/:id/original-document', authMiddleware, getApprovedSourceOriginalDocument);
 router.get('/approved/:id/pdf-inline', authMiddleware, getApprovedSourcePdfInline);
+router.post('/approved/:id/cache-original-pdf', authMiddleware, isModerator, cacheOriginalPdf);
 
 export default router;

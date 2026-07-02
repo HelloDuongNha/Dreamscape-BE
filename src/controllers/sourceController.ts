@@ -14,6 +14,7 @@ import { fetchUrlWithSafeRedirects, SsrfError } from '../utils/ssrfGuard';
 import fs from 'fs';
 import { processPdfUpload, computeFileHash } from '../services/pdfUpload.service';
 import { deleteAsset } from '../services/cloudinaryStorage.service';
+import { cacheOriginalPdfForSource } from '../services/originalPdfAsset.service';
 import { PDFParse } from 'pdf-parse';
 import cloudinary from '../config/cloudinary';
 
@@ -494,7 +495,7 @@ export const getApprovedSourceById = async (req: Request, res: Response): Promis
     }
 
     const source = await AcademicSource.findById(id)
-      .select('_id title authors year journal publisher doi url sourceProvider verificationStatus allowedUse copyrightStatus createdAt fullTextStatus fullTextUrl license oaStatus readableInApp fullTextSourceType fullTextImportError fullTextImportedAt fullTextImportedBy landingPageUrl pdfUrl xmlUrl htmlUrl chunkBuildStatus chunkBuiltAt chunkEmbeddingModel chunkCount chunkBuildError originalFile sourceOrigin metadata');
+      .select('_id title authors year journal publisher doi url sourceProvider verificationStatus allowedUse copyrightStatus createdAt fullTextStatus fullTextUrl license oaStatus readableInApp fullTextSourceType fullTextImportError fullTextImportedAt fullTextImportedBy landingPageUrl pdfUrl xmlUrl htmlUrl chunkBuildStatus chunkBuiltAt chunkEmbeddingModel chunkCount chunkBuildError originalFile sourceOrigin metadata pmcid normalizedPmcid');
 
     if (!source) {
       res.status(404).json({
@@ -785,6 +786,7 @@ export const getApprovedSourceOriginalDocument = async (req: Request, res: Respo
  * Access: Authenticated users only.
  */
 export const getApprovedSourcePdfInline = async (req: Request, res: Response): Promise<void> => {
+  let source: any = null;
   try {
     const id = req.params.id as string;
     if (!id || !mongoose.Types.ObjectId.isValid(id)) {
@@ -792,7 +794,7 @@ export const getApprovedSourcePdfInline = async (req: Request, res: Response): P
       return;
     }
 
-    const source = await AcademicSource.findById(id);
+    source = await AcademicSource.findById(id);
     if (!source) {
       res.status(404).json({ success: false, message: 'Không tìm thấy tài liệu này.' });
       return;
@@ -876,9 +878,11 @@ export const getApprovedSourcePdfInline = async (req: Request, res: Response): P
       });
       return;
     }
-    res.status(500).json({
+    const isPmc = !!(source as any).pmcid;
+    const isInvalidPdf = err.message?.includes('không phải PDF') || err.message?.includes('PDF');
+    res.status(isPmc || isInvalidPdf ? 400 : 500).json({
       success: false,
-      code: 'PDF_FETCH_FAILED',
+      code: isPmc || isInvalidPdf ? 'PDF_INVALID' : 'PDF_FETCH_FAILED',
       message: err.message || 'Lỗi khi tải tài liệu PDF.'
     });
   }
@@ -1164,6 +1168,30 @@ export const contributePdfSource = async (req: Request, res: Response): Promise<
         console.error(`Lỗi khi xóa tệp tạm: ${filePath}`, unlinkErr.message);
       }
     }
+  }
+};
+
+export const cacheOriginalPdf = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const id = req.params.id as string;
+    const userId = (req as any).user?._id;
+    
+    const result = await cacheOriginalPdfForSource(id, userId);
+    
+    res.status(200).json({
+      success: true,
+      status: result.status,
+      message: result.message,
+      attemptedCandidates: result.attemptedCandidates,
+      data: result.source
+    });
+  } catch (err: any) {
+    console.error('Error caching original PDF:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Có lỗi xảy ra khi lưu trữ PDF gốc.',
+      error: err.message || err
+    });
   }
 };
 
