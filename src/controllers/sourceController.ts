@@ -1175,14 +1175,16 @@ export const cacheOriginalPdf = async (req: Request, res: Response): Promise<voi
   try {
     const id = req.params.id as string;
     const userId = (req as any).user?._id;
+    const force = req.body?.force === true || req.body?.force === 'true';
     
-    const result = await cacheOriginalPdfForSource(id, userId);
+    const result = await cacheOriginalPdfForSource(id, userId, force);
     
     res.status(200).json({
       success: true,
       status: result.status,
       message: result.message,
       attemptedCandidates: result.attemptedCandidates,
+      source: result.source,
       data: result.source
     });
   } catch (err: any) {
@@ -1190,6 +1192,216 @@ export const cacheOriginalPdf = async (req: Request, res: Response): Promise<voi
     res.status(500).json({
       success: false,
       message: 'Có lỗi xảy ra khi lưu trữ PDF gốc.',
+      error: err.message || err
+    });
+  }
+};
+
+export const uploadOriginalPdf = async (req: Request, res: Response): Promise<void> => {
+  const file = req.file;
+  if (!file) {
+    res.status(400).json({
+      success: false,
+      message: 'Không tìm thấy tệp PDF để tải lên.'
+    });
+    return;
+  }
+
+  const id = req.params.id as string;
+  const filePath = file.path;
+  const originalName = file.originalname;
+
+  try {
+    // 1. Retrieve the academic source
+    const source = await AcademicSource.findById(id);
+    if (!source) {
+      res.status(404).json({
+        success: false,
+        message: 'Không tìm thấy tài liệu học thuật.'
+      });
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+      return;
+    }
+
+    // 2. Validate PDF file magic bytes
+    const fileFd = fs.openSync(filePath, 'r');
+    const magicBuffer = Buffer.alloc(4);
+    fs.readSync(fileFd, magicBuffer, 0, 4, 0);
+    fs.closeSync(fileFd);
+
+    const isPdfMagic = magicBuffer.toString('ascii') === '%PDF';
+    const isPdfMime = file.mimetype === 'application/pdf';
+    const isPdfExt = originalName.toLowerCase().endsWith('.pdf');
+
+    if (!isPdfMagic || !isPdfMime || !isPdfExt) {
+      res.status(400).json({
+        success: false,
+        message: 'Tệp tải lên không phải là định dạng PDF hợp lệ.'
+      });
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+      return;
+    }
+
+    // 3. Process/Upload the new PDF to Cloudinary
+    const uploadResult = await processPdfUpload(filePath, originalName, file.mimetype);
+
+    // Keep track of old publicId for delete safety
+    const oldPublicId = source.originalFile?.cloudinaryPublicId;
+    const oldResourceType = source.originalFile?.cloudinaryResourceType || 'raw';
+    const isReplace = !!oldPublicId;
+
+    // 4. Update the DB document
+    source.originalFile = {
+      storageProvider: 'cloudinary',
+      originalFileName: uploadResult.original_filename,
+      mimeType: 'application/pdf',
+      fileSize: uploadResult.bytes,
+      cloudinaryPublicId: uploadResult.public_id,
+      cloudinarySecureUrl: uploadResult.secure_url,
+      cloudinaryResourceType: 'raw',
+      cloudinaryFormat: uploadResult.format,
+      uploadedBy: (req as any).user?._id,
+      uploadedAt: new Date(),
+      fileHash: uploadResult.fileHash
+    };
+
+    await source.save();
+
+    // 5. Delete old Cloudinary asset AFTER successful save (Task 3 Replace Safety)
+    let deleteWarning: string | undefined;
+    if (isReplace && oldPublicId) {
+      try {
+        await deleteAsset(oldPublicId, oldResourceType);
+      } catch (delErr: any) {
+        console.warn(`Failed to delete old asset ${oldPublicId} on replace:`, delErr.message);
+        deleteWarning = `Lưu tệp mới thành công nhưng gặp lỗi khi dọn dẹp tệp cũ: ${delErr.message}`;
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      status: isReplace ? 'replaced' : 'uploaded',
+      source,
+      originalFile: source.originalFile,
+      message: isReplace 
+        ? 'Thay thế tài liệu PDF gốc thành công.' 
+        : 'Tải lên tài liệu PDF gốc thành công.',
+      warning: deleteWarning
+    });
+
+  } catch (err: any) {
+    console.error('Error uploading original PDF:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi máy chủ khi tải lên tài liệu PDF gốc.',
+      error: err.message || err
+    });
+  } finally {
+    // Safety cleanup of temp file
+    if (fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch (cleanupErr: any) {
+        console.error(`Lỗi khi dọn dẹp file tạm multer: ${filePath}`, cleanupErr.message);
+      }
+    }
+  }
+};
+
+/**
+ * DELETE /api/sources/approved/:id/original-pdf
+ * Deletes only the stored Cloudinary Original PDF asset from an approved source.
+ * Does NOT delete the source, Smart Reader content, pdfUrl, htmlUrl, url, figures, tables, or references.
+ * Access: Moderator/Admin only.
+ */
+export const deleteOriginalPdf = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const id = req.params.id as string;
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      res.status(404).json({
+        success: false,
+        message: 'Không tìm thấy tài liệu học thuật.'
+      });
+      return;
+    }
+
+    const source = await AcademicSource.findById(id);
+    if (!source) {
+      res.status(404).json({
+        success: false,
+        message: 'Không tìm thấy tài liệu học thuật.'
+      });
+      return;
+    }
+
+    // Check if there is a valid Cloudinary original PDF to delete
+    const orig = source.originalFile as any;
+    if (!orig || !orig.cloudinaryPublicId || orig.storageProvider !== 'cloudinary') {
+      // No Cloudinary asset — clear originalFile anyway if it exists and return success
+      if (source.originalFile) {
+        source.originalFile = undefined;
+        await source.save();
+      }
+      res.status(200).json({
+        success: true,
+        status: 'no_asset',
+        message: 'Không có PDF đã lưu trên Cloudinary.',
+        source: mapSourceOriginAndUrls(source)
+      });
+      return;
+    }
+
+    const publicId = orig.cloudinaryPublicId;
+    const resourceType = orig.cloudinaryResourceType || 'raw';
+
+    // Attempt to delete from Cloudinary
+    let cloudinaryStatus: 'deleted' | 'not_found' = 'deleted';
+    try {
+      const deleteResult = await deleteAsset(publicId, resourceType);
+      if (deleteResult?.result === 'not found') {
+        cloudinaryStatus = 'not_found';
+      }
+    } catch (delErr: any) {
+      const errMsg = (delErr.message || '').toLowerCase();
+      // Treat "not found" errors as success
+      if (errMsg.includes('not found') || errMsg.includes('not_found')) {
+        cloudinaryStatus = 'not_found';
+      } else {
+        // Real Cloudinary API/network error — do NOT clear DB
+        console.error(`Cloudinary delete failed for ${publicId}:`, delErr.message);
+        res.status(500).json({
+          success: false,
+          message: `Lỗi khi xóa tệp trên Cloudinary: ${delErr.message}`,
+          error: delErr.message
+        });
+        return;
+      }
+    }
+
+    // Clear originalFile from DB after successful Cloudinary delete or not_found
+    source.originalFile = undefined;
+    await source.save();
+
+    const message = cloudinaryStatus === 'not_found'
+      ? 'Tệp không còn tồn tại trên Cloudinary. Đã xóa thông tin lưu trữ trong hệ thống.'
+      : 'Đã xóa PDF gốc lưu trên Cloudinary thành công.';
+
+    res.status(200).json({
+      success: true,
+      status: cloudinaryStatus,
+      message,
+      source: mapSourceOriginAndUrls(source)
+    });
+
+  } catch (err: any) {
+    console.error('Error deleting original PDF:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi máy chủ khi xóa PDF gốc.',
       error: err.message || err
     });
   }

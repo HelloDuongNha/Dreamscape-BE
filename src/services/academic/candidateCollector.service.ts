@@ -14,8 +14,7 @@ export function collectCandidates(source: any): FullTextCandidate[] {
       confidence: 1.0,
       reason: 'Tệp PDF tải lên bởi người dùng'
     });
-    // For uploaded PDF, we can skip other candidate URL crawling because the user explicitly uploaded this file!
-    return candidates;
+    // For uploaded PDF, we can try it as a candidate but do not skip other candidate URL crawling as fallbacks
   }
 
   // PMCID EuropePMC Support
