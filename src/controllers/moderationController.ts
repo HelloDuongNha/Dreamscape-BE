@@ -36,6 +36,7 @@ import { v2 as cloudinary } from 'cloudinary';
 import { uploadPdf, deleteAsset } from '../services/cloudinaryStorage.service';
 import { sanitizeAcademicSourceData } from '../utils/sourceSanitizer';
 import { processPdfUpload } from '../services/pdfUpload.service';
+import { cacheOriginalPdfForContribution } from '../services/originalPdfAsset.service';
 
 const activeExtractions = new Set<string>();
 
@@ -251,6 +252,8 @@ export const reviewSource = async (req: Request, res: Response): Promise<void> =
       });
 
       const isUploadedPdf = !!(contribution.originalFile && (contribution.originalFile.originalFileName || contribution.originalFile.cloudinarySecureUrl));
+      const previewDocCheck = await AcademicDocument.findOne({ previewContributionId: contribution._id });
+      const hasPreviewDoc = !!previewDocCheck;
 
       // Update SourceContribution's own metadata with sanitized fields to match
       contribution.metadata = { ...rawMetadata, ...sanitizedMeta };
@@ -265,17 +268,26 @@ export const reviewSource = async (req: Request, res: Response): Promise<void> =
       contribution.pdfUrl = sanitizedMeta.pdfUrl || contribution.pdfUrl;
       contribution.htmlUrl = sanitizedMeta.htmlUrl || contribution.htmlUrl;
       
-      if (isUploadedPdf) {
+      if (isUploadedPdf || hasPreviewDoc || contribution.readableInApp) {
         contribution.allowedUse = 'open_access_fulltext';
         contribution.readableInApp = true;
-        contribution.fullTextStatus = 'available';
-        contribution.fullTextSourceType = 'pdf';
-        contribution.pdfUrl = contribution.originalFile?.cloudinarySecureUrl;
-        contribution.fullTextUrl = contribution.originalFile?.cloudinarySecureUrl;
-        contribution.copyrightStatus = 'paywalled';
-        contribution.verificationStatus = 'manual';
+        contribution.fullTextStatus = hasPreviewDoc ? 'imported' : (contribution.fullTextStatus || 'available');
+        contribution.fullTextSourceType = isUploadedPdf ? 'pdf' : (contribution.fullTextSourceType || 'unknown');
+        if (isUploadedPdf) {
+          const isCloudinary = (u: string) => {
+            return u.toLowerCase().includes('cloudinary.com') || u.toLowerCase().includes('res.cloudinary.com');
+          };
+          if (!contribution.pdfUrl || isCloudinary(contribution.pdfUrl)) {
+            contribution.pdfUrl = contribution.originalFile?.cloudinarySecureUrl;
+          }
+          if (!contribution.fullTextUrl || isCloudinary(contribution.fullTextUrl)) {
+            contribution.fullTextUrl = contribution.originalFile?.cloudinarySecureUrl;
+          }
+        }
+        contribution.copyrightStatus = contribution.copyrightStatus || 'paywalled';
+        contribution.verificationStatus = contribution.verificationStatus || 'manual';
         contribution.metadata.allowedUse = 'open_access_fulltext';
-        contribution.sourceOrigin = 'uploaded_pdf';
+        contribution.sourceOrigin = contribution.sourceOrigin || (isUploadedPdf ? 'uploaded_pdf' : 'doi_import');
       } else {
         contribution.allowedUse = sanitizedMeta.allowedUse || contribution.allowedUse || 'metadata_only';
         contribution.sourceOrigin = contribution.sourceOrigin || (contribution.doi ? 'doi_import' : 'url_import');
@@ -339,7 +351,7 @@ export const reviewSource = async (req: Request, res: Response): Promise<void> =
       let importResult = null;
 
       // Promotion Check: check if preview document exists
-      const previewDoc = await AcademicDocument.findOne({ previewContributionId: contribution._id });
+      const previewDoc = previewDocCheck;
       if (previewDoc) {
         console.log(`Promoting preview full text data for source ${academicSource._id}`);
         // Promotes all preview records: set sourceId and unset previewContributionId
@@ -350,6 +362,7 @@ export const reviewSource = async (req: Request, res: Response): Promise<void> =
         const ragCount = await AcademicChunk.countDocuments({ sourceId: academicSource._id, chunkPurpose: 'rag' });
 
         // Copy lightweight metadata flags
+        academicSource.allowedUse = 'open_access_fulltext';
         academicSource.fullTextStatus = contribution.fullTextStatus || 'imported';
         academicSource.readableInApp = contribution.readableInApp || true;
         academicSource.chunkBuildStatus = 'completed';
@@ -2938,6 +2951,8 @@ export const getSourcePreview = async (req: Request, res: Response): Promise<voi
       fullTextStatus: contribution.fullTextStatus || 'none',
       previewStatus: readerChunkCount > 0 ? 'imported' : 'none',
       chunkBuildStatus: ragChunkCount > 0 ? 'completed' : 'none',
+      readableInApp: contribution.fullTextStatus === 'imported' || readerChunkCount > 0,
+      copyrightStatus: 'copyrighted_with_open_access',
       // Factual quality metrics
       metadataResolved: !!(contribution.title && contribution.authors && contribution.authors.length > 0),
       fullTextAvailable: contribution.allowedUse === 'open_access_fulltext',
@@ -3144,6 +3159,126 @@ export const getContributionPdfInline = async (req: Request, res: Response): Pro
     res.status(500).json({
       success: false,
       message: 'Lỗi hệ thống khi tải tệp PDF.',
+      error: err.message || err
+    });
+  }
+};
+
+export const cacheContributionPdf = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const id = req.params.id as string;
+    const userId = (req as any).user?._id;
+    const force = req.body?.force === true || req.body?.force === 'true';
+    
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      res.status(404).json({
+        success: false,
+        message: 'Không tìm thấy đóng góp nguồn.'
+      });
+      return;
+    }
+
+    const result = await cacheOriginalPdfForContribution(id, userId, force);
+    
+    res.status(200).json({
+      success: true,
+      status: result.status,
+      message: result.message,
+      attemptedCandidates: result.attemptedCandidates,
+      source: mapSourceContribution(result.source),
+      data: mapSourceContribution(result.source)
+    });
+  } catch (err: any) {
+    console.error('Error caching contribution PDF:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Có lỗi xảy ra khi lưu trữ PDF gốc.',
+      error: err.message || err
+    });
+  }
+};
+
+export const deleteContributionPdf = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const id = req.params.id as string;
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      res.status(404).json({
+        success: false,
+        message: 'Không tìm thấy đóng góp nguồn.'
+      });
+      return;
+    }
+
+    const source = await SourceContribution.findById(id);
+    if (!source) {
+      res.status(404).json({
+        success: false,
+        message: 'Không tìm thấy đóng góp nguồn.'
+      });
+      return;
+    }
+
+    // Check if there is a valid Cloudinary original PDF to delete
+    const orig = source.originalFile as any;
+    if (!orig || !orig.cloudinaryPublicId || orig.storageProvider !== 'cloudinary') {
+      if (source.originalFile) {
+        source.originalFile = undefined;
+        await source.save();
+      }
+      res.status(200).json({
+        success: true,
+        status: 'no_asset',
+        message: 'Không có PDF đã lưu trên Cloudinary.',
+        source: mapSourceContribution(source)
+      });
+      return;
+    }
+
+    const publicId = orig.cloudinaryPublicId;
+    const resourceType = orig.cloudinaryResourceType || 'raw';
+
+    // Attempt to delete from Cloudinary
+    let cloudinaryStatus: 'deleted' | 'not_found' = 'deleted';
+    try {
+      const deleteResult = await deleteAsset(publicId, resourceType);
+      if (deleteResult?.result === 'not found') {
+        cloudinaryStatus = 'not_found';
+      }
+    } catch (delErr: any) {
+      const errMsg = (delErr.message || '').toLowerCase();
+      if (errMsg.includes('not found') || errMsg.toLowerCase().includes('not_found')) {
+        cloudinaryStatus = 'not_found';
+      } else {
+        console.error(`Cloudinary delete failed for contribution ${publicId}:`, delErr.message);
+        res.status(500).json({
+          success: false,
+          message: `Lỗi khi xóa tệp trên Cloudinary: ${delErr.message}`,
+          error: delErr.message
+        });
+        return;
+      }
+    }
+
+    // Clear originalFile from DB after successful Cloudinary delete or not_found
+    source.originalFile = undefined;
+    await source.save();
+
+    const message = cloudinaryStatus === 'not_found'
+      ? 'Tệp không còn tồn tại trên Cloudinary. Đã xóa thông tin lưu trữ trong hệ thống.'
+      : 'Đã xóa PDF gốc lưu trên Cloudinary thành công.';
+
+    res.status(200).json({
+      success: true,
+      status: cloudinaryStatus,
+      message,
+      source: mapSourceContribution(source)
+    });
+
+  } catch (err: any) {
+    console.error('Error deleting contribution PDF:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi máy chủ khi xóa PDF gốc.',
       error: err.message || err
     });
   }

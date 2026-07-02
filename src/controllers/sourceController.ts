@@ -317,13 +317,81 @@ export const contributeSource = async (req: Request, res: Response): Promise<voi
     if (orConditions.length > 0) {
       const existingCont = await SourceContribution.findOne({ reviewStatus: { $ne: 'rejected' }, $or: orConditions });
       const existingSrc = await AcademicSource.findOne({ $or: orConditions });
-      if (existingCont || existingSrc) {
+      if (existingSrc) {
         res.status(409).json({
           success: false,
-          message: 'Nguồn này đã được gửi hoặc đã tồn tại trong hệ thống.',
+          code: 'DUPLICATE_SOURCE',
+          message: 'Nguồn này đã tồn tại trong thư viện.',
         });
         return;
       }
+      if (existingCont) {
+        res.status(409).json({
+          success: false,
+          code: 'DUPLICATE_CONTRIBUTION',
+          message: 'Nguồn này đã được gửi hoặc đang chờ duyệt.',
+        });
+        return;
+      }
+
+      // Reuse rejected contribution if same pmcid/doi to avoid unique index conflict
+      const rejectedCont = await SourceContribution.findOne({ reviewStatus: 'rejected', $or: orConditions });
+      if (rejectedCont) {
+        const rc = rejectedCont as any;
+        rc.submittedBy = submittedBy;
+        rc.doi = result.doi || rc.doi;
+        rc.normalizedDoi = result.doi || rc.normalizedDoi;
+        rc.pmcid = result.pmcid || rc.pmcid;
+        rc.normalizedPmcid = result.pmcid || rc.normalizedPmcid;
+        rc.url = result.sourceUrl || rc.url;
+        rc.normalizedUrl = result.sourceUrl ? normalizeUrl(result.sourceUrl) : rc.normalizedUrl;
+        rc.submittedNote = cleanNote || undefined;
+        rc.reviewStatus = 'pending';
+        rc.reviewedBy = undefined;
+        rc.reviewedAt = undefined;
+        rc.reviewNote = undefined;
+        rc.title = result.title || rc.title;
+        rc.authors = result.authors || rc.authors;
+        rc.year = result.year || rc.year;
+        rc.license = result.license || rc.license || 'all-rights-reserved';
+        rc.allowedUse = result.allowedUse || rc.allowedUse || 'metadata_only';
+        rc.copyrightStatus = result.allowedUse === 'open_access_fulltext' ? 'copyrighted_with_open_access' : (rc.copyrightStatus || 'paywalled');
+        rc.fullTextStatus = result.fullTextAvailable ? 'available' : 'none';
+        rc.readableInApp = false;
+        rc.pdfUrl = result.pdfUrl || undefined;
+        rc.htmlUrl = result.htmlUrl || undefined;
+        rc.metadata = {
+          title: result.title,
+          authors: result.authors,
+          year: result.year,
+          journal: result.journal,
+          publisher: result.publisher,
+          doi: result.doi,
+          isbn: result.isbn,
+          url: result.sourceUrl,
+          pdfUrl: result.pdfUrl,
+          htmlUrl: result.htmlUrl,
+          allowedUse: result.allowedUse,
+          openAccessStatus: result.openAccessStatus,
+          oaStatus: result.openAccessStatus,
+          fullTextAvailable: result.fullTextAvailable,
+          warnings: result.warnings,
+          metadataProvider: result.metadataProvider
+        };
+        await rejectedCont.save();
+        try { await incrementSubmitted(submittedBy.toString()); } catch {}
+        const rawInput = req.body.doi || req.body.pmcid || req.body.url || '';
+        const resolverReport = await buildResolverReport(rawInput, result);
+        res.status(201).json({
+          success: true,
+          code: 'REACTIVATED',
+          message: 'Đóng góp trước bị từ chối đã được kích hoạt lại.',
+          data: rejectedCont,
+          resolverReport
+        });
+        return;
+      }
+
     }
 
     // Create Mongoose Document for SourceContribution
@@ -375,7 +443,28 @@ export const contributeSource = async (req: Request, res: Response): Promise<voi
       htmlUrl: result.htmlUrl || undefined
     });
 
-    await contribution.save();
+    try {
+      await contribution.save();
+    } catch (saveErr: any) {
+      // E11000 safety net: recheck and reuse existing contribution
+      if (saveErr.code === 11000) {
+        const recovered = await SourceContribution.findOne({ $or: orConditions.length > 0 ? orConditions : [{ _id: null }] });
+        if (recovered && recovered.reviewStatus === 'rejected') {
+          recovered.reviewStatus = 'pending';
+          recovered.reviewedBy = undefined;
+          recovered.reviewedAt = undefined;
+          recovered.reviewNote = undefined;
+          await recovered.save();
+          res.status(201).json({ success: true, code: 'REACTIVATED', message: 'Đóng góp đã được kích hoạt lại.', data: recovered });
+        } else if (recovered) {
+          res.status(409).json({ success: false, code: 'DUPLICATE_CONTRIBUTION', message: 'Nguồn này đang chờ duyệt hoặc đã tồn tại.' });
+        } else {
+          res.status(409).json({ success: false, message: 'Không thể gửi đóng góp do trùng lặp dữ liệu.' });
+        }
+        return;
+      }
+      throw saveErr;
+    }
 
     try {
       await incrementSubmitted(submittedBy.toString());
@@ -995,7 +1084,7 @@ export const contributePdfSource = async (req: Request, res: Response): Promise<
       res.status(409).json({
         success: false,
         code: 'DUPLICATE_SOURCE',
-        message: `Nguồn này đã tồn tại trong hệ thống với tiêu đề: "${existingSrc.title}".`,
+        message: `Nguồn này đã tồn tại trong thư viện với tiêu đề: "${existingSrc.title}".`,
         existingSourceId: existingSrc._id
       });
       return;
@@ -1010,8 +1099,8 @@ export const contributePdfSource = async (req: Request, res: Response): Promise<
       return;
     }
 
-    // 3. Process validation and upload via shared service
     const uploadResult = await processPdfUpload(filePath, originalName, mimeType);
+
 
     // 4. Extract form fields
     const { title, authors, year, journal, publisher, submittedNote } = req.body;
@@ -1131,6 +1220,28 @@ export const contributePdfSource = async (req: Request, res: Response): Promise<
       await contribution.save();
     } catch (dbErr: any) {
       console.error('Failed to save source contribution to database:', dbErr);
+      if (dbErr.code === 11000) {
+        // E11000 safety net: find rejected with same doi and reactivate
+        const existingRejected = orConditions.length > 0
+          ? await SourceContribution.findOne({ reviewStatus: 'rejected', $or: orConditions })
+          : null;
+        if (existingRejected) {
+          existingRejected.reviewStatus = 'pending';
+          existingRejected.reviewedBy = undefined;
+          existingRejected.reviewedAt = undefined;
+          existingRejected.reviewNote = undefined;
+          existingRejected.originalFile = contribution.originalFile;
+          await existingRejected.save();
+          // Clean up the newly uploaded duplicate from Cloudinary since we reused existing
+          try { await deleteAsset(uploadResult.public_id, uploadResult.resource_type); } catch {}
+          res.status(201).json({ success: true, code: 'REACTIVATED', message: 'Đóng góp trước bị từ chối đã được kích hoạt lại với PDF mới.', data: existingRejected });
+        } else {
+          // Non-recoverable duplicate — clean up Cloudinary and surface user-friendly error
+          try { await deleteAsset(uploadResult.public_id, uploadResult.resource_type); } catch {}
+          res.status(409).json({ success: false, message: 'Không thể gửi đóng góp do trùng lặp dữ liệu.' });
+        }
+        return;
+      }
       try {
         await deleteAsset(uploadResult.public_id, uploadResult.resource_type);
       } catch (cleanupErr: any) {

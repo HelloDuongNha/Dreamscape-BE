@@ -34,6 +34,9 @@ export interface ISourceContribution extends Document {
   fullTextStatus?: 'none' | 'importing' | 'imported' | 'failed' | 'available';
   pdfUrl?: string;
   htmlUrl?: string;
+  readableInApp?: boolean;
+  copyrightStatus?: 'public_domain' | 'copyrighted_with_open_access' | 'paywalled';
+  metadata?: Record<string, any>;
 }
 
 const SourceContributionSchema = new Schema<ISourceContribution>(
@@ -140,6 +143,19 @@ const SourceContributionSchema = new Schema<ISourceContribution>(
     htmlUrl: {
       type: String,
       trim: true,
+    },
+    copyrightStatus: {
+      type: String,
+      enum: ['public_domain', 'copyrighted_with_open_access', 'paywalled'],
+      default: 'paywalled',
+    },
+    readableInApp: {
+      type: Boolean,
+      default: false,
+    },
+    metadata: {
+      type: Schema.Types.Mixed,
+      default: {},
     },
   },
   {
