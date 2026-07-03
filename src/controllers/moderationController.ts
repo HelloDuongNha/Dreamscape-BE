@@ -126,6 +126,62 @@ export const getPendingSources = async (req: Request, res: Response): Promise<vo
       .limit(limit)
       .populate('submittedBy', 'username display_name email avatar');
 
+    // Self-healing: Repair stats for legacy items with missing/wrong pageCount
+    for (const source of sources) {
+      if ((source.fullTextStatus === 'imported' || source.readableInApp) && (!source.smartReaderStats || source.smartReaderStats.pageCount <= 1)) {
+        try {
+          const chunks = await AcademicChunk.find({
+            previewContributionId: source._id,
+            chunkPurpose: 'reader'
+          }).sort({ chunkOrder: 1 }).lean();
+          
+          if (chunks.length > 0) {
+            const figures = chunks.filter((c: any) => c.blockType === 'figure').length;
+            const tables = chunks.filter((c: any) => c.blockType === 'table').length;
+            const references = chunks.filter((c: any) => c.blockType === 'reference').length;
+            
+            let pages = 0;
+            let wordCount = 0;
+            const countWords = (t: string): number => {
+              return (t || '').split(/\s+/).filter(Boolean).length;
+            };
+            
+            for (const chunk of chunks) {
+              const words = countWords(chunk.text);
+              if (chunk.blockType === 'heading') {
+                if (wordCount >= 1000) {
+                  pages++;
+                  wordCount = 0;
+                }
+                wordCount += words;
+              } else {
+                wordCount += words;
+                if (wordCount >= 1500) {
+                  pages++;
+                  wordCount = 0;
+                }
+              }
+            }
+            if (wordCount > 0) {
+              pages++;
+            }
+            
+            source.smartReaderStats = {
+              pageCount: pages,
+              figureCount: figures,
+              tableCount: tables,
+              referenceCount: references,
+              updatedAt: new Date()
+            };
+            
+            await source.save();
+          }
+        } catch (statsErr) {
+          console.warn(`[Self-healing] Failed to dynamically compute stats in list for contribution ${source._id}:`, statsErr);
+        }
+      }
+    }
+
     res.status(200).json({
       success: true,
       message: 'Source contributions retrieved successfully.',
@@ -293,6 +349,61 @@ export const reviewSource = async (req: Request, res: Response): Promise<void> =
         contribution.sourceOrigin = contribution.sourceOrigin || (contribution.doi ? 'doi_import' : 'url_import');
       }
 
+      let smartReaderStats = contribution.smartReaderStats;
+      const needsRecompute = !smartReaderStats || (smartReaderStats.pageCount <= 1 && (contribution.fullTextStatus === 'imported' || contribution.readableInApp));
+      
+      if (needsRecompute && (contribution.fullTextStatus === 'imported' || contribution.readableInApp)) {
+        try {
+          const chunks = await AcademicChunk.find({
+            previewContributionId: contribution._id,
+            chunkPurpose: 'reader'
+          }).sort({ chunkOrder: 1 }).lean();
+          
+          if (chunks.length > 0) {
+            const figures = chunks.filter((c: any) => c.blockType === 'figure').length;
+            const tables = chunks.filter((c: any) => c.blockType === 'table').length;
+            const references = chunks.filter((c: any) => c.blockType === 'reference').length;
+            
+            let pages = 0;
+            let wordCount = 0;
+            const countWords = (t: string): number => {
+              return (t || '').split(/\s+/).filter(Boolean).length;
+            };
+            
+            for (const chunk of chunks) {
+              const words = countWords(chunk.text);
+              if (chunk.blockType === 'heading') {
+                if (wordCount >= 1000) {
+                  pages++;
+                  wordCount = 0;
+                }
+                wordCount += words;
+              } else {
+                wordCount += words;
+                if (wordCount >= 1500) {
+                  pages++;
+                  wordCount = 0;
+                }
+              }
+            }
+            if (wordCount > 0) {
+              pages++;
+            }
+            
+            smartReaderStats = {
+              pageCount: pages,
+              figureCount: figures,
+              tableCount: tables,
+              referenceCount: references,
+              updatedAt: new Date()
+            };
+            contribution.smartReaderStats = smartReaderStats;
+          }
+        } catch (statsErr) {
+          console.warn('Failed to compute smartReaderStats on approval fallback:', statsErr);
+        }
+      }
+
       // Create AcademicSource document with fully sanitized data
       const academicSource = new AcademicSource({
         sourceContributionId: contribution._id,
@@ -321,7 +432,8 @@ export const reviewSource = async (req: Request, res: Response): Promise<void> =
         journal: sanitizedMeta.journal || sanitizedMeta.publisher,
         year: sanitizedMeta.year,
         originalFile: contribution.originalFile,
-        sourceOrigin: contribution.sourceOrigin || (isUploadedPdf ? 'uploaded_pdf' : 'doi_import')
+        sourceOrigin: contribution.sourceOrigin || (isUploadedPdf ? 'uploaded_pdf' : 'doi_import'),
+        smartReaderStats
       });
 
       await academicSource.save();
@@ -2968,7 +3080,8 @@ export const getSourcePreview = async (req: Request, res: Response): Promise<voi
       totalChunkCount,
       parserWarnings: [],
       ocrNeeded: false,
-      sourceType: contribution.doi ? 'doi' : ((contribution.originalFile && (contribution.originalFile.originalFileName || contribution.originalFile.cloudinarySecureUrl)) ? 'uploaded_pdf' : 'web_url')
+      sourceType: contribution.doi ? 'doi' : ((contribution.originalFile && (contribution.originalFile.originalFileName || contribution.originalFile.cloudinarySecureUrl)) ? 'uploaded_pdf' : 'web_url'),
+      smartReaderStats: contribution.smartReaderStats
     };
 
     // Query preview AcademicDocument

@@ -51,6 +51,13 @@ export interface IAcademicSource extends Document {
   chunkEmbeddingModel?: string;
   chunkCount?: number;
   sourceOrigin?: 'uploaded_pdf' | 'doi_import' | 'url_import' | 'unspecified';
+  smartReaderStats?: {
+    pageCount: number;
+    figureCount: number;
+    tableCount: number;
+    referenceCount: number;
+    updatedAt?: Date;
+  };
   createdAt: Date;
   updatedAt: Date;
 }
@@ -246,6 +253,13 @@ const AcademicSourceSchema = new Schema<IAcademicSource>(
       type: String,
       enum: ['uploaded_pdf', 'doi_import', 'url_import', 'unspecified'],
       default: 'unspecified',
+    },
+    smartReaderStats: {
+      pageCount: { type: Number, default: 0 },
+      figureCount: { type: Number, default: 0 },
+      tableCount: { type: Number, default: 0 },
+      referenceCount: { type: Number, default: 0 },
+      updatedAt: { type: Date }
     },
   },
   {

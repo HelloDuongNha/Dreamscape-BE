@@ -1131,6 +1131,49 @@ export async function importSmartReaderForSource(
     source.fullTextImportedBy = moderatorId;
     source.chunkEmbeddingModel = chunkMetrics.embedModel;
     source.chunkCount = chunkMetrics.ragChunkCount;
+
+    const figuresCount = reconciledBlocks.filter((b: any) => b.blockType === 'figure').length;
+    const tablesCount = reconciledBlocks.filter((b: any) => b.blockType === 'table').length;
+    const referencesCount = reconciledBlocks.filter((b: any) => b.blockType === 'reference').length;
+
+    // Use dynamic pagination algorithm matching FE paginateBlocks exactly to resolve pageCount
+    let pagesCount = 0;
+    const normalBlocks = reconciledBlocks.filter((b: any) => b.blockType !== 'metadata');
+    if (normalBlocks.length > 0) {
+      let wordCount = 0;
+      const countWords = (t: string): number => {
+        return (t || '').split(/\s+/).filter(Boolean).length;
+      };
+      
+      for (const block of normalBlocks) {
+        const words = countWords(block.text);
+        if (block.blockType === 'heading') {
+          if (wordCount >= 1000) {
+            pagesCount++;
+            wordCount = 0;
+          }
+          wordCount += words;
+        } else {
+          wordCount += words;
+          if (wordCount >= 1500) {
+            pagesCount++;
+            wordCount = 0;
+          }
+        }
+      }
+      if (wordCount > 0) {
+        pagesCount++;
+      }
+    }
+
+    source.smartReaderStats = {
+      pageCount: pagesCount,
+      figureCount: figuresCount,
+      tableCount: tablesCount,
+      referenceCount: referencesCount,
+      updatedAt: new Date()
+    };
+
     await source.save();
 
     const rawInput = source.doi || source.pmcid || source.url || '';

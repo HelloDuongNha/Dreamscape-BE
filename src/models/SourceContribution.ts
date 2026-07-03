@@ -37,6 +37,13 @@ export interface ISourceContribution extends Document {
   readableInApp?: boolean;
   copyrightStatus?: 'public_domain' | 'copyrighted_with_open_access' | 'paywalled';
   metadata?: Record<string, any>;
+  smartReaderStats?: {
+    pageCount: number;
+    figureCount: number;
+    tableCount: number;
+    referenceCount: number;
+    updatedAt?: Date;
+  };
 }
 
 const SourceContributionSchema = new Schema<ISourceContribution>(
@@ -156,6 +163,13 @@ const SourceContributionSchema = new Schema<ISourceContribution>(
     metadata: {
       type: Schema.Types.Mixed,
       default: {},
+    },
+    smartReaderStats: {
+      pageCount: { type: Number, default: 0 },
+      figureCount: { type: Number, default: 0 },
+      tableCount: { type: Number, default: 0 },
+      referenceCount: { type: Number, default: 0 },
+      updatedAt: { type: Date }
     },
   },
   {
