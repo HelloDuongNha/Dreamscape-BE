@@ -4,11 +4,11 @@ import Comment           from '../models/Comment';
 import { Types }         from 'mongoose';
 import Notification      from '../models/Notification';
 import User              from '../models/User';
-import { calculateRank } from '../utils/rankEngine';
-import { runDreamAnalysis } from '../services/analyze.service';
-import { OllamaServiceError } from '../services/llm.service';
-import { logger } from '../utils/logger';
-import { retrieveSymbolsHybrid } from '../services/symbolRetrieval.service';
+import { calculateRank } from '../services/user/rank.service';
+import { runDreamAnalysis } from '../services/dream/analyze.service';
+import { OllamaServiceError } from '../services/infrastructure/llm.service';
+import { logger } from '../services/infrastructure/logger';
+import { retrieveSymbolsHybrid } from '../services/dream/symbolRetrieval.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -368,7 +368,7 @@ export const toggleLike = async (req: Request, res: Response): Promise<void> => 
             ownerComments += d.comments_count ?? 0;
           }
 
-          const { checkAndAwardAchievements } = await import('../utils/rankEngine');
+          const { checkAndAwardAchievements } = await import('../services/user/rank.service');
           checkAndAwardAchievements(
             postOwner,
             ownerLikes,
@@ -470,7 +470,7 @@ export const addComment = async (req: Request, res: Response): Promise<void> => 
             ownerComments += d.comments_count ?? 0;
           }
 
-          const { checkAndAwardAchievements } = await import('../utils/rankEngine');
+          const { checkAndAwardAchievements } = await import('../services/user/rank.service');
           checkAndAwardAchievements(
             postOwner,
             ownerLikes,

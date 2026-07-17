@@ -1,4 +1,4 @@
-import type { StructuredTableData } from '../types';
+import type { StructuredTableData } from './canonical.types';
 
 export interface ExtractedBlock {
   blockType: 'title' | 'heading' | 'paragraph' | 'list_item' | 'figure' | 'table' | 'reference' | 'page_break' | 'metadata';

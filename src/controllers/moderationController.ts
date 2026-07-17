@@ -10,33 +10,33 @@ import PendingKnowledgeRule from '../models/PendingKnowledgeRule';
 import VerifiedKnowledgeRule from '../models/VerifiedKnowledgeRule';
 import KnowledgeRuleEvidence from '../models/KnowledgeRuleEvidence';
 import AcademicRuleExtractionRun from '../models/AcademicRuleExtractionRun';
-import { generateEmbedding } from '../services/llm.service';
+import { generateEmbedding } from '../services/infrastructure/llm.service';
 import {
   extractRuleCandidatesFromSource,
   splitIntoSentences,
   cleanExcerptText,
   extractExcerptsFromChunk
-} from '../services/ruleCandidateExtraction.service';
+} from '../services/rules/ruleCandidateExtraction.service';
 import {
   isUrlSafe,
   isValidHttpUrl,
   SsrfError,
   fetchUrlWithSafeRedirects
-} from '../utils/ssrfGuard';
+} from '../services/infrastructure/security/ssrfGuard';
 import { PDFParse } from 'pdf-parse';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { parseHtmlArticle } from '../utils/htmlArticleParser';
-import { importFullTextForSource } from '../services/fullTextImport.service';
-import { resolveSourceImport } from '../services/sourceImportResolver.service';
-import { recordApproval, recordRejection } from '../services/contributionStats.service';
+import { parseHtmlArticle } from '../services/source/htmlArticleParser';
+import { importFullTextForSource } from '../services/source/fullTextImport.service';
+import { resolveSourceImport } from '../services/source/sourceImportResolver.service';
+import { recordApproval, recordRejection } from '../services/contribution/contributionStats.service';
 import multer from 'multer';
 import { v2 as cloudinary } from 'cloudinary';
-import { uploadPdf, deleteAsset } from '../services/cloudinaryStorage.service';
-import { sanitizeAcademicSourceData } from '../utils/sourceSanitizer';
-import { processPdfUpload } from '../services/pdfUpload.service';
-import { cacheOriginalPdfForContribution } from '../services/originalPdfAsset.service';
+import { uploadPdf, deleteAsset } from '../services/storage/cloudinaryStorage.service';
+import { sanitizeAcademicSourceData } from '../services/source/sourceSanitizer';
+import { processPdfUpload } from '../services/storage/pdfUpload.service';
+import { cacheOriginalPdfForContribution } from '../services/storage/originalPdfAsset.service';
 
 const activeExtractions = new Set<string>();
 
@@ -3534,7 +3534,7 @@ export const deleteContributionPdf = async (req: Request, res: Response): Promis
   }
 };
 
-import { runUploadedPdfImport } from '../services/academic/uploadedPdfImport.service';
+import { runUploadedPdfImport } from '../services/academic/ingestion/pdf/uploadedPdfImport.service';
 
 export const processUploadedPdfForContribution = async (req: Request, res: Response): Promise<void> => {
   try {

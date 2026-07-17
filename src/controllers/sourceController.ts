@@ -4,17 +4,16 @@ import SourceContribution from '../models/SourceContribution';
 import AcademicSource from '../models/AcademicSource';
 import AcademicDocument from '../models/AcademicDocument';
 import AcademicSection from '../models/AcademicSection';
-import AcademicChunk from '../models/AcademicChunk';
-import { buildReaderResponse } from '../services/academic/readerResponseBuilder.service';
-import { normalizeDoi, fetchUnpaywallMetadata } from '../services/openAccess.service';
-import { incrementSubmitted } from '../services/contributionStats.service';
-import { resolveSourceImport } from '../services/sourceImportResolver.service';
-import { buildResolverReport } from '../services/academic/resolverDiagnostics.service';
-import { fetchUrlWithSafeRedirects, SsrfError } from '../utils/ssrfGuard';
+import { buildReaderResponse } from '../services/academic/reader/readerResponseBuilder.service';
+import { normalizeDoi, fetchUnpaywallMetadata } from '../services/source/openAccess.service';
+import { incrementSubmitted } from '../services/contribution/contributionStats.service';
+import { resolveSourceImport } from '../services/source/sourceImportResolver.service';
+import { buildResolverReport } from '../services/academic/ingestion/structured/resolverDiagnostics.service';
+import { fetchUrlWithSafeRedirects, SsrfError } from '../services/infrastructure/security/ssrfGuard';
 import fs from 'fs';
-import { processPdfUpload, computeFileHash } from '../services/pdfUpload.service';
-import { deleteAsset } from '../services/cloudinaryStorage.service';
-import { cacheOriginalPdfForSource } from '../services/originalPdfAsset.service';
+import { processPdfUpload, computeFileHash } from '../services/storage/pdfUpload.service';
+import { deleteAsset } from '../services/storage/cloudinaryStorage.service';
+import { cacheOriginalPdfForSource } from '../services/storage/originalPdfAsset.service';
 import { PDFParse } from 'pdf-parse';
 import cloudinary from '../config/cloudinary';
 
@@ -1598,7 +1597,7 @@ export const deleteOriginalPdf = async (req: Request, res: Response): Promise<vo
   }
 };
 
-import { runUploadedPdfImport } from '../services/academic/uploadedPdfImport.service';
+import { runUploadedPdfImport } from '../services/academic/ingestion/pdf/uploadedPdfImport.service';
 
 export const processUploadedPdfForApprovedSource = async (req: Request, res: Response): Promise<void> => {
   try {

@@ -1,6 +1,6 @@
 import { IUser } from '../models/User';
 import User from '../models/User';
-import { calculateRank, checkAndAwardAchievements } from '../utils/rankEngine';
+import { calculateRank, checkAndAwardAchievements } from '../services/user/rank.service';
 import Dream from '../models/Dream';
 
 // ─── Streak Tracker ───────────────────────────────────────────────────────────

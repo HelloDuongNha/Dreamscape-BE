@@ -1,5 +1,5 @@
 import mongoose, { Document, Schema, Types } from 'mongoose';
-import type { StructuredTableData } from '../services/academic/types';
+import type { StructuredTableData } from '../services/academic/types/canonical.types';
 
 export interface IAcademicChunk extends Document {
   sourceId?: Types.ObjectId;

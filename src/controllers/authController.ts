@@ -4,10 +4,10 @@ import mongoose from 'mongoose';
 import User from '../models/User';
 import Otp from '../models/Otp';
 import UserDreamProfile from '../models/UserDreamProfile';
-import { sendOtpEmail } from '../services/emailService';
-import { parseUserAgent } from '../utils/userAgent';
-import { buildCulturalProfile, buildScoringProfile } from '../services/profileBuilder.service';
-import { logger } from '../utils/logger';
+import { sendOtpEmail } from '../services/infrastructure/emailService';
+import { parseUserAgent } from '../services/user/userAgent.service';
+import { buildCulturalProfile, buildScoringProfile } from '../services/user/profileBuilder.service';
+import { logger } from '../services/infrastructure/logger';
 
 // ─── Helper: Sign JWT ─────────────────────────────────────────────────────────
 

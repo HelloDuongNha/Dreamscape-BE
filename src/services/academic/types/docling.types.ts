@@ -1,4 +1,4 @@
-import type { StructuredTableData } from '../types';
+import type { StructuredTableData } from './canonical.types';
 
 export interface DoclingItem {
   id: string;
@@ -31,4 +31,18 @@ export interface DoclingExtractionResult {
   referenceQualityDegraded: boolean;
   errorCode?: string;
   errorDetail?: string;
+}
+
+export interface DoclingArtifactDescriptor {
+  itemId: string;
+  /** Present only when figureType === 'embedded' and file was saved successfully */
+  filePath?: string;
+  fileName?: string;
+  format?: string;
+  width?: number;
+  height?: number;
+  pageNumber: number;
+  bbox?: [number, number, number, number];
+  figureType: 'embedded' | 'rendered_crop' | 'region_only';
+  caption?: string;
 }

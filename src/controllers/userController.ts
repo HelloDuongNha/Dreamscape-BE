@@ -3,9 +3,9 @@ import { Types } from 'mongoose';
 import User from '../models/User';
 import Dream from '../models/Dream';
 import Notification from '../models/Notification';
-import { checkAndAwardAchievements } from '../utils/rankEngine';
+import { checkAndAwardAchievements } from '../services/user/rank.service';
 import { toDateStr } from '../middleware/streakMiddleware';
-import { getContributionStatsForUser } from '../services/contributionStats.service';
+import { getContributionStatsForUser } from '../services/contribution/contributionStats.service';
 import UserAchievement from '../models/UserAchievement';
 
 // Helper to sanitize other user profile returned
