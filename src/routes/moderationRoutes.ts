@@ -25,10 +25,7 @@ import {
   getContributionPdfInline,
   cacheContributionPdf,
   deleteContributionPdf,
-  processUploadedPdfForContribution,
-  getDoclingPreview,
-  getDoclingPreviewFigure,
-  closeDoclingPreview
+  processUploadedPdfForContribution
 } from '../controllers/moderationController';
 import { getKnowledgeRules } from '../controllers/knowledgeEvidenceController';
 
@@ -148,9 +145,5 @@ router.get('/knowledge-rules', authMiddleware, isModerator, getKnowledgeRules);
 // router.post('/knowledge-rules/:ruleId/evidence-links', authMiddleware, isModerator, createEvidenceLink);
 // router.get('/knowledge-rules/:ruleId/evidence-links', authMiddleware, isModerator, getEvidenceLinks);
 // router.delete('/knowledge-rules/:ruleId/evidence-links/:linkId', authMiddleware, isModerator, removeEvidenceLink);
-
-router.post('/sources/:id/docling-preview', authMiddleware, isModerator, getDoclingPreview);
-router.get('/sources/:id/docling-preview/figure/:figureId', authMiddleware, isModerator, getDoclingPreviewFigure);
-router.delete('/sources/:id/docling-preview', authMiddleware, isModerator, closeDoclingPreview);
 
 export default router;
