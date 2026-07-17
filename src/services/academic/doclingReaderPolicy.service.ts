@@ -19,7 +19,12 @@ export class DoclingReaderPolicyService {
 
   private static isAbstractHeading(text: string): boolean {
     const normalized = this.normalizeLabel(text).replace(/^\d+/, '');
-    return ['abstract', 'tomtat', 'resume', 'resumen', 'zusammenfassung'].includes(normalized);
+    return ['abstract', 'summary', 'tomtat', 'resume', 'resumen', 'zusammenfassung'].includes(normalized);
+  }
+
+  private static isKeywordHeading(text: string): boolean {
+    const normalized = this.normalizeLabel(text);
+    return ['keyword', 'keywords', 'keywordindex', 'tukhoá', 'tukhoa'].includes(normalized);
   }
 
   private static isIntroductionHeading(text: string): boolean {
@@ -40,6 +45,52 @@ export class DoclingReaderPolicyService {
    */
   public static orderItemsForReader(items: DoclingItem[]): DoclingItem[] {
     const ordered = [...items];
+
+    // Some publisher PDFs cause Docling to label the author line as `title`
+    // while the real article title is the nearest preceding heading. Detect
+    // this from structure (a title followed by numbered affiliations), not
+    // publisher wording, so the author list never becomes the reader title.
+    for (let index = 0; index < ordered.length; index++) {
+      const candidate = ordered[index];
+      if (candidate.pageNumber !== 1 || candidate.type !== 'title') continue;
+      const following = ordered.slice(index + 1, index + 5);
+      const hasNumberedAffiliations = following.some((item) =>
+        item.pageNumber === 1 && /^(?:\d+|[a-z])\s+(?:department|division|faculty|centre|center|institute|university|hospital|school|laboratory)\b/i.test(item.text.trim())
+      );
+      const looksLikeAuthorList = /\s[|·]\s/.test(candidate.text) ||
+        /\b\p{Lu}[\p{L}'’-]+\s+\p{Lu}[\p{L}'’-]+\s*\d+(?:\s*,\s*\d+)*\b/u.test(candidate.text);
+      if (!hasNumberedAffiliations || !looksLikeAuthorList) continue;
+
+      (candidate as any)._isFrontMatterMetadata = true;
+      for (let cursor = index - 1; cursor >= 0; cursor--) {
+        const preceding = ordered[cursor];
+        if (preceding.pageNumber !== 1) break;
+        if (preceding.type === 'heading' && !/^(review|research|original|clinical)\s+article$/i.test(preceding.text.trim())) {
+          (preceding as any)._isCanonicalTitle = true;
+          break;
+        }
+      }
+    }
+
+    // Keywords are useful metadata but not reader body. Mark only the heading
+    // and its spatially adjacent value block; never consume the next column's
+    // body continuation merely because it follows in Docling iteration order.
+    for (let index = 0; index < ordered.length; index++) {
+      const heading = ordered[index];
+      if (heading.pageNumber !== 1 || heading.type !== 'heading' || !this.isKeywordHeading(heading.text)) continue;
+      (heading as any)._isKeywordMetadata = true;
+      if (!heading.bbox) continue;
+      const headingBox = heading.bbox as BBox;
+      for (let cursor = index + 1; cursor < ordered.length; cursor++) {
+        const candidate = ordered[cursor];
+        if (candidate.pageNumber !== heading.pageNumber || candidate.type === 'heading' || !candidate.bbox) break;
+        const box = candidate.bbox as BBox;
+        const verticalGap = headingBox[3] - box[1];
+        if (verticalGap < -5 || verticalGap > 80 || this.horizontalOverlap(headingBox, box) <= 0) break;
+        (candidate as any)._isKeywordMetadata = true;
+      }
+    }
+
     const abstractIndex = ordered.findIndex(
       (item) => item.pageNumber === 1 && item.type === 'heading' && this.isAbstractHeading(item.text)
     );
@@ -158,7 +209,21 @@ export class DoclingReaderPolicyService {
     const text = item.text.trim();
 
     if ((item as any)._isMergedTableCaption) return { isExcluded: true };
+    if ((item as any)._isCanonicalTitle) {
+      return { isExcluded: false, blockTypeOverride: 'title' };
+    }
     if (this.isPageFurnitureOrMetadata(item, text, allItems)) return { isExcluded: true };
+
+    // A scientific figure owns its caption. Do not emit the same caption as a
+    // loose paragraph immediately before the figure block.
+    if (
+      (item.type === 'caption' || this.isFigureCaptionText(text)) &&
+      allItems.some((candidate) =>
+        candidate.type === 'figure' && this.findNearbyFigureCaption(candidate, allItems)?.id === item.id
+      )
+    ) {
+      return { isExcluded: true };
+    }
 
     // Structural blocks legitimately have empty text; evaluate them before text quality.
     if (item.type === 'table') {
@@ -204,6 +269,7 @@ export class DoclingReaderPolicyService {
   }
 
   private static isPageFurnitureOrMetadata(item: DoclingItem, text: string, allItems: DoclingItem[]): boolean {
+    if ((item as any)._isKeywordMetadata || (item as any)._isFrontMatterMetadata) return true;
     if (item.type === 'page_header' || item.type === 'page_footer' || item.type === 'metadata' || item.type === 'footnote') {
       return true;
     }
@@ -231,7 +297,9 @@ export class DoclingReaderPolicyService {
 
     if (item.pageNumber === 1) {
       const titleIndex = allItems.findIndex((candidate) => candidate.pageNumber === 1 && candidate.type === 'title');
-      const currentIndex = allItems.indexOf(item);
+      // `evaluateItem` receives a normalized shallow copy, so object identity
+      // is intentionally not stable here. Item IDs are the canonical identity.
+      const currentIndex = allItems.findIndex((candidate) => candidate.id === item.id);
 
       // Publisher/navigation furniture preceding a reliable article title.
       if (titleIndex >= 0 && currentIndex >= 0 && currentIndex < titleIndex) return true;

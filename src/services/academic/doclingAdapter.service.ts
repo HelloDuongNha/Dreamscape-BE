@@ -57,6 +57,21 @@ export class DoclingAdapterService {
     return normalized;
   }
 
+  private static stripPublisherDownloadNotice(text: string): string {
+    const notice = /downloaded\s+from\s+https?\s*:\s*\/?\/?/i.exec(text);
+    if (!notice) return text;
+    const tail = text.slice(notice.index).toLowerCase();
+    if (!tail.includes('terms and conditions') && !tail.includes('online library')) return text;
+
+    // Publisher watermarks often prepend ISSN, year and issue immediately
+    // before "Downloaded from". Remove that prefix too, but preserve all body
+    // text occurring before the watermark on the same extracted block.
+    const prefix = text.slice(0, notice.index);
+    const metadataPrefix = /\b\d{6,9}\s*,\s*(?:19|20)\d{2}\s*,\s*\d+\s*,\s*$/i.exec(prefix);
+    const cutIndex = metadataPrefix ? metadataPrefix.index : notice.index;
+    return text.slice(0, cutIndex).trim();
+  }
+
   private static escapeHtml(text: string): string {
     return text
       .replace(/&/g, '&amp;')
@@ -198,8 +213,12 @@ export class DoclingAdapterService {
       }
 
       // 2. Evaluate block eligibility using Reader Policy Service
+      const normalizedItemText = this.stripPublisherDownloadNotice(
+        this.normalizePdfTypography(item.text)
+      );
+      const policyItem = { ...item, text: normalizedItemText };
       const policy = DoclingReaderPolicyService.evaluateItem(
-        item as any,
+        policyItem as any,
         associatedTableCaptions,
         orderedItems as any
       );
@@ -209,7 +228,7 @@ export class DoclingAdapterService {
       }
 
       const activeType = policy.blockTypeOverride || item.type;
-      const itemText = this.normalizePdfTypography(item.text);
+      const itemText = normalizedItemText;
       const captionText = this.normalizePdfTypography(policy.captionText || item.caption || '');
 
       // A renderable scientific figure must have meaningful reader text. The

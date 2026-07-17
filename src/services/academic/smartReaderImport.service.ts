@@ -9,6 +9,9 @@ import { validateQuality } from './qualityValidator';
 import { buildAndSaveSmartReaderData } from './readerChunkBuilder.service';
 import { fetchUrlWithSafeRedirects } from '../../utils/ssrfGuard';
 import { downloadCloudinaryRawAsset } from '../cloudinaryStorage.service';
+import { deleteAsset } from '../cloudinaryStorage.service';
+import AcademicChunk from '../../models/AcademicChunk';
+import { resolvePmcArchiveImages } from './pmcImageArchive.service';
 import { ReaderQualityReport } from './types';
 import { buildResolverReport } from './resolverDiagnostics.service';
 import { execSync } from 'child_process';
@@ -331,7 +334,8 @@ async function deduplicateAndMergeFigures(
   blocks: any[],
   cache: Map<string, string | null>,
   transientRetryCounts: Map<string, number>,
-  pmcImageMap?: Map<string, string>
+  pmcImageMap?: Map<string, string>,
+  pmcPublicIdByUrl?: Map<string, string>
 ): Promise<any[]> {
   const merged: any[] = [];
   const seenFigures = new Map<string, any>();
@@ -407,7 +411,9 @@ async function deduplicateAndMergeFigures(
 
       let html = `<div class="figure-block">`;
       if (finalFig.imageUrl) {
-        html += `<img src="${finalFig.imageUrl}" alt="${escapeHtml(title)}" class="figure-img" />`;
+        const publicId = pmcPublicIdByUrl?.get(finalFig.imageUrl);
+        const assetAttr = publicId ? ` data-cloudinary-public-id="${escapeHtml(publicId)}"` : '';
+        html += `<img src="${finalFig.imageUrl}" alt="${escapeHtml(title)}" class="figure-img"${assetAttr} />`;
       } else {
         html += `<p class="placeholder-error"><em>[Figure image unavailable]</em></p>`;
       }
@@ -703,7 +709,11 @@ function splitEmbeddedHeadings(blocks: any[]): any[] {
   return results;
 }
 
-async function fetchPmcImageMap(pmcId: string): Promise<Map<string, string>> {
+async function fetchPmcImageMap(
+  pmcId: string,
+  archivePublicIds: string[],
+  publicIdByUrl: Map<string, string>
+): Promise<Map<string, string>> {
   const imageMap = new Map<string, string>();
   try {
     const cleanId = pmcId.toUpperCase().startsWith('PMC') ? pmcId : `PMC${pmcId}`;
@@ -732,7 +742,36 @@ async function fetchPmcImageMap(pmcId: string): Promise<Map<string, string>> {
   } catch (err: any) {
     console.warn(`[PMC Image Resolver] Failed to resolve image mappings for ${pmcId}: ${err.message}`);
   }
+  if (imageMap.size === 0) {
+    try {
+      const archive = await resolvePmcArchiveImages(pmcId);
+      archive.imageMap.forEach((url, key) => imageMap.set(key, url));
+      archive.publicIdByUrl.forEach((publicId, url) => publicIdByUrl.set(url, publicId));
+      archivePublicIds.push(...archive.uploadedPublicIds);
+      console.log(`[PMC Image Resolver] Resolved ${imageMap.size} mappings from Europe PMC supplementary archive.`);
+    } catch (err: any) {
+      console.warn(`[PMC Image Resolver] Europe PMC archive fallback failed for ${pmcId}: ${err.message}`);
+    }
+  }
   return imageMap;
+}
+
+async function getPersistedReaderImageAssetIds(source: any, isContribution: boolean): Promise<string[]> {
+  const query: any = isContribution
+    ? { previewContributionId: source._id, chunkPurpose: 'reader', blockType: 'figure' }
+    : { sourceId: source._id, chunkPurpose: 'reader', blockType: 'figure' };
+  const chunks = await AcademicChunk.find(query).select('html').lean();
+  const ids = new Set<string>();
+  for (const chunk of chunks) {
+    const regex = /data-cloudinary-public-id="([^"]+)"/g;
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(String(chunk.html || ''))) !== null) ids.add(match[1]);
+  }
+  return [...ids];
+}
+
+async function deleteReaderImageAssets(publicIds: string[]): Promise<void> {
+  await Promise.all(publicIds.map((id) => deleteAsset(id, 'image').catch(() => undefined)));
 }
 
 export async function importSmartReaderForSource(
@@ -774,8 +813,10 @@ export async function importSmartReaderForSource(
   }
 
   let pmcImageMap: Map<string, string> | undefined = undefined;
+  const pmcArchivePublicIds: string[] = [];
+  const pmcPublicIdByUrl = new Map<string, string>();
   if (resolvedPmcidForImport) {
-    pmcImageMap = await fetchPmcImageMap(resolvedPmcidForImport);
+    pmcImageMap = await fetchPmcImageMap(resolvedPmcidForImport, pmcArchivePublicIds, pmcPublicIdByUrl);
   }
 
   const importSessionVerifiedImageUrls = new Map<string, string | null>();
@@ -1308,7 +1349,7 @@ export async function importSmartReaderForSource(
     }
 
     // Deduplicate & formatting tables and figures with conservative subfigure boundary logic
-    reconciledBlocks = await deduplicateAndMergeFigures(reconciledBlocks, importSessionVerifiedImageUrls, importSessionTransientRetryCounts, pmcImageMap);
+    reconciledBlocks = await deduplicateAndMergeFigures(reconciledBlocks, importSessionVerifiedImageUrls, importSessionTransientRetryCounts, pmcImageMap, pmcPublicIdByUrl);
     reconciledBlocks = deduplicateAndMergeTables(reconciledBlocks);
 
     // References Restoration: Priority XML/JATS -> HTML -> PDF
@@ -1369,6 +1410,8 @@ export async function importSmartReaderForSource(
 
   if (isValid) {
     console.log(`[Reconciliation] Passed quality validation. Performing transactional save...`);
+    const previousReaderImageIds = await getPersistedReaderImageAssetIds(source, isContribution);
+    try {
     const chunkMetrics = await buildAndSaveSmartReaderData(
       source,
       documentTitle,
@@ -1410,6 +1453,21 @@ export async function importSmartReaderForSource(
     };
 
     await source.save();
+    } catch (error) {
+      await deleteReaderImageAssets(pmcArchivePublicIds);
+      throw error;
+    }
+
+    const usedArchiveIds = new Set(
+      reconciledBlocks.flatMap((block: any) => {
+        const matches = String(block.html || '').matchAll(/data-cloudinary-public-id="([^"]+)"/g);
+        return [...matches].map((match) => match[1]);
+      })
+    );
+    await deleteReaderImageAssets([
+      ...previousReaderImageIds.filter((id) => !usedArchiveIds.has(id)),
+      ...pmcArchivePublicIds.filter((id) => !usedArchiveIds.has(id)),
+    ]);
 
     const rawInput = source.doi || source.pmcid || source.url || '';
     const resolverReport = await buildResolverReport(rawInput, {
@@ -1465,6 +1523,7 @@ export async function importSmartReaderForSource(
   }
 
   console.warn(`[Reconciliation] Reimport failed validation. Protecting existing good Smart Reader.`);
+  await deleteReaderImageAssets(pmcArchivePublicIds);
   const rawInput = source.doi || source.pmcid || source.url || '';
   const resolverReport = await buildResolverReport(rawInput, {
     title: source.title,
