@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import authMiddleware, { isModerator } from '../middleware/authMiddleware';
-import { contributeSource, previewSource, getApprovedSources, getApprovedSourceById, getApprovedSourceRead, getApprovedSourceOriginalDocument, getApprovedSourcePdfInline, contributePdfSource, cacheOriginalPdf, uploadOriginalPdf, deleteOriginalPdf } from '../controllers/sourceController';
+import { contributeSource, previewSource, getApprovedSources, getApprovedSourceById, getApprovedSourceRead, getApprovedSourceOriginalDocument, getApprovedSourcePdfInline, contributePdfSource, cacheOriginalPdf, uploadOriginalPdf, deleteOriginalPdf, processUploadedPdfForApprovedSource } from '../controllers/sourceController';
 import { uploadPdfMiddleware } from '../controllers/moderationController';
 
 const router = Router();
@@ -80,6 +80,7 @@ router.get('/approved/:id/original-document', authMiddleware, getApprovedSourceO
 router.get('/approved/:id/pdf-inline', authMiddleware, getApprovedSourcePdfInline);
 router.post('/approved/:id/cache-original-pdf', authMiddleware, isModerator, cacheOriginalPdf);
 router.post('/approved/:id/upload-pdf', authMiddleware, isModerator, uploadPdfMiddleware, uploadOriginalPdf);
+router.post('/approved/:id/process-uploaded-pdf', authMiddleware, isModerator, processUploadedPdfForApprovedSource);
 router.delete('/approved/:id/original-pdf', authMiddleware, isModerator, deleteOriginalPdf);
 
 export default router;

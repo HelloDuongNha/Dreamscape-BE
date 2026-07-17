@@ -8,11 +8,12 @@ import { normalizeDocument } from './documentNormalizer.service';
 import { validateQuality } from './qualityValidator';
 import { buildAndSaveSmartReaderData } from './readerChunkBuilder.service';
 import { fetchUrlWithSafeRedirects } from '../../utils/ssrfGuard';
-import { getAssetMetadata } from '../cloudinaryStorage.service';
+import { downloadCloudinaryRawAsset } from '../cloudinaryStorage.service';
 import { ReaderQualityReport } from './types';
 import { buildResolverReport } from './resolverDiagnostics.service';
 import { execSync } from 'child_process';
 import { boilerplateHeadings, pdfArtifactPatterns, navigationWidgetPatterns, garbagePatterns } from './academicCleanupRules';
+import { calculateVirtualPageCount } from './paginationHelper';
 
 export interface ImportResult {
   success: boolean;
@@ -132,7 +133,206 @@ async function fetchNatureTableHtml(tableLink: string, baseUrl: string): Promise
   return '';
 }
 
-function deduplicateAndMergeFigures(blocks: any[]): any[] {
+function isSvgBuffer(buffer: Buffer): boolean {
+  const text = buffer.toString('utf8').trim().toLowerCase();
+  return text.includes('<svg') && !text.includes('<html') && !text.includes('<body') && !text.includes('<!doctype html');
+}
+
+function hasRecognizedImageBytes(buffer: Buffer): boolean {
+  if (!buffer || buffer.length < 4) return false;
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) return true;
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return true;
+  if (buffer.length >= 6) {
+    const gifSig = buffer.toString('ascii', 0, 6);
+    if (gifSig === 'GIF89a' || gifSig === 'GIF87a') return true;
+  }
+  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') return true;
+  if (isSvgBuffer(buffer)) return true;
+  return false;
+}
+
+function isTerminalError(err: any): boolean {
+  if (!err) return false;
+  if (err.name === 'SsrfError' || (err.message && err.message.includes('SSRF'))) {
+    return true;
+  }
+  const msg = (err.message || '').toLowerCase();
+  
+  if (msg.includes('404')) {
+    return true;
+  }
+  if (msg.includes('400') || msg.includes('401') || msg.includes('403')) {
+    return true;
+  }
+  if (msg.includes('15mb') || msg.includes('không phải pdf') || msg.includes('chuyển hướng')) {
+    return true;
+  }
+  return false;
+}
+
+async function verifyImageUrl(
+  url: string,
+  cache: Map<string, string | null>,
+  transientRetryCounts: Map<string, number>
+): Promise<string | null> {
+  const trimmed = url.trim();
+  if (cache.has(trimmed)) {
+    return cache.get(trimmed)!;
+  }
+
+  try {
+    const res = await fetchUrlWithSafeRedirects(trimmed);
+    if (!res || !res.buffer || res.buffer.length === 0) {
+      cache.set(trimmed, null);
+      return null;
+    }
+    const contentType = (res.contentType || '').toLowerCase();
+    
+    if (contentType.includes('html') || contentType.includes('json')) {
+      if (contentType.includes('xml') && isSvgBuffer(res.buffer)) {
+        cache.set(trimmed, res.finalUrl);
+        return res.finalUrl;
+      }
+      cache.set(trimmed, null);
+      return null;
+    }
+
+    const isImageContentType = contentType.startsWith('image/');
+    const isGenericOrMissing = !contentType || contentType === 'application/octet-stream' || contentType === 'text/plain' || contentType === 'application/xml';
+    
+    let isValid = false;
+    if (isImageContentType) {
+      if (contentType.includes('svg')) {
+        isValid = isSvgBuffer(res.buffer);
+      } else {
+        isValid = true;
+      }
+    } else if (isGenericOrMissing) {
+      isValid = hasRecognizedImageBytes(res.buffer);
+    }
+
+    if (isValid) {
+      if (contentType.includes('svg') || isSvgBuffer(res.buffer)) {
+        const text = res.buffer.toString('utf8').trim().toLowerCase();
+        if (text.includes('<html') || text.includes('<body')) {
+          cache.set(trimmed, null);
+          return null;
+        }
+      }
+      cache.set(trimmed, res.finalUrl);
+      return res.finalUrl;
+    }
+
+    cache.set(trimmed, null);
+    return null;
+  } catch (err: any) {
+    if (isTerminalError(err)) {
+      console.warn(`[Figure Verification] Terminal error for ${trimmed}: ${err.message}`);
+      cache.set(trimmed, null);
+      return null;
+    }
+    
+    const attempt = (transientRetryCounts.get(trimmed) || 0) + 1;
+    transientRetryCounts.set(trimmed, attempt);
+    console.warn(`[Figure Verification] Transient failure for ${trimmed} (attempt ${attempt}/3): ${err.message}`);
+    
+    if (attempt >= 3) {
+      console.warn(`[Figure Verification] Retry limit exceeded for ${trimmed}. Promoting to terminal failure.`);
+      cache.set(trimmed, null);
+      return null;
+    }
+    
+    throw err;
+  }
+}
+
+function getMappedPmcCdnUrl(url: string, pmcImageMap?: Map<string, string>): string | null {
+  if (!pmcImageMap || pmcImageMap.size === 0) return null;
+  try {
+    const filename = url.split('/').pop() || '';
+    const cleanName = filename.replace(/\.[a-zA-Z0-9]+$/, '').toLowerCase();
+    if (pmcImageMap.has(filename.toLowerCase())) {
+      return pmcImageMap.get(filename.toLowerCase()) || null;
+    }
+    if (pmcImageMap.has(cleanName)) {
+      return pmcImageMap.get(cleanName) || null;
+    }
+  } catch (e) {}
+  return null;
+}
+
+async function resolveAndVerifyImageUrl(
+  url: string | undefined,
+  cache: Map<string, string | null>,
+  transientRetryCounts: Map<string, number>,
+  pmcImageMap?: Map<string, string>
+): Promise<string | null> {
+  if (!url) return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+
+  const mappedCdn = getMappedPmcCdnUrl(trimmed, pmcImageMap);
+  if (mappedCdn) {
+    try {
+      const verifiedCdn = await verifyImageUrl(mappedCdn, cache, transientRetryCounts);
+      if (verifiedCdn) return verifiedCdn;
+    } catch (err) {
+      console.warn(`[Figure Verification] Transient error on mapped PMC CDN ${mappedCdn}, falling back to original URL ${trimmed}`);
+    }
+  }
+
+  try {
+    return await verifyImageUrl(trimmed, cache, transientRetryCounts);
+  } catch (err) {
+    return null;
+  }
+}
+
+function resolveFigureUrl(src: string, baseUrl: string): string {
+  if (!src) return '';
+  src = src.trim();
+  if (src.startsWith('//')) {
+    return 'https:' + src;
+  }
+  if (/^https?:\/\//i.test(src)) {
+    return src;
+  }
+  try {
+    const absoluteBase = /^https?:\/\//i.test(baseUrl) ? baseUrl : 'https://' + baseUrl;
+    return new URL(src, absoluteBase).href;
+  } catch (e) {
+    return src;
+  }
+}
+
+function makeFigureUrlsAbsolute(blocks: any[], baseUrl: string): void {
+  if (!blocks) return;
+  for (const b of blocks) {
+    if (b.blockType === 'figure') {
+      let imgUrl = b.imageUrl || '';
+      if (!imgUrl && b.html) {
+        const match = b.html.match(/<img[^>]+src=["']([^"']+)["']/i);
+        if (match) {
+          imgUrl = match[1];
+        }
+      }
+      if (imgUrl) {
+        const absoluteUrl = resolveFigureUrl(imgUrl, baseUrl);
+        b.imageUrl = absoluteUrl;
+        if (b.html && absoluteUrl) {
+          b.html = b.html.replace(/(<img[^>]+src=["'])([^"']*)(["'])/i, `$1${absoluteUrl}$3`);
+        }
+      }
+    }
+  }
+}
+
+async function deduplicateAndMergeFigures(
+  blocks: any[],
+  cache: Map<string, string | null>,
+  transientRetryCounts: Map<string, number>,
+  pmcImageMap?: Map<string, string>
+): Promise<any[]> {
   const merged: any[] = [];
   const seenFigures = new Map<string, any>();
 
@@ -150,9 +350,17 @@ function deduplicateAndMergeFigures(blocks: any[]): any[] {
         const existing = seenFigures.get(key);
         if (existing) {
           console.log(`[Reconciliation] Merging duplicate figure block for key: ${key}`);
-          const existingImg = (existing.html || '').match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] || '';
-          const currentImg = (b.html || '').match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] || '';
-          const bestImg = currentImg || existingImg;
+          const existingImg = existing.imageUrl || (existing.html || '').match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] || '';
+          const currentImg = b.imageUrl || (b.html || '').match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] || '';
+          
+          const currentOk = await resolveAndVerifyImageUrl(currentImg, cache, transientRetryCounts, pmcImageMap);
+          const existingOk = await resolveAndVerifyImageUrl(existingImg, cache, transientRetryCounts, pmcImageMap);
+          let bestImg = '';
+          if (currentOk) {
+            bestImg = currentOk;
+          } else if (existingOk) {
+            bestImg = existingOk;
+          }
 
           const cleanExisting = (existing.text || '').replace(/Full\s+size\s+image/gi, '').trim();
           const cleanCurrent = (b.text || '').replace(/Full\s+size\s+image/gi, '').trim();
@@ -163,55 +371,67 @@ function deduplicateAndMergeFigures(blocks: any[]): any[] {
           seenFigures.set(key, existing);
           continue;
         } else {
-          const imgUrl = (b.html || '').match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] || '';
+          const imgUrl = b.imageUrl || (b.html || '').match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] || '';
+          const verifiedImg = await resolveAndVerifyImageUrl(imgUrl, cache, transientRetryCounts, pmcImageMap);
           const cleanText = text.replace(/Full\s+size\s+image/gi, '').trim();
           b.text = cleanText;
-          b.imageUrl = imgUrl;
+          b.imageUrl = verifiedImg || '';
           seenFigures.set(key, b);
         }
+      } else {
+        const imgUrl = b.imageUrl || (b.html || '').match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] || '';
+        const verifiedImg = await resolveAndVerifyImageUrl(imgUrl, cache, transientRetryCounts, pmcImageMap);
+        b.imageUrl = verifiedImg || '';
       }
     }
     merged.push(b);
   }
 
-  return merged.map(b => {
+  const result: any[] = [];
+  for (const b of merged) {
     if (b.blockType === 'figure') {
       const key = getSubfigureKey(b.text);
+      let finalFig = b;
       if (key) {
-        const finalFig = seenFigures.get(key);
-        const cleanText = (finalFig.text || '').replace(/HÌNH\s+ẢNH\s*\/\s*BIỂU\s+ĐỒ/gi, '').replace(/Full\s+size\s+image/gi, '').trim();
-        
-        let sentences = cleanText.split(/(?<=\.)\s+(?=[A-Z\d©])/);
-        if (sentences[0] && sentences[0].match(/^(fig|figure|hinh|hình)\.?$/i) && sentences[1]) {
-          sentences[0] = sentences[0] + ' ' + sentences[1];
-          sentences.splice(1, 1);
-        }
-        const title = sentences[0] || '';
-        const legend = sentences.slice(1).join(' ') || '';
-
-        let html = `<div class="figure-block">`;
-        if (finalFig.imageUrl) {
-          html += `<img src="${finalFig.imageUrl}" alt="${escapeHtml(title)}" class="figure-img" />`;
-        } else {
-          html += `<p class="placeholder-error"><em>[Figure image unavailable]</em></p>`;
-        }
-        html += `<p class="caption"><strong>${escapeHtml(title)}</strong></p>`;
-        if (legend) {
-          html += `<p class="legend">${escapeHtml(legend)}</p>`;
-        }
-        html += `</div>`;
-        
-        const sanitized = sanitizeHtml(html);
-        if (sanitized) {
-          return { ...b, text: cleanText, html: sanitized };
-        }
-        
-        return { ...b, text: cleanText, html: '' };
+        finalFig = seenFigures.get(key) || b;
       }
+      const cleanText = (finalFig.text || '').replace(/HÌNH\s+ẢNH\s*\/\s*BIỂU\s+ĐỒ/gi, '').replace(/Full\s+size\s+image/gi, '').trim();
+      
+      let sentences = cleanText.split(/(?<=\.)\s+(?=[A-Z\d©])/);
+      if (sentences[0] && sentences[0].match(/^(fig|figure|hinh|hình)\.?$/i) && sentences[1]) {
+        sentences[0] = sentences[0] + ' ' + sentences[1];
+        sentences.splice(1, 1);
+      }
+      const title = sentences[0] || '';
+      const legend = sentences.slice(1).join(' ') || '';
+
+      let html = `<div class="figure-block">`;
+      if (finalFig.imageUrl) {
+        html += `<img src="${finalFig.imageUrl}" alt="${escapeHtml(title)}" class="figure-img" />`;
+      } else {
+        html += `<p class="placeholder-error"><em>[Figure image unavailable]</em></p>`;
+      }
+      html += `<p class="caption"><strong>${escapeHtml(title)}</strong></p>`;
+      if (legend) {
+        html += `<p class="legend">${escapeHtml(legend)}</p>`;
+      }
+      html += `</div>`;
+      
+      const sanitized = sanitizeHtml(html);
+      result.push({
+        ...b,
+        text: cleanText,
+        imageUrl: finalFig.imageUrl || undefined,
+        html: sanitized || ''
+      });
+    } else {
+      result.push(b);
     }
-    return b;
-  });
+  }
+
+  return result;
 }
+
 
 function deduplicateAndMergeTables(blocks: any[]): any[] {
   const merged: any[] = [];
@@ -520,6 +740,7 @@ export async function importSmartReaderForSource(
   moderatorId: mongoose.Types.ObjectId,
   isReimport = false
 ): Promise<ImportResult> {
+  let resolvedPmcidForImport: string | undefined = source.pmcid;
   if (!source.pmcid && source.doi) {
     try {
       console.log(`[PMC Resolver] Resolving PMCID for DOI: ${source.doi}`);
@@ -530,10 +751,20 @@ export async function importSmartReaderForSource(
         const record = convData.records?.[0];
         if (record && record.pmcid) {
           console.log(`[PMC Resolver] Resolved PMCID: ${record.pmcid} for DOI: ${source.doi}`);
-          source.pmcid = record.pmcid;
-          source.normalizedPmcid = record.pmcid.toUpperCase();
-          if (source.save && typeof source.save === 'function') {
-            await source.save();
+          const normalizedPmcid = record.pmcid.toUpperCase();
+          resolvedPmcidForImport = normalizedPmcid;
+          const model = source.constructor;
+          const duplicate = model?.exists
+            ? await model.exists({ _id: { $ne: source._id }, normalizedPmcid })
+            : null;
+          if (!duplicate) {
+            source.pmcid = record.pmcid;
+            source.normalizedPmcid = normalizedPmcid;
+            if (source.save && typeof source.save === 'function') {
+              await source.save();
+            }
+          } else {
+            console.warn('[PMC Resolver] Resolved PMCID belongs to another source; using it transiently without persisting it.');
           }
         }
       }
@@ -543,11 +774,20 @@ export async function importSmartReaderForSource(
   }
 
   let pmcImageMap: Map<string, string> | undefined = undefined;
-  if (source.pmcid) {
-    pmcImageMap = await fetchPmcImageMap(source.pmcid);
+  if (resolvedPmcidForImport) {
+    pmcImageMap = await fetchPmcImageMap(resolvedPmcidForImport);
   }
 
-  const candidates = collectCandidates(source);
+  const importSessionVerifiedImageUrls = new Map<string, string | null>();
+  const importSessionTransientRetryCounts = new Map<string, number>();
+
+  // A PMCID that collides with another stored record may still be used as a
+  // transient lookup hint for this import run. Do not mutate/persist the source
+  // merely to let the candidate collector discover official PMC JATS/HTML.
+  const candidateSource = resolvedPmcidForImport && !source.pmcid
+    ? { ...(typeof source.toObject === 'function' ? source.toObject() : source), pmcid: resolvedPmcidForImport }
+    : source;
+  const candidates = collectCandidates(candidateSource);
   console.log(`[Collector] Collected ${candidates.length} candidates for source: ${source.title}`);
 
   const tempDir = path.join(__dirname, '../../../uploads/tmp');
@@ -581,13 +821,8 @@ export async function importSmartReaderForSource(
       if (cand.sourceType === 'uploaded_pdf') {
         const publicId = source.originalFile?.cloudinaryPublicId;
         if (!publicId) throw new Error('Missing Cloudinary publicId for uploaded PDF');
-        const cloudAsset = await getAssetMetadata(publicId, 'raw');
-        if (!cloudAsset || !cloudAsset.secure_url) {
-          throw new Error('Cloudinary secureUrl not found');
-        }
-        const downloadRes = await fetchUrlWithSafeRedirects(cloudAsset.secure_url);
-        buffer = downloadRes.buffer;
-        finalUrl = downloadRes.finalUrl;
+        buffer = await downloadCloudinaryRawAsset(publicId);
+        finalUrl = cand.url;
       } else {
         const downloadRes = await fetchUrlWithSafeRedirects(cand.url);
         buffer = downloadRes.buffer;
@@ -603,6 +838,7 @@ export async function importSmartReaderForSource(
 
         const parseOutput = await parseSourceFile(tempPath, cand.contentType, cand.sourceType, pmcImageMap);
         if (parseOutput.success && parseOutput.blocks.length > 0) {
+          makeFigureUrlsAbsolute(parseOutput.blocks, finalUrl);
           const normalized = normalizeDocument(parseOutput.blocks, source.title || parseOutput.title);
           const processingTimeMs = Date.now() - startTime;
           const report = validateQuality(
@@ -632,7 +868,8 @@ export async function importSmartReaderForSource(
             sourceType: cand.sourceType,
             title: parseOutput.title || source.title,
             report,
-            wordCount
+            wordCount,
+            finalUrl
           };
         }
       }
@@ -971,19 +1208,37 @@ export async function importSmartReaderForSource(
       const enrichBlocks = (parsedXml || parsedHtml)?.blocks || [];
       const htmlFigs = enrichBlocks.filter((b: any) => b.blockType === 'figure' || b.blockType === 'table');
 
-      reconciledBlocks = reconciledBlocks.map(b => {
+      reconciledBlocks = await Promise.all(reconciledBlocks.map(async b => {
         if (b.blockType === 'figure' || b.blockType === 'table') {
           const pdfNum = getNumberSuffix(b.text);
           if (pdfNum) {
             const match = htmlFigs.find((hb: any) => getNumberSuffix(hb.text) === pdfNum && hb.blockType === b.blockType);
             if (match) {
-              console.log(`[Reconciliation] Merging structured ${b.blockType} metadata for index ${pdfNum}`);
-              return {
-                ...b,
-                text: match.text || b.text,
-                html: match.html || b.html,
-                style: { ...(b.style || {}), ...(match.style || {}) }
-              };
+              if (b.blockType === 'figure') {
+                const matchImg = match.imageUrl || (match.html || '').match(/<img[^>]+src=["']([^"']+)["']/i)?.[1] || '';
+                const verifiedMatchImg = await resolveAndVerifyImageUrl(matchImg, importSessionVerifiedImageUrls, importSessionTransientRetryCounts, pmcImageMap);
+                if (verifiedMatchImg) {
+                  console.log(`[Reconciliation] Merging verified structured figure metadata for index ${pdfNum}`);
+                  match.imageUrl = verifiedMatchImg;
+                  match.html = match.html.replace(/(<img[^>]+src=["'])([^"']*)(["'])/i, `$1${verifiedMatchImg}$3`);
+                  return {
+                    ...b,
+                    text: match.text || b.text,
+                    html: match.html,
+                    style: { ...(b.style || {}), ...(match.style || {}) }
+                  };
+                } else {
+                  console.log(`[Reconciliation] Skipping unverified structured figure enrichment for index ${pdfNum}`);
+                }
+              } else {
+                console.log(`[Reconciliation] Merging structured ${b.blockType} metadata for index ${pdfNum}`);
+                return {
+                  ...b,
+                  text: match.text || b.text,
+                  html: match.html || b.html,
+                  style: { ...(b.style || {}), ...(match.style || {}) }
+                };
+              }
             }
           }
           if (!b.html || b.html.startsWith('<p>') || b.html.includes('placeholder-error')) {
@@ -991,7 +1246,7 @@ export async function importSmartReaderForSource(
           }
         }
         return b;
-      });
+      }));
 
     } else {
       console.log(`[Reconciliation] JATS/XML or HTML selected as main body source. Performing structural validation and boilerplate exclusions using PDF...`);
@@ -1053,7 +1308,7 @@ export async function importSmartReaderForSource(
     }
 
     // Deduplicate & formatting tables and figures with conservative subfigure boundary logic
-    reconciledBlocks = deduplicateAndMergeFigures(reconciledBlocks);
+    reconciledBlocks = await deduplicateAndMergeFigures(reconciledBlocks, importSessionVerifiedImageUrls, importSessionTransientRetryCounts, pmcImageMap);
     reconciledBlocks = deduplicateAndMergeTables(reconciledBlocks);
 
     // References Restoration: Priority XML/JATS -> HTML -> PDF
@@ -1131,40 +1386,20 @@ export async function importSmartReaderForSource(
     source.fullTextImportedBy = moderatorId;
     source.chunkEmbeddingModel = chunkMetrics.embedModel;
     source.chunkCount = chunkMetrics.ragChunkCount;
+    source.extractionMethod = selectedSourceType === 'jats_xml'
+      ? 'jats'
+      : selectedSourceType.includes('html')
+        ? 'html'
+        : selectedSourceType === 'pdf' || selectedSourceType === 'uploaded_pdf'
+          ? 'pdf_text'
+          : source.extractionMethod;
 
     const figuresCount = reconciledBlocks.filter((b: any) => b.blockType === 'figure').length;
     const tablesCount = reconciledBlocks.filter((b: any) => b.blockType === 'table').length;
     const referencesCount = reconciledBlocks.filter((b: any) => b.blockType === 'reference').length;
 
     // Use dynamic pagination algorithm matching FE paginateBlocks exactly to resolve pageCount
-    let pagesCount = 0;
-    const normalBlocks = reconciledBlocks.filter((b: any) => b.blockType !== 'metadata');
-    if (normalBlocks.length > 0) {
-      let wordCount = 0;
-      const countWords = (t: string): number => {
-        return (t || '').split(/\s+/).filter(Boolean).length;
-      };
-      
-      for (const block of normalBlocks) {
-        const words = countWords(block.text);
-        if (block.blockType === 'heading') {
-          if (wordCount >= 1000) {
-            pagesCount++;
-            wordCount = 0;
-          }
-          wordCount += words;
-        } else {
-          wordCount += words;
-          if (wordCount >= 1500) {
-            pagesCount++;
-            wordCount = 0;
-          }
-        }
-      }
-      if (wordCount > 0) {
-        pagesCount++;
-      }
-    }
+    const pagesCount = calculateVirtualPageCount(reconciledBlocks);
 
     source.smartReaderStats = {
       pageCount: pagesCount,

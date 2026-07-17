@@ -18,12 +18,23 @@ export async function buildAndSaveSmartReaderData(
   const stripHtml = (htmlStr: string) => htmlStr.replace(/<\/?[^>]+(>|$)/g, "");
   const normTitle = normalizeString(title);
 
-  const cleanBlocks = blocks.filter(b => {
+  const cleanBlocks = blocks.map(b => ({
+    ...b,
+    text: String(b.text || '').trim(),
+    html: String(b.html || '')
+  })).filter(b => {
+    // AcademicChunk.text is required. Empty layout artifacts must be rejected
+    // before any existing reader data is touched.
+    if (!b.text) return false;
     if (b.blockType === 'title') return true;
     const normText = normalizeString(b.text);
     const normHtmlText = normalizeString(stripHtml(b.html));
     return normText !== normTitle && normHtmlText !== normTitle;
   });
+
+  if (cleanBlocks.length === 0) {
+    throw new Error('Không có block nội dung hợp lệ để tạo Bản đọc thông minh.');
+  }
 
   const session = await mongoose.startSession();
   let useTransaction = false;
@@ -37,26 +48,44 @@ export async function buildAndSaveSmartReaderData(
   }
 
   let ragChunkCount = 0;
+  const documentSelector = isContribution
+    ? { previewContributionId: source._id }
+    : { sourceId: source._id };
+
+  const captureExistingReader = async () => {
+    const documents = await AcademicDocument.find(documentSelector).lean();
+    const documentIds = documents.map(doc => doc._id);
+    if (documentIds.length === 0) return { documents: [], sections: [], chunks: [] };
+    const [sections, chunks] = await Promise.all([
+      AcademicSection.find({ documentId: { $in: documentIds } }).lean(),
+      AcademicChunk.find({ documentId: { $in: documentIds } }).lean()
+    ]);
+    return { documents, sections, chunks };
+  };
+
+  const deleteCurrentReader = async (session?: mongoose.ClientSession) => {
+    const opt = session ? { session } : {};
+    const documents = await AcademicDocument.find(documentSelector).session(session || null);
+    const documentIds = documents.map(doc => doc._id);
+    if (documentIds.length > 0) {
+      await AcademicSection.deleteMany({ documentId: { $in: documentIds } }, opt);
+      await AcademicChunk.deleteMany({ documentId: { $in: documentIds } }, opt);
+    }
+    await AcademicDocument.deleteMany(documentSelector, opt);
+  };
+
+  const restoreReaderBackup = async (backup: Awaited<ReturnType<typeof captureExistingReader>>) => {
+    await deleteCurrentReader();
+    if (backup.documents.length > 0) await AcademicDocument.insertMany(backup.documents);
+    if (backup.sections.length > 0) await AcademicSection.insertMany(backup.sections);
+    if (backup.chunks.length > 0) await AcademicChunk.insertMany(backup.chunks);
+  };
 
   const executeSave = async () => {
     const opt = useTransaction ? { session } : {};
 
     // 1. Delete existing documents, sections, and chunks for this source
-    if (isContribution) {
-      const existingDoc = await AcademicDocument.findOne({ previewContributionId: source._id }).session(useTransaction ? session : null);
-      if (existingDoc) {
-        await AcademicSection.deleteMany({ documentId: existingDoc._id }, opt);
-        await AcademicChunk.deleteMany({ documentId: existingDoc._id }, opt);
-      }
-      await AcademicDocument.deleteMany({ previewContributionId: source._id }, opt);
-    } else {
-      const existingDoc = await AcademicDocument.findOne({ sourceId: source._id }).session(useTransaction ? session : null);
-      if (existingDoc) {
-        await AcademicSection.deleteMany({ documentId: existingDoc._id }, opt);
-        await AcademicChunk.deleteMany({ documentId: existingDoc._id }, opt);
-      }
-      await AcademicDocument.deleteMany({ sourceId: source._id }, opt);
-    }
+    await deleteCurrentReader(useTransaction ? session : undefined);
 
     // 2. Map blocks to sections and build AcademicSection list
     const sectionIds: mongoose.Types.ObjectId[] = [];
@@ -133,6 +162,7 @@ export async function buildAndSaveSmartReaderData(
         sectionId: secId,
         text: b.text,
         html: b.html,
+        tableData: b.tableData,
         marker: b.marker,
         blockType: b.blockType,
         tokenCount: Math.round(wordCount * 1.3) || 1,
@@ -169,12 +199,25 @@ export async function buildAndSaveSmartReaderData(
     );
   };
 
-  if (useTransaction) {
-    await session.withTransaction(executeSave);
-  } else {
-    await executeSave();
+  try {
+    if (useTransaction) {
+      await session.withTransaction(executeSave);
+    } else {
+      const backup = await captureExistingReader();
+      try {
+        await executeSave();
+      } catch (saveError: any) {
+        try {
+          await restoreReaderBackup(backup);
+        } catch (restoreError: any) {
+          throw new Error(`Lỗi nghiêm trọng: không thể lưu reader mới và cũng không thể khôi phục reader cũ (${restoreError.message}).`);
+        }
+        throw saveError;
+      }
+    }
+  } finally {
+    session.endSession();
   }
-  session.endSession();
 
   return {
     ragChunkCount,

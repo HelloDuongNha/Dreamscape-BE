@@ -13,10 +13,10 @@ export interface ISourceContribution extends Document {
   reviewedBy?: Types.ObjectId;
   reviewedAt?: Date;
   reviewNote?: string;
-  license: string;
-  allowedUse: string;
-  title: string;
-  authors: string[];
+  license?: string;
+  allowedUse?: string;
+  title?: string;
+  authors?: string[];
   year?: number;
   originalFile?: {
     storageProvider?: 'cloudinary' | 'local' | 'gridfs';
@@ -44,6 +44,18 @@ export interface ISourceContribution extends Document {
     referenceCount: number;
     updatedAt?: Date;
   };
+  // PDF-only ingestion metadata
+  sourceOrigin?: 'doi' | 'pmcid' | 'isbn' | 'url' | 'uploaded_pdf' | 'doi_import' | 'url_import' | 'unspecified';
+  extractionStatus?: 'uploaded' | 'inspecting' | 'extracting_text' | 'resolving_identifiers' | 'fetching_preferred_source' | 'ocr_processing' | 'compiling_reader' | 'completed' | 'partial' | 'failed';
+  extractionMethod?: 'jats' | 'html' | 'pdf_text' | 'ocr' | 'mixed';
+  extractionQuality?: 'good' | 'partial' | 'poor';
+  detectedIdentifiers?: {
+    doi?: string;
+    isbn?: string;
+    pmcid?: string;
+  };
+  pdfPageCount?: number;
+  detectedLanguage?: string;
 }
 
 const SourceContributionSchema = new Schema<ISourceContribution>(
@@ -107,20 +119,16 @@ const SourceContributionSchema = new Schema<ISourceContribution>(
     },
     license: {
       type: String,
-      required: true,
     },
     allowedUse: {
       type: String,
-      required: true,
     },
     title: {
       type: String,
-      required: true,
       trim: true,
     },
     authors: {
       type: [String],
-      required: true,
     },
     year: {
       type: Number,
@@ -154,7 +162,6 @@ const SourceContributionSchema = new Schema<ISourceContribution>(
     copyrightStatus: {
       type: String,
       enum: ['public_domain', 'copyrighted_with_open_access', 'paywalled'],
-      default: 'paywalled',
     },
     readableInApp: {
       type: Boolean,
@@ -170,6 +177,34 @@ const SourceContributionSchema = new Schema<ISourceContribution>(
       tableCount: { type: Number, default: 0 },
       referenceCount: { type: Number, default: 0 },
       updatedAt: { type: Date }
+    },
+    // PDF-only ingestion metadata
+    sourceOrigin: {
+      type: String,
+      enum: ['doi', 'pmcid', 'isbn', 'url', 'uploaded_pdf', 'doi_import', 'url_import', 'unspecified'],
+    },
+    extractionStatus: {
+      type: String,
+      enum: ['uploaded', 'inspecting', 'extracting_text', 'resolving_identifiers', 'fetching_preferred_source', 'ocr_processing', 'compiling_reader', 'completed', 'partial', 'failed'],
+    },
+    extractionMethod: {
+      type: String,
+      enum: ['jats', 'html', 'pdf_text', 'ocr', 'mixed'],
+    },
+    extractionQuality: {
+      type: String,
+      enum: ['good', 'partial', 'poor'],
+    },
+    detectedIdentifiers: {
+      doi: { type: String, trim: true },
+      isbn: { type: String, trim: true },
+      pmcid: { type: String, trim: true },
+    },
+    pdfPageCount: {
+      type: Number,
+    },
+    detectedLanguage: {
+      type: String,
     },
   },
   {

@@ -37,6 +37,36 @@ export type SemanticType =
   | "appendix"
   | "acknowledgement";
 
+export interface StructuredTableCell {
+  row: number;
+  column: number;
+  rowSpan: number;
+  columnSpan: number;
+  text: string;
+  role: 'header' | 'data';
+}
+
+export interface RawExtractedTableCell {
+  startRow: number;
+  endRow: number;
+  startColumn: number;
+  endColumn: number;
+  text: string;
+  columnHeader: boolean;
+  rowHeader: boolean;
+}
+
+export interface StructuredTableData {
+  version: 1;
+  source: 'docling' | 'jats' | 'html' | 'other';
+  reconstructionMethod: string;
+  rowCount: number;
+  columnCount: number;
+  cells: StructuredTableCell[];
+  rawCells: RawExtractedTableCell[];
+  warnings: string[];
+}
+
 export interface CanonicalBlock {
   blockType: BlockType;
   semanticType: SemanticType;
@@ -48,6 +78,7 @@ export interface CanonicalBlock {
   pageNumber?: number;
   tableLink?: string;
   tableHtmlContent?: string;
+  tableData?: StructuredTableData;
   imageUrl?: string;
 }
 

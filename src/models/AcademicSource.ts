@@ -50,7 +50,6 @@ export interface IAcademicSource extends Document {
   chunkBuiltAt?: Date;
   chunkEmbeddingModel?: string;
   chunkCount?: number;
-  sourceOrigin?: 'uploaded_pdf' | 'doi_import' | 'url_import' | 'unspecified';
   smartReaderStats?: {
     pageCount: number;
     figureCount: number;
@@ -58,6 +57,12 @@ export interface IAcademicSource extends Document {
     referenceCount: number;
     updatedAt?: Date;
   };
+  // PDF-only ingestion metadata
+  sourceOrigin?: 'doi' | 'pmcid' | 'isbn' | 'url' | 'uploaded_pdf' | 'doi_import' | 'url_import' | 'unspecified';
+  extractionMethod?: 'jats' | 'html' | 'pdf_text' | 'ocr' | 'mixed';
+  extractionQuality?: 'good' | 'partial' | 'poor';
+  pdfPageCount?: number;
+  detectedLanguage?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -251,8 +256,7 @@ const AcademicSourceSchema = new Schema<IAcademicSource>(
     },
     sourceOrigin: {
       type: String,
-      enum: ['uploaded_pdf', 'doi_import', 'url_import', 'unspecified'],
-      default: 'unspecified',
+      enum: ['doi', 'pmcid', 'isbn', 'url', 'uploaded_pdf', 'doi_import', 'url_import', 'unspecified'],
     },
     smartReaderStats: {
       pageCount: { type: Number, default: 0 },
@@ -260,6 +264,21 @@ const AcademicSourceSchema = new Schema<IAcademicSource>(
       tableCount: { type: Number, default: 0 },
       referenceCount: { type: Number, default: 0 },
       updatedAt: { type: Date }
+    },
+    // PDF-only ingestion metadata
+    extractionMethod: {
+      type: String,
+      enum: ['jats', 'html', 'pdf_text', 'ocr', 'mixed'],
+    },
+    extractionQuality: {
+      type: String,
+      enum: ['good', 'partial', 'poor'],
+    },
+    pdfPageCount: {
+      type: Number,
+    },
+    detectedLanguage: {
+      type: String,
     },
   },
   {

@@ -552,6 +552,48 @@ export const reviewSource = async (req: Request, res: Response): Promise<void> =
     }
 
     // 6. If rejected, update SourceContribution status and clean up Cloudinary asset
+    // Capture the complete pre-rejection state before changing moderation, reader, processing, stored-file, or URL fields
+    const originalFileBackup = contribution.originalFile;
+    const pdfUrlBackup = contribution.pdfUrl;
+    const htmlUrlBackup = contribution.htmlUrl;
+    const urlBackup = contribution.url;
+    const normalizedUrlBackup = contribution.normalizedUrl;
+    const reviewStatusBackup = contribution.reviewStatus;
+    const reviewedByBackup = contribution.reviewedBy;
+    const reviewedAtBackup = contribution.reviewedAt;
+    const reviewNoteBackup = contribution.reviewNote;
+    const readableInAppBackup = contribution.readableInApp;
+    const fullTextStatusBackup = contribution.fullTextStatus;
+    const smartReaderStatsBackup = contribution.smartReaderStats;
+    const extractionStatusBackup = contribution.extractionStatus;
+    const extractionMethodBackup = contribution.extractionMethod;
+    const extractionQualityBackup = contribution.extractionQuality;
+    const pdfPageCountBackup = contribution.pdfPageCount;
+    const detectedLanguageBackup = contribution.detectedLanguage;
+    const detectedIdentifiersBackup = contribution.detectedIdentifiers;
+
+    const restorePreRejectionState = (doc: any) => {
+      doc.originalFile = originalFileBackup;
+      doc.pdfUrl = pdfUrlBackup;
+      doc.htmlUrl = htmlUrlBackup;
+      doc.url = urlBackup;
+      doc.normalizedUrl = normalizedUrlBackup;
+      doc.reviewStatus = reviewStatusBackup;
+      doc.reviewedBy = reviewedByBackup;
+      doc.reviewedAt = reviewedAtBackup;
+      doc.reviewNote = reviewNoteBackup;
+      doc.readableInApp = readableInAppBackup;
+      doc.fullTextStatus = fullTextStatusBackup;
+      doc.smartReaderStats = smartReaderStatsBackup;
+      doc.extractionStatus = extractionStatusBackup;
+      doc.extractionMethod = extractionMethodBackup;
+      doc.extractionQuality = extractionQualityBackup;
+      doc.pdfPageCount = pdfPageCountBackup;
+      doc.detectedLanguage = detectedLanguageBackup;
+      doc.detectedIdentifiers = detectedIdentifiersBackup;
+    };
+
+    // Update SourceContribution status fields
     contribution.reviewStatus = 'rejected';
     contribution.reviewedBy = reviewerId;
     contribution.reviewedAt = new Date();
@@ -559,27 +601,85 @@ export const reviewSource = async (req: Request, res: Response): Promise<void> =
       contribution.reviewNote = cleanNote || undefined;
     }
 
-    if (
-      contribution.originalFile?.storageProvider === 'cloudinary' &&
-      contribution.originalFile?.cloudinaryPublicId
-    ) {
-      try {
-        const publicId = contribution.originalFile.cloudinaryPublicId;
-        const resourceType = contribution.originalFile.cloudinaryResourceType || 'raw';
-        await deleteAsset(publicId, resourceType);
-        console.log(`Successfully deleted Cloudinary asset for rejected contribution: ${publicId}`);
-        
-        // Safely clear Cloudinary-specific fields from originalFile to prevent pointing to dead assets
-        contribution.originalFile.cloudinaryPublicId = undefined;
-        contribution.originalFile.cloudinarySecureUrl = undefined;
-        contribution.originalFile.cloudinaryResourceType = undefined;
-        contribution.originalFile.cloudinaryFormat = undefined;
-      } catch (cloudinaryErr: any) {
-        console.error('Failed to delete Cloudinary asset on contribution rejection:', cloudinaryErr);
-      }
+    // Reset preview reader state and statistics on rejection
+    contribution.readableInApp = false;
+    contribution.fullTextStatus = 'none';
+    contribution.smartReaderStats = undefined;
+    contribution.extractionStatus = undefined;
+    contribution.extractionMethod = undefined;
+    contribution.extractionQuality = undefined;
+    contribution.pdfPageCount = undefined;
+    contribution.detectedLanguage = undefined;
+    contribution.detectedIdentifiers = undefined;
+
+    // Do not treat Cloudinary Original Document URLs as external source links
+    const isCloudinaryUrl = (u?: string) => !!(u && (u.includes('cloudinary.com') || u.includes('res.cloudinary.com')));
+    
+    if (isCloudinaryUrl(contribution.pdfUrl)) {
+      contribution.pdfUrl = undefined;
+    }
+    if (isCloudinaryUrl(contribution.htmlUrl)) {
+      contribution.htmlUrl = undefined;
+    }
+    if (isCloudinaryUrl(contribution.url)) {
+      contribution.url = undefined;
+      contribution.normalizedUrl = undefined;
     }
 
-    await contribution.save();
+    const isCloudinaryProvider = originalFileBackup?.storageProvider === 'cloudinary';
+    const publicId = originalFileBackup?.cloudinaryPublicId;
+    const resourceType = originalFileBackup?.cloudinaryResourceType || 'raw';
+
+    // Clear originalFile block in memory first
+    if (isCloudinaryProvider) {
+      contribution.originalFile = undefined;
+    }
+
+    try {
+      await contribution.save();
+    } catch (dbErr: any) {
+      // Restore memory fields and throw DB error
+      restorePreRejectionState(contribution);
+      throw dbErr;
+    }
+
+    // If DB save succeeded, now delete from Cloudinary
+    if (isCloudinaryProvider) {
+      if (publicId) {
+        try {
+          await deleteAsset(publicId, resourceType);
+          console.log(`Successfully deleted Cloudinary asset for rejected contribution: ${publicId}`);
+        } catch (cloudinaryErr: any) {
+          const errMsg = (cloudinaryErr.message || '').toLowerCase();
+          if (errMsg.includes('not found') || errMsg.includes('not_found')) {
+            console.log('Cloudinary asset was already deleted.');
+          } else {
+            console.error('Failed to delete Cloudinary asset, restoring database state:', cloudinaryErr);
+            
+            // Deletion failed: restore the DB state so it remains recoverable
+            try {
+              restorePreRejectionState(contribution);
+              await contribution.save();
+            } catch (restoreErr: any) {
+              console.error('Critically failed to restore DB state after Cloudinary deletion failure:', restoreErr);
+              res.status(500).json({
+                success: false,
+                message: `Lỗi nghiêm trọng: Xóa tệp Cloudinary thất bại và không thể phục hồi trạng thái cơ sở dữ liệu về ban đầu: ${restoreErr.message || restoreErr}`,
+                error: restoreErr.message || restoreErr
+              });
+              return;
+            }
+
+            res.status(500).json({
+              success: false,
+              message: `Không thể xóa tệp PDF gốc lưu trên Cloudinary: ${cloudinaryErr.message || cloudinaryErr}`,
+              error: cloudinaryErr.message || cloudinaryErr
+            });
+            return;
+          }
+        }
+      }
+    }
 
     // Retrieve chunk IDs linked to the contribution
     const chunkIds = await AcademicChunk.find({ previewContributionId: contribution._id }).distinct('_id');
@@ -2406,6 +2506,16 @@ export const uploadPdfFile = async (req: Request, res: Response): Promise<void> 
         if (!contribution.title) {
           contribution.title = uploadResult.original_filename.replace(/\.[^/.]+$/, '').replace(/_/g, ' ');
         }
+
+        // Set extractionStatus to 'uploaded' only when Smart Reader needs parsing/recovery
+        const needsExtraction = !contribution.readableInApp ||
+                                 (contribution.fullTextStatus !== 'imported' && contribution.fullTextStatus !== 'available') ||
+                                 !contribution.smartReaderStats ||
+                                 contribution.smartReaderStats.pageCount <= 1;
+        if (needsExtraction) {
+          contribution.extractionStatus = 'uploaded';
+        }
+
         await contribution.save();
         savedContribution = contribution;
       } else {
@@ -2421,7 +2531,9 @@ export const uploadPdfFile = async (req: Request, res: Response): Promise<void> 
           metadata: {
             title: uploadResult.original_filename.replace(/\.[^/.]+$/, '').replace(/_/g, ' ')
           },
-          originalFile: originalFileData
+          originalFile: originalFileData,
+          sourceOrigin: 'uploaded_pdf',
+          extractionStatus: 'uploaded'
         });
 
         await contribution.save();
@@ -3260,7 +3372,6 @@ export const getContributionPdfInline = async (req: Request, res: Response): Pro
     res.status(200).send(buffer);
 
   } catch (err: any) {
-    console.error('Error streaming preview PDF inline:', err);
     if (err instanceof SsrfError) {
       res.status(400).json({
         success: false,
@@ -3269,10 +3380,36 @@ export const getContributionPdfInline = async (req: Request, res: Response): Pro
       });
       return;
     }
+    const isInvalidPdf = err.message === 'Tệp không phải PDF hợp lệ.';
+    if (isInvalidPdf) {
+      res.status(400).json({
+        success: false,
+        code: 'PDF_INVALID',
+        message: 'Tài liệu tải về không phải tệp PDF hợp lệ.'
+      });
+      return;
+    }
+    const isExternalFailure =
+      err.message?.includes('Fetch') ||
+      err.message?.includes('fetch') ||
+      err.message?.includes('mã lỗi') ||
+      err.message?.includes('Hết thời gian kết nối') ||
+      err.message?.includes('timeout') ||
+      err.message?.includes('ECONNRESET') ||
+      err.message?.includes('ENOTFOUND') ||
+      err.message?.includes('chuyển hướng');
+    if (isExternalFailure) {
+      res.status(422).json({
+        success: false,
+        code: 'PDF_FETCH_FAILED',
+        message: 'Không thể tải tệp PDF từ nguồn bên ngoài.'
+      });
+      return;
+    }
     res.status(500).json({
       success: false,
-      message: 'Lỗi hệ thống khi tải tệp PDF.',
-      error: err.message || err
+      code: 'INTERNAL_ERROR',
+      message: 'Lỗi hệ thống khi xử lý yêu cầu.'
     });
   }
 };
@@ -3397,4 +3534,169 @@ export const deleteContributionPdf = async (req: Request, res: Response): Promis
   }
 };
 
+import { runUploadedPdfImport } from '../services/academic/uploadedPdfImport.service';
+
+export const processUploadedPdfForContribution = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const forceReplace = req.body.forceReplace === true;
+    const structuredFirst = req.body.structuredFirst === true;
+
+    const result = await runUploadedPdfImport({
+      targetType: 'contribution',
+      targetId: id,
+      forceReplace,
+      structuredFirst,
+      userId: (req as any).user?._id
+    });
+
+    res.status(200).json(result);
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      message: err.message || 'Lỗi xử lý tệp PDF đóng góp.'
+    });
+  }
+};
+
+import { DoclingPreviewService } from '../services/academic/doclingPreview.service';
+import { DoclingPreviewSessionService } from '../services/academic/doclingPreviewSession.service';
+import { DoclingClientService } from '../services/academic/doclingClient.service';
+
+export const getDoclingPreview = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({ success: false, message: 'ID đóng góp không hợp lệ.' });
+      return;
+    }
+
+    const isAvailable = await DoclingClientService.isAvailable();
+    if (!isAvailable) {
+      res.status(503).json({
+        success: false,
+        errorCode: 'DOCLING_UNAVAILABLE',
+        message: 'Trình phân tích Docling chưa sẵn sàng trên máy chủ này.'
+      });
+      return;
+    }
+
+    const userId = (req as any).user?._id;
+    if (!userId) {
+      res.status(401).json({ success: false, message: 'Chưa xác thực người dùng.' });
+      return;
+    }
+
+    const result = await DoclingPreviewService.runPreview(id, String(userId));
+    if (!result.success) {
+      res.status(result.errorCode === 'LIMIT_EXCEEDED' ? 422 : 500).json({
+        success: false,
+        errorCode: result.errorCode,
+        message: result.errorDetail
+      });
+      return;
+    }
+
+    res.status(200).json(result);
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      message: sanitizeError(err)
+    });
+  }
+};
+
+export const getDoclingPreviewFigure = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id, figureId } = req.params;
+    const token = req.headers['x-docling-preview-token'] as string;
+    const userId = (req as any).user?._id;
+
+    if (!userId) {
+      res.status(401).json({ success: false, message: 'Chưa xác thực.' });
+      return;
+    }
+
+    if (!token) {
+      res.status(401).json({ success: false, message: 'Thiếu mã token phiên xem thử.' });
+      return;
+    }
+
+    const session = DoclingPreviewSessionService.getSession(token, String(userId), id);
+    if (!session) {
+      res.status(403).json({ success: false, message: 'Phiên xem thử không hợp lệ, hết hạn hoặc sai quyền hạn.' });
+      return;
+    }
+
+    const artifact = session.artifacts.find(a => a.previewFigureId === figureId);
+    if (!artifact) {
+      res.status(404).json({ success: false, message: 'Hình ảnh không tồn tại trong phiên này.' });
+      return;
+    }
+
+    const filePath = artifact.filePath;
+    let realPath: string;
+    try {
+      realPath = fs.realpathSync(filePath);
+    } catch {
+      res.status(404).json({ success: false, message: 'Tệp hình ảnh không tìm thấy.' });
+      return;
+    }
+
+    const lstat = fs.lstatSync(filePath);
+    if (lstat.isSymbolicLink()) {
+      res.status(400).json({ success: false, message: 'Liên kết không hợp lệ.' });
+      return;
+    }
+
+    const stat = fs.statSync(realPath);
+    if (!stat.isFile() || stat.size === 0) {
+      res.status(400).json({ success: false, message: 'Tệp không hợp lệ.' });
+      return;
+    }
+
+    const ext = path.extname(realPath).toLowerCase();
+    const mimeType = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 'image/png';
+
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).sendFile(realPath);
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      message: sanitizeError(err)
+    });
+  }
+};
+
+export const closeDoclingPreview = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const token = req.headers['x-docling-preview-token'] as string;
+    const userId = (req as any).user?._id;
+
+    if (!userId) {
+      res.status(401).json({ success: false, message: 'Chưa xác thực.' });
+      return;
+    }
+
+    if (!token) {
+      res.status(401).json({ success: false, message: 'Thiếu mã token.' });
+      return;
+    }
+
+    const closed = await DoclingPreviewSessionService.closeSession(token, String(userId), id);
+    if (!closed) {
+      res.status(403).json({ success: false, message: 'Không thể đóng phiên xem thử do quyền hoặc token không khớp.' });
+      return;
+    }
+
+    res.status(200).json({ success: true, message: 'Đóng phiên xem thử thành công.' });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      message: sanitizeError(err)
+    });
+  }
+};
 

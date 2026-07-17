@@ -124,3 +124,67 @@ export async function getAssetMetadata(publicId: string, resourceType: string = 
   });
 }
 
+/**
+ * Downloads a raw asset stored in Cloudinary server-side using a signed download URL.
+ * Validates that the downloaded file is a non-empty PDF within the 25MB limit.
+ */
+export async function downloadCloudinaryRawAsset(publicId: string, resourceType: string = 'raw'): Promise<Buffer> {
+  if (!publicId) {
+    throw new Error('Thiếu Cloudinary public ID để tải tài liệu.');
+  }
+
+  // Generate private signed URL using Cloudinary SDK
+  const signedUrl = cloudinary.utils.private_download_url(publicId, '', {
+    resource_type: resourceType,
+    type: 'upload'
+  });
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 seconds bounded timeout
+
+  try {
+    const response = await fetch(signedUrl, { signal: controller.signal });
+
+    if (!response.ok) {
+      throw new Error(`Máy chủ tài liệu trả về mã lỗi: ${response.status}`);
+    }
+
+    // Size validation - check Content-Length before reading when available
+    const contentLengthHeader = response.headers.get('content-length');
+    if (contentLengthHeader) {
+      const size = parseInt(contentLengthHeader, 10);
+      if (size > 25 * 1024 * 1024) {
+        throw new Error('Kích thước tệp vượt quá giới hạn cho phép (25MB).');
+      }
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    // Final buffer length check
+    if (!buffer || buffer.length === 0) {
+      throw new Error('Tải tệp từ Cloudinary không có dữ liệu.');
+    }
+
+    if (buffer.length > 25 * 1024 * 1024) {
+      throw new Error('Kích thước tệp thực tế vượt quá giới hạn cho phép (25MB).');
+    }
+
+    // Validate PDF magic bytes (%PDF)
+    if (buffer.length < 4 || buffer.toString('utf8', 0, 4) !== '%PDF') {
+      throw new Error('Tệp tải xuống không phải là định dạng PDF hợp lệ.');
+    }
+
+    return buffer;
+
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      throw new Error('Quá thời gian kết nối khi tải tệp tài liệu.');
+    }
+    const safeMessage = err.message || 'Lỗi không xác định khi tải tệp từ lưu trữ.';
+    throw new Error(safeMessage.replace(/https:\/\/[^\s]+/g, '[REDACTED_URL]'));
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+

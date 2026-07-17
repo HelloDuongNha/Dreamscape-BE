@@ -1,4 +1,5 @@
 import mongoose, { Document, Schema, Types } from 'mongoose';
+import type { StructuredTableData } from '../services/academic/types';
 
 export interface IAcademicChunk extends Document {
   sourceId?: Types.ObjectId;
@@ -8,6 +9,7 @@ export interface IAcademicChunk extends Document {
   sectionId: Types.ObjectId;
   text: string;
   html?: string;
+  tableData?: StructuredTableData;
   marker?: string;
   blockType?: string;
   embedding?: number[];
@@ -15,6 +17,48 @@ export interface IAcademicChunk extends Document {
   sectionOrder: number;
   chunkOrder: number;
 }
+
+const StructuredTableCellSchema = new Schema(
+  {
+    row: { type: Number, required: true, min: 0 },
+    column: { type: Number, required: true, min: 0 },
+    rowSpan: { type: Number, required: true, min: 1 },
+    columnSpan: { type: Number, required: true, min: 1 },
+    // Empty cells are meaningful in a rectangular table grid. Mongoose's
+    // string `required` validator rejects "", so preserve it explicitly.
+    text: { type: String, required: false, default: '' },
+    role: { type: String, enum: ['header', 'data'], required: true },
+  },
+  { _id: false }
+);
+
+const RawExtractedTableCellSchema = new Schema(
+  {
+    startRow: { type: Number, required: true, min: 0 },
+    endRow: { type: Number, required: true, min: 0 },
+    startColumn: { type: Number, required: true, min: 0 },
+    endColumn: { type: Number, required: true, min: 0 },
+    // Raw Docling output may also contain an intentionally empty grid cell.
+    text: { type: String, required: false, default: '' },
+    columnHeader: { type: Boolean, required: true },
+    rowHeader: { type: Boolean, required: true },
+  },
+  { _id: false }
+);
+
+const StructuredTableDataSchema = new Schema(
+  {
+    version: { type: Number, enum: [1], required: true },
+    source: { type: String, enum: ['docling', 'jats', 'html', 'other'], required: true },
+    reconstructionMethod: { type: String, required: true },
+    rowCount: { type: Number, required: true, min: 0 },
+    columnCount: { type: Number, required: true, min: 0 },
+    cells: { type: [StructuredTableCellSchema], required: true, default: [] },
+    rawCells: { type: [RawExtractedTableCellSchema], required: true, default: [] },
+    warnings: { type: [String], required: true, default: [] },
+  },
+  { _id: false }
+);
 
 const AcademicChunkSchema = new Schema<IAcademicChunk>(
   {
@@ -55,6 +99,10 @@ const AcademicChunkSchema = new Schema<IAcademicChunk>(
     },
     html: {
       type: String,
+      required: false,
+    },
+    tableData: {
+      type: StructuredTableDataSchema,
       required: false,
     },
     marker: {

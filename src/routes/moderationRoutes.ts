@@ -24,7 +24,11 @@ import {
   getSourcePreview,
   getContributionPdfInline,
   cacheContributionPdf,
-  deleteContributionPdf
+  deleteContributionPdf,
+  processUploadedPdfForContribution,
+  getDoclingPreview,
+  getDoclingPreviewFigure,
+  closeDoclingPreview
 } from '../controllers/moderationController';
 import { getKnowledgeRules } from '../controllers/knowledgeEvidenceController';
 
@@ -116,6 +120,7 @@ router.patch('/sources/:id/status', authMiddleware, isModerator, reviewSource);
 router.get('/sources/:id/preview', authMiddleware, isModerator, getSourcePreview);
 router.get('/sources/:id/pdf-inline', authMiddleware, isModerator, getContributionPdfInline);
 router.post('/sources/:id/cache-original-pdf', authMiddleware, isModerator, cacheContributionPdf);
+router.post('/sources/:id/process-uploaded-pdf', authMiddleware, isModerator, processUploadedPdfForContribution);
 router.delete('/sources/:id/original-pdf', authMiddleware, isModerator, deleteContributionPdf);
 router.post('/sources/upload-pdf', authMiddleware, isModerator, uploadPdfMiddleware, uploadPdfFile);
 router.post('/sources/:id/import-fulltext', authMiddleware, isModerator, importFullText);
@@ -143,5 +148,9 @@ router.get('/knowledge-rules', authMiddleware, isModerator, getKnowledgeRules);
 // router.post('/knowledge-rules/:ruleId/evidence-links', authMiddleware, isModerator, createEvidenceLink);
 // router.get('/knowledge-rules/:ruleId/evidence-links', authMiddleware, isModerator, getEvidenceLinks);
 // router.delete('/knowledge-rules/:ruleId/evidence-links/:linkId', authMiddleware, isModerator, removeEvidenceLink);
+
+router.post('/sources/:id/docling-preview', authMiddleware, isModerator, getDoclingPreview);
+router.get('/sources/:id/docling-preview/figure/:figureId', authMiddleware, isModerator, getDoclingPreviewFigure);
+router.delete('/sources/:id/docling-preview', authMiddleware, isModerator, closeDoclingPreview);
 
 export default router;

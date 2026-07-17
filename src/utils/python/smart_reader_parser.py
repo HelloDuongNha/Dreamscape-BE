@@ -5,6 +5,19 @@ import json
 import re
 import traceback
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pdf_metadata_classifier import (
+    is_narrow_standalone_boilerplate,
+    is_broad_boilerplate_with_layout,
+    matches_metadata_semantics,
+    matches_metadata_evidence,
+    is_main_content as is_main_content_impl
+)
+from pdf_layout_reconstructor import reconstruct_layout
+
+def is_main_content(text):
+    return is_main_content_impl(text, is_likely_heading, is_caption, is_list_item, is_body_paragraph)
+
 def log_error(msg):
     print(f"ERROR: {msg}", file=sys.stderr)
 
@@ -125,6 +138,38 @@ def is_body_paragraph(text):
         return True
     return False
 
+def normalize_header_footer(text):
+    if not text:
+        return ""
+    text = text.lower().strip()
+    # Normalize running header/footer page patterns like "page 1", "trang 2", "p. 3", "page 4 of 10" safely
+    # by replacing the numeric sequence with a token "#".
+    text = re.sub(r'\b(page|trang|p|pp)\.?\s*\d+(\s*(of|/)\s*\d+)?\b', r'\1 #', text)
+    # Also normalize trailing or leading standalone page numbers
+    text = re.sub(r'^\d+$', '#', text)
+    text = re.sub(r'\s*\d+\s*$', ' #', text)
+    text = re.sub(r'^\s*\d+\s*', '# ', text)
+    
+    # Strip punctuation, keeping alphanumeric characters and "#"
+    text = re.sub(r'[^\w\s#]', '', text)
+    return " ".join(text.split())
+
+def is_standalone_page_number(text):
+    trimmed = text.strip()
+    if not trimmed:
+        return False
+    lower = trimmed.lower()
+    # Matches patterns like "1", "Page 1", "Page 1 of 12", "1 / 12", "p. 1", "page 12"
+    if re.match(r'^(page|trang|p|pp)?\.?\s*\d+(\s*(of|/)\s*\d+)?$', lower):
+        return True
+    if re.match(r'^(page|trang|p|pp)?\.?\s*[ivxlc]+$', lower):
+        return True
+    if re.match(r'^\d+$', trimmed):
+        return True
+    return False
+
+# Extracted helpers are imported from pdf_metadata_classifier.py
+
 def normalize_text(text):
     if not text:
         return ""
@@ -236,179 +281,34 @@ def split_inline_enumerations(text):
             return parts
     return None
 
-def split_long_paragraph(text, max_len=1400):
-    pattern = re.compile(
-        r'(?<!\b[A-Z]\.)(?<!\b[A-Z][a-z]\.)(?<!\bet al\.)(?<!\be\.g\.)(?<!\bi\.e\.)(?<!\bvs\.)'
-        r'(?<!\bfig\.)(?<!\bFig\.)(?<!\bfigs\.)(?<!\bFigs\.)(?<!\btab\.)(?<!\bTab\.)'
-        r'(?<!\btabs\.)(?<!\bTabs\.)(?<!\bvol\.)(?<!\bVol\.)(?<!\bpp\.)(?<!\bno\.)(?<!\bNo\.)'
-        r'(?<!\bdr\.)(?<!\bDr\.)(?<!\bprof\.)(?<!\bProf\.)(?<!\beds\.)(?<!\bed\.)(?<=\.|\?|\!)\s+(?=[A-Z])'
-    )
-    sentences = pattern.split(text)
-    if len(sentences) <= 1:
-        return [text]
-    paragraphs = []
-    current_para = []
-    current_len = 0
-    for sen in sentences:
-        sen_strip = sen.strip()
-        if not sen_strip:
+def extract_page_lines(page):
+    page_dict = page.get_text("dict")
+    lines = []
+    block_no = 0
+    for b in page_dict.get("blocks", []):
+        if b.get("type") != 0 or "lines" not in b:
             continue
-        if current_para and (current_len > 1200 or current_len + len(sen_strip) > 1500):
-            paragraphs.append(" ".join(current_para))
-            current_para = [sen_strip]
-            current_len = len(sen_strip)
-        else:
-            current_para.append(sen_strip)
-            current_len += len(sen_strip) + 1
-    if current_para:
-        paragraphs.append(" ".join(current_para))
-    return paragraphs
-
-def split_block_into_subblocks(block, page_dict):
-    x0, y0, x1, y1, text, block_no, block_type = block
-    if block_type != 0:
-        return [block]
-    block_dict = None
-    if block_no < len(page_dict["blocks"]):
-        b = page_dict["blocks"][block_no]
-        bx0, by0, bx1, by1 = b["bbox"]
-        if abs(bx0 - x0) < 1.0 and abs(by0 - y0) < 1.0:
-            block_dict = b
-    if not block_dict:
-        for b in page_dict["blocks"]:
-            bx0, by0, bx1, by1 = b["bbox"]
-            if abs(bx0 - x0) < 2.0 and abs(by0 - y0) < 2.0 and abs(bx1 - x1) < 2.0 and abs(by1 - y1) < 2.0:
-                block_dict = b
-                break
-    geom_lines = []
-    if block_dict and "lines" in block_dict:
-        for line_dict in block_dict["lines"]:
-            line_text = "".join(span["text"] for span in line_dict["spans"])
-            avg_size = sum(span["size"] for span in line_dict["spans"]) / len(line_dict["spans"]) if line_dict["spans"] else 10.0
-            is_bold = any((span["flags"] & 16) or "bold" in span["font"].lower() for span in line_dict["spans"]) if line_dict["spans"] else False
+        for line_dict in b["lines"]:
+            span_texts = []
+            avg_size = 0.0
+            is_bold = False
+            spans = line_dict.get("spans", [])
+            if spans:
+                span_texts = [span["text"] for span in spans]
+                avg_size = sum(span["size"] for span in spans) / len(spans)
+                is_bold = any((span["flags"] & 16) or "bold" in span["font"].lower() for span in spans)
+            line_text = "".join(span_texts)
             lx0, ly0, lx1, ly1 = line_dict["bbox"]
-            geom_lines.append({"x0": lx0, "y0": ly0, "x1": lx1, "y1": ly1, "text": line_text, "size": avg_size, "is_bold": is_bold})
-    paragraphs_text = []
-    if geom_lines:
-        gaps = [geom_lines[i]["y0"] - geom_lines[i-1]["y1"] for i in range(1, len(geom_lines))]
-        median_gap = sorted(gaps)[len(gaps)//2] if gaps else 3.0
-        max_line_x1 = max(line["x1"] for line in geom_lines) if geom_lines else x1
-        current_para = []
-        for i, line in enumerate(geom_lines):
-            trimmed = line["text"].strip()
-            if not trimmed:
-                if current_para:
-                    paragraphs_text.append(reflow_text("\n".join(l["text"] for l in current_para)))
-                    current_para = []
-                continue
-            starts_new = False
-            if current_para:
-                prev = current_para[-1]
-                gap = line["y0"] - prev["y1"]
-                score = 0
-                strong_reasons = []
-                if gap > median_gap + 5.0:
-                    score += 6
-                    strong_reasons.append("large_gap")
-                if line["x0"] > prev["x0"] + 8:
-                    score += 4
-                    strong_reasons.append("indentation")
-                if is_likely_heading(trimmed):
-                    score += 10
-                    strong_reasons.append("heading_boundary")
-                if is_list_item(trimmed):
-                    score += 6
-                    strong_reasons.append("list_marker")
-                if "references" in trimmed.lower() or "tài liệu tham khảo" in trimmed.lower():
-                    score += 10
-                    strong_reasons.append("reference_boundary")
-                current_para_len = sum(len(l["text"]) for l in current_para)
-                if current_para_len > 1200:
-                    score += 6
-                    strong_reasons.append("long_paragraph_guard")
-                if prev["x1"] < max_line_x1 - 20:
-                    score += 2
-                if trimmed and trimmed[0].isupper():
-                    score += 1
-                if prev["text"].strip().endswith('-'):
-                    score -= 5
-                if trimmed and trimmed[0].islower():
-                    score -= 5
-                starts_new = (score >= 6 and len(strong_reasons) > 0)
-            if starts_new and current_para:
-                paragraphs_text.append(reflow_text("\n".join(l["text"] for l in current_para)))
-                current_para = [line]
-            else:
-                current_para.append(line)
-        if current_para:
-            paragraphs_text.append(reflow_text("\n".join(l["text"] for l in current_para)))
-    else:
-        # Fallback text segmentation
-        lines = [line.strip() for line in text.split('\n') if line.strip()]
-        current_para = []
-        for line in lines:
-            trimmed = line.strip()
-            starts_new = False
-            if current_para:
-                prev = current_para[-1].strip()
-                score = 0
-                strong_reasons = []
-                if is_likely_heading(trimmed):
-                    score += 10
-                    strong_reasons.append("heading_boundary")
-                if is_list_item(trimmed):
-                    score += 6
-                    strong_reasons.append("list_marker")
-                if "references" in trimmed.lower() or "tài liệu tham khảo" in trimmed.lower():
-                    score += 10
-                    strong_reasons.append("reference_boundary")
-                current_para_len = sum(len(l) for l in current_para)
-                if current_para_len > 1200:
-                    score += 6
-                    strong_reasons.append("long_paragraph_guard")
-                if trimmed and trimmed[0].isupper():
-                    score += 1
-                if prev.endswith('-'):
-                    score -= 5
-                if trimmed and trimmed[0].islower():
-                    score -= 5
-                starts_new = (score >= 6 and len(strong_reasons) > 0)
-            if starts_new and current_para:
-                paragraphs_text.append(reflow_text("\n".join(current_para)))
-                current_para = [line]
-            else:
-                current_para.append(line)
-        if current_para:
-            paragraphs_text.append(reflow_text("\n".join(current_para)))
-
-    final_blocks_text = []
-    for p_text in paragraphs_text:
-        if not p_text:
-            continue
-        inline_parts = split_inline_enumerations(p_text)
-        if inline_parts:
-            for part in inline_parts:
-                if part["type"] == "paragraph":
-                    for gp in split_long_paragraph(part["text"]):
-                        final_blocks_text.append({"text": gp, "type": "paragraph"})
-                else:
-                    final_blocks_text.append({"text": part["text"], "type": "list_item"})
-        else:
-            for gp in split_long_paragraph(p_text):
-                final_blocks_text.append({"text": gp, "type": "paragraph"})
-
-    subblocks = []
-    total_len = sum(len(part["text"]) for part in final_blocks_text) or 1
-    current_y = y0
-    for part in final_blocks_text:
-        part_text = part["text"]
-        part_len = len(part_text)
-        y_span = (y1 - y0) * part_len / total_len
-        part_y0 = current_y
-        part_y1 = current_y + y_span
-        current_y = part_y1
-        subblocks.append((x0, part_y0, x1, part_y1, part_text, block_no, block_type, part["type"]))
-    return subblocks
+            lines.append({
+                "x0": lx0, "y0": ly0,
+                "x1": lx1, "y1": ly1,
+                "text": line_text,
+                "size": avg_size,
+                "is_bold": is_bold,
+                "block_no": block_no
+            })
+        block_no += 1
+    return lines
 
 def detect_doi_fig_table(text):
     doi_match = re.search(r'(10\.\d{4,9}/[-._;()/:A-Z0-9]+)', text, re.IGNORECASE)
@@ -424,92 +324,6 @@ def detect_doi_fig_table(text):
                 "caption": text
             }
     return None
-
-def sort_page_blocks(blocks, page_width):
-    if not blocks:
-        return []
-    separators = []
-    other_blocks = []
-    for b in blocks:
-        x0, y0, x1, y1 = b[0], b[1], b[2], b[3]
-        width = x1 - x0
-        is_separator = (x0 < page_width * 0.4 and x1 > page_width * 0.6) or (width > page_width * 0.75)
-        if is_separator:
-            separators.append(b)
-        else:
-            other_blocks.append(b)
-    separators = sorted(separators, key=lambda x: x[1])
-    bands = []
-    last_y = 0.0
-    for sep in separators:
-        sep_y0 = sep[1]
-        sep_y1 = sep[3]
-        if sep_y0 > last_y:
-            bands.append({"type": "columns", "y_start": last_y, "y_end": sep_y0, "blocks": []})
-        bands.append({"type": "separator", "y_start": sep_y0, "y_end": sep_y1, "block": sep})
-        last_y = sep_y1
-    bands.append({"type": "columns", "y_start": last_y, "y_end": float('inf'), "blocks": []})
-    for b in other_blocks:
-        y_center = (b[1] + b[3]) / 2
-        assigned = False
-        for band in bands:
-            if band["type"] == "columns" and band["y_start"] <= y_center <= band["y_end"]:
-                band["blocks"].append(b)
-                assigned = True
-                break
-        if not assigned:
-            closest_band = None
-            min_dist = float('inf')
-            for band in bands:
-                if band["type"] == "columns":
-                    dist = min(abs(y_center - band["y_start"]), abs(y_center - band["y_end"]))
-                    if dist < min_dist:
-                        min_dist = dist
-                        closest_band = band
-            if closest_band:
-                closest_band["blocks"].append(b)
-    final_blocks = []
-    for band in bands:
-        if band["type"] == "separator":
-            final_blocks.append(band["block"])
-        elif band["type"] == "columns":
-            col_blocks = band["blocks"]
-            if not col_blocks:
-                continue
-            sorted_by_y = sorted(col_blocks, key=lambda b: b[1])
-            sub_bands = []
-            current_sub_band = []
-            current_y_end = -1.0
-            for b in sorted_by_y:
-                by0, by1 = b[1], b[3]
-                if not current_sub_band:
-                    current_sub_band.append(b)
-                    current_y_end = by1
-                elif by0 <= current_y_end + 12:
-                    current_sub_band.append(b)
-                    current_y_end = max(current_y_end, by1)
-                else:
-                    sub_bands.append(current_sub_band)
-                    current_sub_band = [b]
-                    current_y_end = by1
-            if current_sub_band:
-                sub_bands.append(current_sub_band)
-            for sub_band in sub_bands:
-                left_col = []
-                right_col = []
-                mid_x = page_width / 2
-                for b in sub_band:
-                    bx0, bx1 = b[0], b[2]
-                    bc = (bx0 + bx1) / 2
-                    if bc < mid_x:
-                        left_col.append(b)
-                    else:
-                        right_col.append(b)
-                left_col = sorted(left_col, key=lambda x: x[1])
-                right_col = sorted(right_col, key=lambda x: x[1])
-                final_blocks.extend(left_col)
-                final_blocks.extend(right_col)
-    return final_blocks
 
 def main():
     if len(sys.argv) < 2:
@@ -542,73 +356,101 @@ def main():
         total_char_count = 0
         has_detected_sections = False
         has_structured_references = False
-        ref_indices = []
 
         log_info(f"Starting parsing for PDF: {pdf_path}")
+
+        # Deduplication Pre-pass: Collect top and bottom candidate blocks across all pages
+        top_candidates = {}
+        bottom_candidates = {}
 
         for page_num in range(len(doc)):
             page = doc[page_num]
             rect = page.rect
-            width, height = rect.width, rect.height
-            raw_blocks = page.get_text("blocks")
-            page_dict = page.get_text("dict")
+            height = rect.height
             
-            split_raw_blocks = []
-            for b in raw_blocks:
-                split_raw_blocks.extend(split_block_into_subblocks(b, page_dict))
-
-            filtered_blocks = []
-            for b in split_raw_blocks:
-                x0, y0, x1, y1, text, block_no, block_type, inner_type = b
-                if block_type != 0 or not text.strip():
+            lines = extract_page_lines(page)
+            for line in lines:
+                text = line["text"]
+                if not text.strip():
                     continue
-                if page_num > 0 and y0 < height * 0.08:
+                
+                norm = normalize_header_footer(text)
+                if not norm:
                     continue
-                if y1 > height * 0.92:
-                    continue
-                filtered_blocks.append(b)
+                
+                # Check top region (top 12%)
+                if line["y0"] < height * 0.12:
+                    if norm not in top_candidates:
+                        top_candidates[norm] = set()
+                    top_candidates[norm].add(page_num)
+                
+                # Check bottom region (bottom 12%)
+                if line["y1"] > height * 0.88:
+                    if norm not in bottom_candidates:
+                        bottom_candidates[norm] = set()
+                    bottom_candidates[norm].add(page_num)
 
-            sorted_blocks = sort_page_blocks(filtered_blocks, width)
+        repeated_headers = {norm for norm, pages in top_candidates.items() if len(pages) >= 2}
+        repeated_footers = {norm for norm, pages in bottom_candidates.items() if len(pages) >= 2}
 
-            # Emit page break separator
-            raw_blocks_flow.append({
-                "blockType": "page_break",
-                "text": f"Page {page_num + 1}",
-                "marker": None,
-                "html": f"<div class=\"page-break\">Page {page_num + 1}</div>",
-                "pageNumber": page_num + 1
-            })
+        # Main Ingestion Pass
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            rect = page.rect
+            width, height = rect.width, rect.height
+            
+            lines = extract_page_lines(page)
+            
+            # Delegate layout reconstruction to pdf_layout_reconstructor
+            reconstructed_blocks = reconstruct_layout(
+                lines, width, height, page_num, doc_title,
+                repeated_headers, repeated_footers,
+                is_likely_heading, is_caption, is_list_item, is_body_paragraph,
+                normalize_header_footer, is_standalone_page_number
+            )
 
-            for b in sorted_blocks:
-                x0, y0, x1, y1, text, block_no, block_type, inner_type = b
-                text_cleaned = reflow_text(text)
+            for b in reconstructed_blocks:
+                stype = b["blockType"]
+                text_cleaned = b["text"].strip()
                 if not text_cleaned:
                     continue
 
                 total_word_count += len(text_cleaned.split())
                 total_char_count += len(text_cleaned)
 
-                stype = "paragraph"
                 marker_val = None
                 html_val = None
 
-                if starts_with_metadata_prefix(text_cleaned):
-                    stype = "metadata"
-                elif inner_type == "list_item" or is_list_item(text_cleaned):
-                    stype = "list_item"
+                if stype == "list_item":
                     marker_val, clean_body = extract_list_marker(text_cleaned)
                     text_cleaned = clean_body
-                elif is_likely_heading(text_cleaned):
-                    stype = "heading"
+                elif stype == "heading":
                     has_detected_sections = True
-                elif is_caption(text_cleaned):
-                    stype = "table" if text_cleaned.lower().startswith(('table', 'bảng')) else "figure"
                 
                 # Check DOI fig/table
                 doi_fig_table = detect_doi_fig_table(text_cleaned)
                 if doi_fig_table:
                     stype = doi_fig_table["type"]
                     html_val = f"<div class=\"{stype}-placeholder\">{text_cleaned}</div>"
+
+                # Check inline lists within body paragraphs to preserve list marker behavior
+                if stype == "paragraph":
+                    inline_parts = split_inline_enumerations(text_cleaned)
+                    if inline_parts:
+                        for part in inline_parts:
+                            ptype = part["type"]
+                            ptext = part["text"].strip()
+                            pmarker = None
+                            if ptype == "list_item":
+                                pmarker, ptext = extract_list_marker(ptext)
+                            raw_blocks_flow.append({
+                                "blockType": ptype,
+                                "text": ptext,
+                                "marker": pmarker,
+                                "html": None,
+                                "pageNumber": page_num + 1
+                            })
+                        continue
 
                 raw_blocks_flow.append({
                     "blockType": stype,
@@ -623,10 +465,8 @@ def main():
         # Re-group raw_blocks_flow into clean sections
         sections = []
         current_section = None
-        global_order = 0
         section_order = 0
 
-        # Heuristic search for abstract or title heading
         for b in raw_blocks_flow:
             is_sec_boundary = False
             boundary_type = "paragraph_section"
@@ -647,7 +487,7 @@ def main():
                 boundary_type = "metadata"
 
             # Check if title block exists
-            if not current_section and b["blockType"] != "page_break":
+            if not current_section:
                 is_sec_boundary = True
                 boundary_type = "title" if section_order == 0 else "paragraph_section"
 
@@ -672,8 +512,6 @@ def main():
                         html_markup = f"<h2>{b['text']}</h2>"
                     elif b["blockType"] == "list_item":
                         html_markup = f"<li>{b['text']}</li>"
-                    elif b["blockType"] == "page_break":
-                        html_markup = f"<div class=\"page-break\">{b['text']}</div>"
                     else:
                         html_markup = f"<p>{b['text']}</p>"
 

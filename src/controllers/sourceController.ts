@@ -49,6 +49,82 @@ export function normalizeUrl(url: string): string {
   return clean.replace(/\/$/, '');
 }
 
+function isValidOriginalFile(file: any): boolean {
+  if (!file) return false;
+  if (file.storageProvider === 'cloudinary') {
+    return !!(file.cloudinaryPublicId && file.cloudinarySecureUrl);
+  }
+  return !!(file.storageProvider && file.originalFileName);
+}
+
+async function reactivateSourceContribution(
+  contribution: any,
+  result: any,
+  submittedBy: any,
+  cleanNote: string | undefined
+): Promise<any> {
+  contribution.submittedBy = submittedBy;
+  contribution.doi = result.doi || contribution.doi;
+  contribution.normalizedDoi = result.doi || contribution.normalizedDoi;
+  contribution.pmcid = result.pmcid || contribution.pmcid;
+  contribution.normalizedPmcid = result.pmcid || contribution.normalizedPmcid;
+  contribution.url = result.sourceUrl || contribution.url;
+  contribution.normalizedUrl = result.sourceUrl ? normalizeUrl(result.sourceUrl) : contribution.normalizedUrl;
+  contribution.submittedNote = cleanNote || undefined;
+  contribution.reviewStatus = 'pending';
+  contribution.reviewedBy = undefined;
+  contribution.reviewedAt = undefined;
+  contribution.reviewNote = undefined;
+  contribution.title = result.title || contribution.title;
+  contribution.authors = result.authors || contribution.authors;
+  contribution.year = result.year || contribution.year;
+  contribution.license = result.license || contribution.license || 'all-rights-reserved';
+  contribution.allowedUse = result.allowedUse || contribution.allowedUse || 'metadata_only';
+  contribution.copyrightStatus = result.allowedUse === 'open_access_fulltext' ? 'copyrighted_with_open_access' : (contribution.copyrightStatus || 'paywalled');
+  
+  // Clear stale reader/processing state and statistics
+  contribution.fullTextStatus = result.fullTextAvailable ? 'available' : 'none';
+  contribution.readableInApp = false;
+  contribution.smartReaderStats = undefined;
+  contribution.extractionStatus = undefined;
+  contribution.extractionMethod = undefined;
+  contribution.extractionQuality = undefined;
+  contribution.pdfPageCount = undefined;
+  contribution.detectedLanguage = undefined;
+  contribution.detectedIdentifiers = undefined;
+  
+  // Retain newly resolved valid Original Document; otherwise do not retain a stale or partial stored-file block
+  if (isValidOriginalFile(result.originalFile)) {
+    contribution.originalFile = result.originalFile;
+  } else {
+    contribution.originalFile = undefined;
+  }
+
+  contribution.pdfUrl = result.pdfUrl || undefined;
+  contribution.htmlUrl = result.htmlUrl || undefined;
+  contribution.metadata = {
+    title: result.title,
+    authors: result.authors,
+    year: result.year,
+    journal: result.journal,
+    publisher: result.publisher,
+    doi: result.doi,
+    isbn: result.isbn,
+    url: result.sourceUrl,
+    pdfUrl: result.pdfUrl,
+    htmlUrl: result.htmlUrl,
+    allowedUse: result.allowedUse,
+    openAccessStatus: result.openAccessStatus,
+    oaStatus: result.openAccessStatus,
+    fullTextAvailable: result.fullTextAvailable,
+    warnings: result.warnings,
+    metadataProvider: result.metadataProvider
+  };
+
+  await contribution.save();
+  return contribution;
+}
+
 export function mapSourceOriginAndUrls(doc: any) {
   if (!doc) return doc;
   const obj = doc.toObject ? doc.toObject() : { ...doc };
@@ -337,48 +413,7 @@ export const contributeSource = async (req: Request, res: Response): Promise<voi
       // Reuse rejected contribution if same pmcid/doi to avoid unique index conflict
       const rejectedCont = await SourceContribution.findOne({ reviewStatus: 'rejected', $or: orConditions });
       if (rejectedCont) {
-        const rc = rejectedCont as any;
-        rc.submittedBy = submittedBy;
-        rc.doi = result.doi || rc.doi;
-        rc.normalizedDoi = result.doi || rc.normalizedDoi;
-        rc.pmcid = result.pmcid || rc.pmcid;
-        rc.normalizedPmcid = result.pmcid || rc.normalizedPmcid;
-        rc.url = result.sourceUrl || rc.url;
-        rc.normalizedUrl = result.sourceUrl ? normalizeUrl(result.sourceUrl) : rc.normalizedUrl;
-        rc.submittedNote = cleanNote || undefined;
-        rc.reviewStatus = 'pending';
-        rc.reviewedBy = undefined;
-        rc.reviewedAt = undefined;
-        rc.reviewNote = undefined;
-        rc.title = result.title || rc.title;
-        rc.authors = result.authors || rc.authors;
-        rc.year = result.year || rc.year;
-        rc.license = result.license || rc.license || 'all-rights-reserved';
-        rc.allowedUse = result.allowedUse || rc.allowedUse || 'metadata_only';
-        rc.copyrightStatus = result.allowedUse === 'open_access_fulltext' ? 'copyrighted_with_open_access' : (rc.copyrightStatus || 'paywalled');
-        rc.fullTextStatus = result.fullTextAvailable ? 'available' : 'none';
-        rc.readableInApp = false;
-        rc.pdfUrl = result.pdfUrl || undefined;
-        rc.htmlUrl = result.htmlUrl || undefined;
-        rc.metadata = {
-          title: result.title,
-          authors: result.authors,
-          year: result.year,
-          journal: result.journal,
-          publisher: result.publisher,
-          doi: result.doi,
-          isbn: result.isbn,
-          url: result.sourceUrl,
-          pdfUrl: result.pdfUrl,
-          htmlUrl: result.htmlUrl,
-          allowedUse: result.allowedUse,
-          openAccessStatus: result.openAccessStatus,
-          oaStatus: result.openAccessStatus,
-          fullTextAvailable: result.fullTextAvailable,
-          warnings: result.warnings,
-          metadataProvider: result.metadataProvider
-        };
-        await rejectedCont.save();
+        await reactivateSourceContribution(rejectedCont, result, submittedBy, cleanNote);
         try { await incrementSubmitted(submittedBy.toString()); } catch {}
         const rawInput = req.body.doi || req.body.pmcid || req.body.url || '';
         const resolverReport = await buildResolverReport(rawInput, result);
@@ -450,11 +485,7 @@ export const contributeSource = async (req: Request, res: Response): Promise<voi
       if (saveErr.code === 11000) {
         const recovered = await SourceContribution.findOne({ $or: orConditions.length > 0 ? orConditions : [{ _id: null }] });
         if (recovered && recovered.reviewStatus === 'rejected') {
-          recovered.reviewStatus = 'pending';
-          recovered.reviewedBy = undefined;
-          recovered.reviewedAt = undefined;
-          recovered.reviewNote = undefined;
-          await recovered.save();
+          await reactivateSourceContribution(recovered, result, submittedBy, cleanNote);
           res.status(201).json({ success: true, code: 'REACTIVATED', message: 'Đóng góp đã được kích hoạt lại.', data: recovered });
         } else if (recovered) {
           res.status(409).json({ success: false, code: 'DUPLICATE_CONTRIBUTION', message: 'Nguồn này đang chờ duyệt hoặc đã tồn tại.' });
@@ -1118,14 +1149,6 @@ export const contributePdfSource = async (req: Request, res: Response): Promise<
       finalTitle = metadataTitle;
     }
     
-    if (!finalTitle) {
-      res.status(400).json({
-        success: false,
-        message: 'Không thể tự động nhận diện tiêu đề từ tài liệu. Vui lòng nhập tiêu đề tài liệu.'
-      });
-      return;
-    }
-
     let parsedAuthors: string[] = [];
     if (authors) {
       if (Array.isArray(authors)) {
@@ -1190,28 +1213,20 @@ export const contributePdfSource = async (req: Request, res: Response): Promise<
       normalizedUrl: (bodyUrl || resolvedMeta?.sourceUrl) ? normalizeUrl(bodyUrl || resolvedMeta.sourceUrl) : undefined,
       submittedNote: cleanNote || undefined,
       reviewStatus: 'pending',
-      verificationStatus: finalDoi ? 'verified_doi' : 'manual',
-      allowedUse: 'metadata_only', // Safest default as per Phase 4C specifications
-      copyrightStatus: 'paywalled',
-      sourceQuality: finalDoi ? 'peer_reviewed' : 'informal',
-      fullTextStatus: 'available',
-      title: finalTitle,
+      title: finalTitle || undefined,
       authors: parsedAuthors.length > 0 ? parsedAuthors : undefined,
       year: parsedYear,
-      journal: finalJournal || undefined,
-      publisher: finalPublisher || undefined,
       originalFile: originalFileData,
       sourceOrigin: 'uploaded_pdf',
+      extractionStatus: 'uploaded',
       metadata: {
-        title: finalTitle,
+        title: finalTitle || undefined,
         authors: parsedAuthors,
         year: parsedYear,
         journal: finalJournal || undefined,
         publisher: finalPublisher || undefined,
         doi: finalDoi || undefined,
-        url: (bodyUrl || resolvedMeta?.sourceUrl) || undefined,
-        allowedUse: 'metadata_only',
-        warnings: ['Tệp được tải lên bởi người dùng và đang chờ duyệt bản quyền.']
+        url: (bodyUrl || resolvedMeta?.sourceUrl) || undefined
       }
     });
 
@@ -1221,23 +1236,88 @@ export const contributePdfSource = async (req: Request, res: Response): Promise<
     } catch (dbErr: any) {
       console.error('Failed to save source contribution to database:', dbErr);
       if (dbErr.code === 11000) {
-        // E11000 safety net: find rejected with same doi and reactivate
+        // E11000 safety net: find rejected with same doi/hash/url and reactivate
         const existingRejected = orConditions.length > 0
           ? await SourceContribution.findOne({ reviewStatus: 'rejected', $or: orConditions })
           : null;
         if (existingRejected) {
+          const oldPublicId = existingRejected.originalFile?.cloudinaryPublicId;
+          const oldResourceType = existingRejected.originalFile?.cloudinaryResourceType || 'raw';
+          const hasOldAsset = !!(existingRejected.originalFile?.storageProvider === 'cloudinary' && oldPublicId);
+          const newPublicId = uploadResult.public_id;
+
           existingRejected.reviewStatus = 'pending';
           existingRejected.reviewedBy = undefined;
           existingRejected.reviewedAt = undefined;
           existingRejected.reviewNote = undefined;
+
+          // Clear previous reader/processing/error states
+          existingRejected.readableInApp = false;
+          existingRejected.fullTextStatus = 'none';
+          existingRejected.smartReaderStats = undefined;
+          existingRejected.extractionStatus = 'uploaded';
+          existingRejected.extractionMethod = undefined;
+          existingRejected.extractionQuality = undefined;
+          existingRejected.pdfPageCount = undefined;
+          existingRejected.detectedLanguage = undefined;
+          existingRejected.detectedIdentifiers = undefined;
+
+          // Assign new uploaded file
           existingRejected.originalFile = contribution.originalFile;
-          await existingRejected.save();
-          // Clean up the newly uploaded duplicate from Cloudinary since we reused existing
-          try { await deleteAsset(uploadResult.public_id, uploadResult.resource_type); } catch {}
-          res.status(201).json({ success: true, code: 'REACTIVATED', message: 'Đóng góp trước bị từ chối đã được kích hoạt lại với PDF mới.', data: existingRejected });
+
+          // Retain new/refreshed metadata
+          existingRejected.title = contribution.title || existingRejected.title;
+          existingRejected.authors = contribution.authors || existingRejected.authors;
+          existingRejected.year = contribution.year || existingRejected.year;
+          existingRejected.doi = contribution.doi || existingRejected.doi;
+          existingRejected.normalizedDoi = contribution.normalizedDoi || existingRejected.normalizedDoi;
+          existingRejected.url = contribution.url || existingRejected.url;
+          existingRejected.normalizedUrl = contribution.normalizedUrl || existingRejected.normalizedUrl;
+          existingRejected.metadata = contribution.metadata || existingRejected.metadata;
+
+          try {
+            await existingRejected.save();
+            
+            // Delete the older asset only after the new state is saved successfully
+            // Never delete the older public ID when it is identical to the newly uploaded public ID
+            let warning: string | undefined;
+            if (hasOldAsset && oldPublicId && oldPublicId !== newPublicId) {
+              try {
+                const deleteResult = await deleteAsset(oldPublicId, oldResourceType);
+                if (deleteResult?.result !== 'ok' && deleteResult?.result !== 'not found') {
+                  warning = `Cảnh báo: Không thể xóa tệp cũ trên Cloudinary (${deleteResult?.result || 'error'}).`;
+                }
+              } catch (delErr: any) {
+                console.warn('Failed to clean up old PDF asset on reactivation:', delErr.message || delErr);
+                warning = `Cảnh báo: Không thể xóa tệp cũ trên Cloudinary: ${delErr.message || delErr}`;
+              }
+            }
+
+            res.status(201).json({
+              success: true,
+              code: 'REACTIVATED',
+              message: warning 
+                ? `Đóng góp trước bị từ chối đã được kích hoạt lại với PDF mới. ${warning}` 
+                : 'Đóng góp trước bị từ chối đã được kích hoạt lại với PDF mới.',
+              data: existingRejected
+            });
+          } catch (reactivateSaveErr: any) {
+            // A failed save must clean up the newly uploaded asset
+            try {
+              await deleteAsset(uploadResult.public_id, uploadResult.resource_type);
+            } catch (cleanupErr: any) {
+              console.error(`Failed to clean up newly uploaded Cloudinary asset ${uploadResult.public_id} on reactivate save failure:`, cleanupErr.message || cleanupErr);
+            }
+            // Raise the error so it does not save
+            throw reactivateSaveErr;
+          }
         } else {
-          // Non-recoverable duplicate — clean up Cloudinary and surface user-friendly error
-          try { await deleteAsset(uploadResult.public_id, uploadResult.resource_type); } catch {}
+          // Non-recoverable duplicate — clean up the newly uploaded asset
+          try {
+            await deleteAsset(uploadResult.public_id, uploadResult.resource_type);
+          } catch (cleanupErr: any) {
+            console.error(`Failed to clean up Cloudinary asset ${uploadResult.public_id}:`, cleanupErr.message || cleanupErr);
+          }
           res.status(409).json({ success: false, message: 'Không thể gửi đóng góp do trùng lặp dữ liệu.' });
         }
         return;
@@ -1518,3 +1598,27 @@ export const deleteOriginalPdf = async (req: Request, res: Response): Promise<vo
   }
 };
 
+import { runUploadedPdfImport } from '../services/academic/uploadedPdfImport.service';
+
+export const processUploadedPdfForApprovedSource = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const id = req.params.id as string;
+    const forceReplace = req.body.forceReplace === true;
+    const structuredFirst = req.body.structuredFirst === true;
+
+    const result = await runUploadedPdfImport({
+      targetType: 'approved_source',
+      targetId: id,
+      forceReplace,
+      structuredFirst,
+      userId: (req as any).user?._id
+    });
+
+    res.status(200).json(result);
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      message: err.message || 'Lỗi xử lý tệp PDF nguồn.'
+    });
+  }
+};

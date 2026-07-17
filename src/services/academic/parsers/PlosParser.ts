@@ -24,6 +24,32 @@ export function parsePlosHtml(htmlText: string): CanonicalBlocksOutput {
       });
     }
 
+    const abstractSelector = '.abstract, #abstract0, .abstract-content, [data-type="abstract"]';
+    const abstractContainer = $(abstractSelector).first();
+    if (abstractContainer.length > 0) {
+      const abstractHeading = abstractContainer.find('h1, h2, h3, h4').first().text().trim() || 'Abstract';
+      blocks.push({
+        blockType: 'heading',
+        semanticType: 'heading',
+        sectionHeading: null,
+        text: abstractHeading,
+        html: `<h2>${escapeHtml(abstractHeading)}</h2>`,
+        order: order++
+      });
+      abstractContainer.find('p').each((_, paragraph) => {
+        const text = $(paragraph).text().trim();
+        if (!text) return;
+        blocks.push({
+          blockType: 'paragraph',
+          semanticType: 'abstract',
+          sectionHeading: abstractHeading,
+          text,
+          html: `<p>${escapeHtml(text)}</p>`,
+          order: order++
+        });
+      });
+    }
+
     // Process main content
     const content = $('.article-text, article, body').first();
     let currentHeading: string | null = null;
@@ -33,6 +59,8 @@ export function parsePlosHtml(htmlText: string): CanonicalBlocksOutput {
       const tagName = el.tagName?.toLowerCase();
 
       if ($el.closest('.references, .reflist').length > 0) return;
+      if ($el.closest(abstractSelector).length > 0) return;
+      if ($el.parents('.figure, .table').length > 0) return;
 
       if (tagName === 'h1' || tagName === 'h2' || tagName === 'h3' || tagName === 'h4') {
         const hText = $el.text().trim();
@@ -44,6 +72,23 @@ export function parsePlosHtml(htmlText: string): CanonicalBlocksOutput {
             sectionHeading: null,
             text: hText,
             html: `<h2>${escapeHtml(hText)}</h2>`,
+            order: order++
+          });
+        }
+      } else if ($el.hasClass('figure')) {
+        const label = $el.find('.label, .figure-label').first().text().trim();
+        const caption = $el.find('.caption, figcaption').first().text().trim();
+        const text = `${label ? `${label}: ` : ''}${caption}`.trim();
+        const image = $el.find('img').first();
+        const imageUrl = image.attr('src') || image.attr('data-src') || image.attr('data-original') || '';
+        if (text && imageUrl) {
+          blocks.push({
+            blockType: 'figure',
+            semanticType: 'figure',
+            sectionHeading: currentHeading,
+            text,
+            html: `<div class="figure-block"><img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(text)}" class="figure-img" /><p class="caption"><strong>${escapeHtml(text)}</strong></p></div>`,
+            imageUrl,
             order: order++
           });
         }

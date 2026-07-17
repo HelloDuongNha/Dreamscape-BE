@@ -11,6 +11,47 @@ export function parseJatsXml(xmlText: string, pmcImageMap?: Map<string, string>)
     const $ = cheerio.load(xmlText, { xmlMode: true });
     const doi = $('article-id[pub-id-type="doi"]').first().text().trim();
 
+    const resolveGraphicUrl = (href: string): string => {
+      if (!href) return '';
+      const rawHref = href.trim();
+      if (/^https?:\/\//i.test(rawHref)) return rawHref;
+
+      const cleanHref = rawHref.replace(/^PMC\d+\//i, '').replace(/^info:doi\//i, '');
+      const filename = cleanHref.split('/').pop() || '';
+      if (pmcImageMap?.has(filename.toLowerCase())) {
+        return pmcImageMap.get(filename.toLowerCase()) || '';
+      }
+      if (pmcImageMap?.has(cleanHref.toLowerCase())) {
+        return pmcImageMap.get(cleanHref.toLowerCase()) || '';
+      }
+
+      if (doi.startsWith('10.1371/')) {
+        let figureDoi = cleanHref;
+        if (!figureDoi.startsWith('10.1371/')) {
+          const hrefToken = filename.replace(/\.(?:png|jpe?g|gif|tiff?|webp)$/i, '');
+          const articleToken = doi.split('/').pop() || '';
+          const shortArticleToken = articleToken.replace(/^journal\./i, '');
+          if (hrefToken.startsWith(`${shortArticleToken}.`)) {
+            figureDoi = `10.1371/journal.${hrefToken}`;
+          } else {
+            const suffix = hrefToken.match(/(?:^|\.)([gt]\d+)$/i)?.[1];
+            figureDoi = suffix ? `${doi}.${suffix}` : '';
+          }
+        }
+        if (figureDoi) {
+          return `https://journals.plos.org/plosone/article/figure/image?id=${figureDoi}&size=large`;
+        }
+      }
+
+      const pmcIdText = $('article-id[pub-id-type="pmcid"], article-id[pub-id-type="pmc"]').first().text().trim();
+      const pmcId = pmcIdText
+        ? (pmcIdText.toUpperCase().startsWith('PMC') ? pmcIdText : `PMC${pmcIdText}`)
+        : '';
+      return pmcId
+        ? `https://www.ncbi.nlm.nih.gov/pmc/articles/${pmcId}/bin/${cleanHref}`
+        : '';
+    };
+
     // 1. Title Extraction
     const articleTitle = $('article-title').first().text().trim();
     if (articleTitle) {
@@ -23,6 +64,50 @@ export function parseJatsXml(xmlText: string, pmcImageMap?: Map<string, string>)
         html: `<h1>${escapeHtml(title)}</h1>`,
         order: order++
       });
+    }
+
+    // JATS stores the article abstract in front matter, outside <body>. Emit it
+    // before body sections so every structured DOI/PDF-first import has the
+    // same Abstract heading and paragraphs.
+    const abstractNode = $('front article-meta abstract').first();
+    if (abstractNode.length > 0) {
+      const abstractHeading = abstractNode.children('title').first().text().trim() || 'Abstract';
+      blocks.push({
+        blockType: 'heading',
+        semanticType: 'heading',
+        sectionHeading: null,
+        text: abstractHeading,
+        html: `<h2>${escapeHtml(abstractHeading)}</h2>`,
+        order: order++
+      });
+
+      const abstractParagraphs = abstractNode.find('p').toArray();
+      if (abstractParagraphs.length > 0) {
+        abstractParagraphs.forEach((paragraph) => {
+          const text = $(paragraph).clone().find('title').remove().end().text().trim();
+          if (!text) return;
+          blocks.push({
+            blockType: 'paragraph',
+            semanticType: 'abstract',
+            sectionHeading: abstractHeading,
+            text,
+            html: `<p>${escapeHtml(text)}</p>`,
+            order: order++
+          });
+        });
+      } else {
+        const text = abstractNode.clone().children('title').remove().end().text().trim();
+        if (text) {
+          blocks.push({
+            blockType: 'paragraph',
+            semanticType: 'abstract',
+            sectionHeading: abstractHeading,
+            text,
+            html: `<p>${escapeHtml(text)}</p>`,
+            order: order++
+          });
+        }
+      }
     }
 
     // Helper to split inline list paragraph if it contains alphabetical or numerical lists
@@ -183,25 +268,10 @@ export function parseJatsXml(xmlText: string, pmcImageMap?: Map<string, string>)
               const fText = `${fLabel ? fLabel + ': ' : ''}${fCaption}`;
               const fGraphic = $(figEl).find('graphic').first();
               const fHref = fGraphic.attr('xlink:href') || fGraphic.attr('href') || '';
-              let fImgUrl = '';
+              const fImgUrl = resolveGraphicUrl(fHref);
               let fImgHtml = '';
-              if (fHref) {
-                const pmcIdText = $('article-id[pub-id-type="pmcid"], article-id[pub-id-type="pmc"]').first().text().trim();
-                const pmcId = pmcIdText ? (pmcIdText.toUpperCase().startsWith('PMC') ? pmcIdText : `PMC${pmcIdText}`) : '';
-                const cleanHref = fHref.replace(/^PMC\d+\//, '');
-                const filename = cleanHref.split('/').pop() || '';
-                if (fHref.startsWith('http')) {
-                  fImgUrl = fHref;
-                } else if (pmcImageMap && pmcImageMap.has(filename.toLowerCase())) {
-                  fImgUrl = pmcImageMap.get(filename.toLowerCase()) || '';
-                } else if (pmcImageMap && pmcImageMap.has(cleanHref.toLowerCase())) {
-                  fImgUrl = pmcImageMap.get(cleanHref.toLowerCase()) || '';
-                } else if (pmcId) {
-                  fImgUrl = `https://www.ncbi.nlm.nih.gov/pmc/articles/${pmcId}/bin/${cleanHref}`;
-                }
-                if (fImgUrl) {
-                  fImgHtml = `<img src="${escapeHtml(fImgUrl)}" alt="${escapeHtml(fText)}" class="figure-image" style="max-width: 100%; height: auto; display: block; margin: 12px auto;" />`;
-                }
+              if (fImgUrl) {
+                fImgHtml = `<img src="${escapeHtml(fImgUrl)}" alt="${escapeHtml(fText)}" class="figure-image" style="max-width: 100%; height: auto; display: block; margin: 12px auto;" />`;
               }
               blocks.push({
                 blockType: 'figure',
@@ -259,36 +329,15 @@ export function parseJatsXml(xmlText: string, pmcImageMap?: Map<string, string>)
           const graphic = $(child).find('graphic').first();
           const href = graphic.attr('xlink:href') || graphic.attr('href') || '';
           let imgHtml = '';
-          let imgUrl = '';
+          let imgUrl = resolveGraphicUrl(href);
           if (href) {
-            const pmcIdText = $('article-id[pub-id-type="pmcid"], article-id[pub-id-type="pmc"]').first().text().trim();
-            const pmcId = pmcIdText ? (pmcIdText.toUpperCase().startsWith('PMC') ? pmcIdText : `PMC${pmcIdText}`) : '';
             const cleanHref = href.replace(/^PMC\d+\//, '');
-            const filename = cleanHref.split('/').pop() || '';
-
-            if (href.startsWith('http')) {
-              imgUrl = href;
-            } else if (pmcImageMap && pmcImageMap.has(filename.toLowerCase())) {
-              imgUrl = pmcImageMap.get(filename.toLowerCase()) || '';
-            } else if (pmcImageMap && pmcImageMap.has(cleanHref.toLowerCase())) {
-              imgUrl = pmcImageMap.get(cleanHref.toLowerCase()) || '';
-            } else if (href.includes('10.1371/') || (doi && doi.startsWith('10.1371/'))) {
-              let cleanDoi = href.replace(/^info:doi\//, '');
-              if (!cleanDoi.includes('10.1371/')) {
-                const doiBase = doi || '';
-                cleanDoi = `${doiBase}.${cleanDoi}`.replace(/\.\.+/g, '.');
-              }
-              imgUrl = `https://journals.plos.org/plosone/article/figure/image?id=${cleanDoi}&size=large`;
-            } else if (doi && doi.startsWith('10.3389/')) {
+            if (!imgUrl && doi && doi.startsWith('10.3389/')) {
               const publisherId = $('article-id[pub-id-type="publisher-id"]').first().text().trim();
               if (publisherId) {
                 const frontiersFilename = cleanHref.replace(/\.[a-zA-Z0-9]+$/, '.webp');
                 imgUrl = `https://www.frontiersin.org/files/Articles/${publisherId}/xml-images/${frontiersFilename}`;
               }
-            }
-
-            if (!imgUrl && pmcId) {
-              imgUrl = `https://www.ncbi.nlm.nih.gov/pmc/articles/${pmcId}/bin/${cleanHref}`;
             }
 
             if (imgUrl) {

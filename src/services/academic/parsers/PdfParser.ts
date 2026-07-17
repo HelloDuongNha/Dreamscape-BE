@@ -72,6 +72,8 @@ export async function parsePdf(filePath: string): Promise<CanonicalBlocksOutput>
           semType = 'figure';
         } else if (btype === 'table') {
           semType = 'table';
+        } else if (btype === 'metadata') {
+          semType = 'metadata';
         } else if (btype === 'page_break') {
           semType = 'footnote'; // default fallback semantic type
         }
@@ -80,6 +82,7 @@ export async function parsePdf(filePath: string): Promise<CanonicalBlocksOutput>
           semType = 'abstract';
         } else if (sec.sectionType === 'metadata') {
           semType = 'metadata';
+          btype = 'metadata';
         } else if (sec.sectionType === 'references' || secHeading?.toUpperCase() === 'REFERENCES') {
           semType = 'reference';
           btype = 'reference';
