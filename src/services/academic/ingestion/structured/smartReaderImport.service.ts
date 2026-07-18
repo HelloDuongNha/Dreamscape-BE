@@ -8,7 +8,7 @@ import { normalizeDocument } from './documentNormalizer.service';
 import { validateQuality } from './qualityValidator';
 import { buildAndSaveSmartReaderData } from '../../reader/persistence/readerChunkBuilder.service';
 import { fetchUrlWithSafeRedirects } from '../../../infrastructure/security/ssrfGuard';
-import { downloadCloudinaryRawAsset } from '../../../storage/cloudinaryStorage.service';
+import { downloadOriginalPdfAsset } from '../../../storage/originalPdfStorage.service';
 import { deleteAsset } from '../../../storage/cloudinaryStorage.service';
 import AcademicChunk from '../../../../models/AcademicChunk';
 import { resolvePmcArchiveImages } from './pmcImageArchive.service';
@@ -867,9 +867,8 @@ export async function importSmartReaderForSource(
       let finalUrl = cand.url;
 
       if (cand.sourceType === 'uploaded_pdf') {
-        const publicId = source.originalFile?.cloudinaryPublicId;
-        if (!publicId) throw new Error('Missing Cloudinary publicId for uploaded PDF');
-        buffer = await downloadCloudinaryRawAsset(publicId);
+        if (!source.originalFile) throw new Error('Missing storage reference for uploaded PDF');
+        buffer = await downloadOriginalPdfAsset(source.originalFile);
         finalUrl = cand.url;
       } else {
         const downloadRes = await fetchUrlWithSafeRedirects(cand.url);

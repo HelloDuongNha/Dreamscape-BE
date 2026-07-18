@@ -4,8 +4,8 @@ import mongoose from 'mongoose';
 import AcademicSource from '../../models/AcademicSource';
 import SourceContribution from '../../models/SourceContribution';
 import { fetchUrlWithSafeRedirects } from '../infrastructure/security/ssrfGuard';
-import { processPdfUpload } from './pdfUpload.service';
-import { deleteAsset } from './cloudinaryStorage.service';
+import { processPdfUpload, toOriginalFileRecord } from './pdfUpload.service';
+import { deleteOriginalPdfAsset, hasStoredOriginalPdf } from './originalPdfStorage.service';
 
 export interface CacheAttemptSummary {
   url: string;
@@ -15,8 +15,7 @@ export interface CacheAttemptSummary {
 }
 
 function isValidOriginalPdfAsset(originalFile: any): boolean {
-  if (!originalFile || originalFile.storageProvider !== 'cloudinary') return false;
-  if (!originalFile.cloudinarySecureUrl) return false;
+  if (!hasStoredOriginalPdf(originalFile)) return false;
   
   const mime = originalFile.mimeType || '';
   const name = originalFile.originalFileName || '';
@@ -112,16 +111,13 @@ export async function cacheOriginalPdfForSource(
       status: 'already_cached',
       source,
       attemptedCandidates: [],
-      message: 'Tài liệu đã được lưu PDF gốc trên Cloudinary.'
+      message: 'Tài liệu đã được lưu trong kho PDF gốc.'
     };
   }
   
-  let oldPublicId: string | undefined;
-  let oldResourceType: string | undefined;
-  if (isValidOriginalPdfAsset(source.originalFile)) {
-    oldPublicId = source.originalFile?.cloudinaryPublicId;
-    oldResourceType = source.originalFile?.cloudinaryResourceType || 'raw';
-  }
+  const oldOriginalFile = isValidOriginalPdfAsset(source.originalFile)
+    ? (source.originalFile as any)?.toObject?.() || { ...source.originalFile }
+    : undefined;
   
   const candidates = collectOriginalPdfCandidates(source);
   if (candidates.length === 0) {
@@ -263,28 +259,16 @@ export async function cacheOriginalPdfForSource(
         );
         
         // 4. Update Mongoose source
-        source.originalFile = {
-          storageProvider: 'cloudinary',
-          originalFileName: uploadResult.original_filename,
-          mimeType: 'application/pdf',
-          fileSize: uploadResult.bytes,
-          cloudinaryPublicId: uploadResult.public_id,
-          cloudinarySecureUrl: uploadResult.secure_url,
-          cloudinaryResourceType: 'raw',
-          cloudinaryFormat: uploadResult.format,
-          uploadedBy: userId ? new mongoose.Types.ObjectId(userId) : undefined,
-          uploadedAt: new Date(),
-          fileHash: uploadResult.fileHash
-        };
+        source.originalFile = toOriginalFileRecord(uploadResult, userId ? new mongoose.Types.ObjectId(userId) : undefined);
         
         await source.save();
         
-        // ONLY after save succeeds, delete old Cloudinary asset
-        if (oldPublicId) {
+        // ONLY after save succeeds, delete the previous stored asset.
+        if (oldOriginalFile) {
           try {
-            await deleteAsset(oldPublicId, oldResourceType || 'raw');
+            await deleteOriginalPdfAsset(oldOriginalFile);
           } catch (deleteOldErr) {
-            console.warn(`Failed to delete old Cloudinary asset ${oldPublicId}:`, deleteOldErr);
+            console.warn('Failed to delete previous PDF asset:', deleteOldErr);
           }
         }
         
@@ -298,7 +282,7 @@ export async function cacheOriginalPdfForSource(
           status: force ? 'recached' : 'cached',
           source,
           attemptedCandidates,
-          message: force ? 'Cập nhật PDF từ nguồn online thành công.' : 'Lưu PDF gốc vào Cloudinary thành công.'
+          message: force ? 'Cập nhật PDF từ nguồn online thành công.' : 'Lưu PDF gốc vào Firebase Storage thành công.'
         };
       } finally {
         // Cleanup temp file
@@ -321,7 +305,7 @@ export async function cacheOriginalPdfForSource(
     status: 'cache_failed',
     source,
     attemptedCandidates,
-    message: force ? 'Không thể lấy PDF online mới. PDF đang lưu trên Cloudinary vẫn được giữ nguyên.' : 'Tất cả các lượt tải PDF tự động đều thất bại hoặc bị chặn bởi máy chủ nguồn.'
+    message: force ? 'Không thể lấy PDF online mới. PDF đang lưu vẫn được giữ nguyên.' : 'Tất cả các lượt tải PDF tự động đều thất bại hoặc bị chặn bởi máy chủ nguồn.'
   };
 }
 
@@ -346,16 +330,13 @@ export async function cacheOriginalPdfForContribution(
       status: 'already_cached',
       source,
       attemptedCandidates: [],
-      message: 'Tài liệu đã được lưu PDF gốc trên Cloudinary.'
+      message: 'Tài liệu đã được lưu trong kho PDF gốc.'
     };
   }
   
-  let oldPublicId: string | undefined;
-  let oldResourceType: string | undefined;
-  if (isValidOriginalPdfAsset(source.originalFile)) {
-    oldPublicId = source.originalFile?.cloudinaryPublicId;
-    oldResourceType = source.originalFile?.cloudinaryResourceType || 'raw';
-  }
+  const oldOriginalFile = isValidOriginalPdfAsset(source.originalFile)
+    ? (source.originalFile as any)?.toObject?.() || { ...source.originalFile }
+    : undefined;
   
   const candidates = collectOriginalPdfCandidates(source);
   if (candidates.length === 0) {
@@ -497,28 +478,16 @@ export async function cacheOriginalPdfForContribution(
         );
         
         // 4. Update Mongoose source
-        source.originalFile = {
-          storageProvider: 'cloudinary',
-          originalFileName: uploadResult.original_filename,
-          mimeType: 'application/pdf',
-          fileSize: uploadResult.bytes,
-          cloudinaryPublicId: uploadResult.public_id,
-          cloudinarySecureUrl: uploadResult.secure_url,
-          cloudinaryResourceType: 'raw',
-          cloudinaryFormat: uploadResult.format,
-          uploadedBy: userId ? new mongoose.Types.ObjectId(userId) : undefined,
-          uploadedAt: new Date(),
-          fileHash: uploadResult.fileHash
-        };
+        source.originalFile = toOriginalFileRecord(uploadResult, userId ? new mongoose.Types.ObjectId(userId) : undefined);
         
         await source.save();
         
-        // ONLY after save succeeds, delete old Cloudinary asset
-        if (oldPublicId) {
+        // ONLY after save succeeds, delete the previous stored asset.
+        if (oldOriginalFile) {
           try {
-            await deleteAsset(oldPublicId, oldResourceType || 'raw');
+            await deleteOriginalPdfAsset(oldOriginalFile);
           } catch (deleteOldErr) {
-            console.warn(`Failed to delete old Cloudinary asset ${oldPublicId}:`, deleteOldErr);
+            console.warn('Failed to delete previous PDF asset:', deleteOldErr);
           }
         }
         
@@ -532,7 +501,7 @@ export async function cacheOriginalPdfForContribution(
           status: force ? 'recached' : 'cached',
           source,
           attemptedCandidates,
-          message: force ? 'Cập nhật PDF từ nguồn online thành công.' : 'Lưu PDF gốc vào Cloudinary thành công.'
+          message: force ? 'Cập nhật PDF từ nguồn online thành công.' : 'Lưu PDF gốc vào Firebase Storage thành công.'
         };
       } finally {
         // Cleanup temp file
@@ -555,6 +524,6 @@ export async function cacheOriginalPdfForContribution(
     status: 'cache_failed',
     source,
     attemptedCandidates,
-    message: force ? 'Không thể lấy PDF online mới. PDF đang lưu trên Cloudinary vẫn được giữ nguyên.' : 'Tất cả các lượt tải PDF tự động đều thất bại hoặc bị chặn bởi máy chủ nguồn.'
+    message: force ? 'Không thể lấy PDF online mới. PDF đang lưu vẫn được giữ nguyên.' : 'Tất cả các lượt tải PDF tự động đều thất bại hoặc bị chặn bởi máy chủ nguồn.'
   };
 }

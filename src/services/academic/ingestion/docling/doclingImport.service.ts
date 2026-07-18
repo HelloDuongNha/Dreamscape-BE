@@ -3,7 +3,8 @@ import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
 import AcademicChunk from '../../../../models/AcademicChunk';
-import { deleteAsset, downloadCloudinaryRawAsset, uploadDocumentImage } from '../../../storage/cloudinaryStorage.service';
+import { deleteAsset, uploadDocumentImage } from '../../../storage/cloudinaryStorage.service';
+import { downloadOriginalPdfAsset, OriginalPdfReference } from '../../../storage/originalPdfStorage.service';
 import { compileExtractedDocument, CompileExtractedDocumentResult } from '../../reader/compile/documentCompiler.service';
 import { DoclingAdapterService } from './doclingAdapter.service';
 import { DoclingArtifactDescriptor } from '../../types/docling.types';
@@ -14,8 +15,9 @@ import { ExtractedDocument } from '../../types/extractedDocument.types';
 export interface DoclingImportInput {
   targetType: 'contribution' | 'approved_source';
   targetId: string;
-  originalFilePublicId: string;
+  originalFile: OriginalPdfReference;
   forceReplace?: boolean;
+  doOcr?: boolean;
 }
 
 export interface DoclingImportResult {
@@ -124,7 +126,7 @@ export async function runDoclingPdfImport(input: DoclingImportInput): Promise<Do
     throw new Error('Trình phân tích Docling chưa sẵn sàng trên máy chủ này.');
   }
 
-  const pdfBuffer = await downloadCloudinaryRawAsset(input.originalFilePublicId);
+  const pdfBuffer = await downloadOriginalPdfAsset(input.originalFile);
   const inputBase = path.resolve(getInputTempBase());
   const inputDir = fs.mkdtempSync(path.join(inputBase, 'docling-import-'));
   fs.chmodSync(inputDir, 0o700);
@@ -141,7 +143,7 @@ export async function runDoclingPdfImport(input: DoclingImportInput): Promise<Do
   const uploadedIds: string[] = [];
 
   try {
-    const run = await DoclingClientService.extractPdf(pdfPath, false);
+    const run = await DoclingClientService.extractPdf(pdfPath, input.doOcr === true);
     runCleanup = run.cleanup;
     if (!run.result.success) throw new Error(run.result.errorDetail || 'Docling không thể phân tích PDF.');
 

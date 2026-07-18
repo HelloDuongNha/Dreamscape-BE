@@ -33,7 +33,7 @@ export interface IAcademicSource extends Document {
   fullTextImportedAt?: Date;
   fullTextImportedBy?: Types.ObjectId;
   originalFile?: {
-    storageProvider: 'cloudinary' | 'local' | 'gridfs';
+    storageProvider: 'firebase' | 'cloudinary' | 'local' | 'gridfs';
     originalFileName: string;
     mimeType: string;
     fileSize: number;
@@ -41,6 +41,8 @@ export interface IAcademicSource extends Document {
     cloudinarySecureUrl?: string;
     cloudinaryResourceType?: 'image' | 'raw' | 'video';
     cloudinaryFormat?: string;
+    firebaseStorageBucket?: string;
+    firebaseStoragePath?: string;
     uploadedBy?: Types.ObjectId;
     uploadedAt?: Date;
     fileHash?: string;
@@ -179,7 +181,7 @@ const AcademicSourceSchema = new Schema<IAcademicSource>(
     originalFile: {
       storageProvider: {
         type: String,
-        enum: ['cloudinary', 'local', 'gridfs'],
+        enum: ['firebase', 'cloudinary', 'local', 'gridfs'],
       },
       originalFileName: String,
       mimeType: String,
@@ -188,6 +190,8 @@ const AcademicSourceSchema = new Schema<IAcademicSource>(
       cloudinarySecureUrl: String,
       cloudinaryResourceType: String,
       cloudinaryFormat: String,
+      firebaseStorageBucket: String,
+      firebaseStoragePath: String,
       uploadedBy: {
         type: Schema.Types.ObjectId,
         ref: 'User',

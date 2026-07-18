@@ -3,6 +3,10 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { DoclingExtractionResult, DoclingArtifactDescriptor } from '../../types/docling.types';
+import {
+  DOCLING_EXTRACTION_TIMEOUT_MS,
+  DOCLING_OCR_TIMEOUT_MS,
+} from '../../../../config/pdfLimits';
 
 // ─── Internal run result returned by extractPdf ───────────────────────────────
 export interface DoclingRunResult {
@@ -229,6 +233,9 @@ export class DoclingClientService {
       };
 
       // ── Timeout ──────────────────────────────────────────────────────────────
+      const extractionTimeoutMs = doOcr
+        ? DOCLING_OCR_TIMEOUT_MS
+        : DOCLING_EXTRACTION_TIMEOUT_MS;
       const timer = setTimeout(() => {
         settle(async () => {
           pyProcess.kill('SIGKILL');
@@ -240,10 +247,12 @@ export class DoclingClientService {
           });
           await fail('EXTRACTION_TIMEOUT', 'The Docling extraction timed out.');
         });
-      }, 120000);
+      }, extractionTimeoutMs);
 
       pyProcess.stdout.on('data', (chunk) => {
-        if (stdoutAccum.length < 10 * 1024 * 1024) stdoutAccum += chunk.toString();
+        // A 500+ page OCR book can legitimately produce more than 10 MB of
+        // structured JSON. Keep a bounded but book-sized response allowance.
+        if (stdoutAccum.length < 64 * 1024 * 1024) stdoutAccum += chunk.toString();
       });
 
       pyProcess.stderr.on('data', (chunk) => {

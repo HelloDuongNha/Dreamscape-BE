@@ -5,6 +5,7 @@ import { extractPdfTextLayer } from './pdfTextExtraction.service';
 import { enrichPdfMetadata } from './metadata/pdfMetadataEnrichment.service';
 import { importSmartReaderForSource } from '../structured/smartReaderImport.service';
 import { runDoclingPdfImport } from '../docling/doclingImport.service';
+import { hasStoredOriginalPdf } from '../../../storage/originalPdfStorage.service';
 
 export interface UploadedPdfImportInput {
   targetType: 'contribution' | 'approved_source';
@@ -46,6 +47,7 @@ export async function runUploadedPdfImport(
   input: UploadedPdfImportInput
 ): Promise<UploadedPdfImportResult> {
   const { targetType, targetId, forceReplace, userId, structuredFirst = false } = input;
+  let scannedPdfRequiresOcr = false;
 
   // 1. Load target document
   let target: any = null;
@@ -60,7 +62,7 @@ export async function runUploadedPdfImport(
   }
 
   // 2. Validate originalFile exists
-  if (!target.originalFile || !target.originalFile.cloudinaryPublicId) {
+  if (!target.originalFile || !hasStoredOriginalPdf(target.originalFile)) {
     throw new Error('Tài liệu không có tệp PDF gốc được tải lên.');
   }
 
@@ -94,39 +96,27 @@ export async function runUploadedPdfImport(
       force: forceReplace
     });
 
-    // 5. Handle scanned PDF
-    if (!extractedDoc.hasUsableTextLayer) {
-      if (targetType === 'contribution') {
-        target.extractionStatus = 'failed';
-        await target.save();
-      }
-      return {
-        success: false,
-        targetType,
-        targetId,
-        readerCreated: false,
-        requiresOcr: true,
-        selectedSource: 'none',
-        metadataEnriched: false,
-        message: 'PDF không có lớp văn bản đủ dùng, cần OCR.'
-      };
-    }
+    // 5. A scanned PDF no longer stops here. Metadata/JATS resolution needs a
+    // usable text layer, but Docling can continue with OCR below.
+    scannedPdfRequiresOcr = !extractedDoc.hasUsableTextLayer;
 
     // 6. Enrich metadata & resolve identifiers
     let metadataEnriched = false;
     let preferredSource: 'jats' | 'html' | 'pdf_text' = 'pdf_text';
     
-    try {
-      const enrichment = await enrichPdfMetadata({
-        targetType,
-        targetId,
-        userId,
-        extractedDocument: extractedDoc
-      });
-      metadataEnriched = enrichment.metadataEnriched;
-      preferredSource = enrichment.preferredSource;
-    } catch (enrichErr: any) {
-      console.warn('[PDF Import] Metadata enrichment failed, continuing with PDF text:', enrichErr.message);
+    if (!scannedPdfRequiresOcr) {
+      try {
+        const enrichment = await enrichPdfMetadata({
+          targetType,
+          targetId,
+          userId,
+          extractedDocument: extractedDoc
+        });
+        metadataEnriched = enrichment.metadataEnriched;
+        preferredSource = enrichment.preferredSource;
+      } catch (enrichErr: any) {
+        console.warn('[PDF Import] Metadata enrichment failed, continuing with PDF text:', enrichErr.message);
+      }
     }
 
     // Refresh target to pick up resolver/enrichment updates
@@ -137,7 +127,7 @@ export async function runUploadedPdfImport(
     }
 
     // 7. Select preferred parser & compile Smart Reader
-    if (structuredFirst && (preferredSource === 'jats' || preferredSource === 'html')) {
+    if (!scannedPdfRequiresOcr && structuredFirst && (preferredSource === 'jats' || preferredSource === 'html')) {
       if (targetType === 'contribution') {
         target.extractionStatus = 'fetching_preferred_source';
         await target.save();
@@ -191,15 +181,16 @@ export async function runUploadedPdfImport(
     // 8. Compile the uploaded PDF with Docling. PyMuPDF above is used only for
     // quick text-layer/identifier metadata checks, never for reader persistence.
     if (targetType === 'contribution') {
-      target.extractionStatus = 'compiling_reader';
+      target.extractionStatus = scannedPdfRequiresOcr ? 'ocr_processing' : 'compiling_reader';
       await target.save();
     }
 
     const doclingResult = await runDoclingPdfImport({
       targetType,
       targetId,
-      originalFilePublicId: target.originalFile.cloudinaryPublicId,
-      forceReplace: forceReplace === true
+      originalFile: target.originalFile,
+      forceReplace: forceReplace === true,
+      doOcr: scannedPdfRequiresOcr
     });
     const compileResult = doclingResult.compileResult;
 
@@ -239,7 +230,9 @@ export async function runUploadedPdfImport(
         pmcid: target.pmcid || undefined
       },
       smartReaderStats: compileResult.smartReaderStats,
-      message: 'Dựng bản đọc thông minh từ PDF bằng Docling thành công.'
+      message: scannedPdfRequiresOcr
+        ? 'OCR và dựng bản đọc thông minh từ PDF scan bằng Docling thành công.'
+        : 'Dựng bản đọc thông minh từ PDF bằng Docling thành công.'
     };
 
   } catch (err: any) {

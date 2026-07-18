@@ -5,9 +5,10 @@ import json
 import time
 import re
 import html as html_mod
+import importlib.util
 
 from docling.datamodel.base_models import InputFormat
-from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.datamodel.pipeline_options import OcrMacOptions, PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
 
 
@@ -382,6 +383,20 @@ def main():
         image_scale = 2.0
         pipeline_options = PdfPipelineOptions()
         pipeline_options.do_ocr = do_ocr
+        # Apple Vision gives substantially better Vietnamese diacritics than
+        # the generic OCR fallback on the local macOS runtime. Keep this
+        # conditional so Linux/Windows deployments continue using Docling's
+        # automatic OCR engine instead of importing a macOS-only dependency.
+        if (
+            do_ocr
+            and sys.platform == "darwin"
+            and importlib.util.find_spec("ocrmac") is not None
+        ):
+            pipeline_options.ocr_options = OcrMacOptions(
+                lang=["vi-VT", "en-US"],
+                force_full_page_ocr=True,
+                recognition="accurate",
+            )
         pipeline_options.do_table_structure = True
         pipeline_options.generate_picture_images = True
         pipeline_options.images_scale = image_scale
@@ -535,7 +550,9 @@ def main():
             "success": True,
         }
 
-        print(json.dumps(output))
+        # UTF-8 output avoids expanding every Vietnamese character into a
+        # six-byte ``\\uXXXX`` escape in large OCR books.
+        print(json.dumps(output, ensure_ascii=False))
 
     except Exception:
         print(json.dumps({

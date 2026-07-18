@@ -32,11 +32,17 @@ import { importFullTextForSource } from '../services/source/fullTextImport.servi
 import { resolveSourceImport } from '../services/source/sourceImportResolver.service';
 import { recordApproval, recordRejection } from '../services/contribution/contributionStats.service';
 import multer from 'multer';
+import {
+  PDF_MAX_FILE_SIZE_BYTES,
+  PDF_MAX_FILE_SIZE_LABEL,
+} from '../config/pdfLimits';
 import { v2 as cloudinary } from 'cloudinary';
-import { uploadPdf, deleteAsset } from '../services/storage/cloudinaryStorage.service';
+import { deleteAsset } from '../services/storage/cloudinaryStorage.service';
 import { sanitizeAcademicSourceData } from '../services/source/sourceSanitizer';
-import { processPdfUpload } from '../services/storage/pdfUpload.service';
+import { processPdfUpload, toOriginalFileRecord, deleteProcessedPdfUpload } from '../services/storage/pdfUpload.service';
 import { cacheOriginalPdfForContribution } from '../services/storage/originalPdfAsset.service';
+import { pipeline } from 'stream/promises';
+import { createOriginalPdfReadStream, deleteOriginalPdfAsset, hasStoredOriginalPdf } from '../services/storage/originalPdfStorage.service';
 
 const activeExtractions = new Set<string>();
 
@@ -56,7 +62,7 @@ export function mapSourceContribution(doc: any) {
   if (!doc) return doc;
   const obj = doc.toObject ? doc.toObject() : { ...doc };
   
-  const hasOriginalFile = obj.originalFile && (obj.originalFile.originalFileName || obj.originalFile.cloudinarySecureUrl);
+  const hasOriginalFile = hasStoredOriginalPdf(obj.originalFile);
   if (hasOriginalFile) {
     const orig = { ...obj.originalFile };
     
@@ -2420,7 +2426,7 @@ const storage = multer.diskStorage({
 const pdfUpload = multer({
   storage,
   limits: {
-    fileSize: 25 * 1024 * 1024 // 25MB limit
+    fileSize: PDF_MAX_FILE_SIZE_BYTES
   }
 });
 
@@ -2434,7 +2440,7 @@ export const uploadPdfMiddleware = (req: Request, res: Response, next: any) => {
       if (err.code === 'LIMIT_FILE_SIZE') {
         return res.status(400).json({
           success: false,
-          message: 'Kích thước tệp vượt quá giới hạn cho phép (25MB).'
+          message: `Kích thước tệp vượt quá giới hạn cho phép (${PDF_MAX_FILE_SIZE_LABEL}).`
         });
       }
       return res.status(400).json({
@@ -2477,19 +2483,7 @@ export const uploadPdfFile = async (req: Request, res: Response): Promise<void> 
     let savedContribution: any = null;
     const { sourceContributionId } = req.body;
 
-    const originalFileData = {
-      storageProvider: 'cloudinary' as const,
-      originalFileName: uploadResult.original_filename,
-      mimeType: 'application/pdf',
-      fileSize: uploadResult.bytes,
-      cloudinaryPublicId: uploadResult.public_id,
-      cloudinarySecureUrl: uploadResult.secure_url,
-      cloudinaryResourceType: uploadResult.resource_type as 'image' | 'raw' | 'video',
-      cloudinaryFormat: uploadResult.format,
-      uploadedBy: req.user?._id,
-      uploadedAt: new Date(),
-      fileHash: uploadResult.fileHash
-    };
+    const originalFileData = toOriginalFileRecord(uploadResult, req.user?._id);
 
     try {
       if (sourceContributionId) {
@@ -2502,6 +2496,9 @@ export const uploadPdfFile = async (req: Request, res: Response): Promise<void> 
           throw new Error('Không tìm thấy đóng góp nguồn (SourceContribution) tương ứng.');
         }
 
+        const oldOriginalFile = hasStoredOriginalPdf(contribution.originalFile)
+          ? { ...(contribution.originalFile as any).toObject?.(), ...contribution.originalFile }
+          : undefined;
         contribution.originalFile = originalFileData;
         if (!contribution.title) {
           contribution.title = uploadResult.original_filename.replace(/\.[^/.]+$/, '').replace(/_/g, ' ');
@@ -2517,6 +2514,13 @@ export const uploadPdfFile = async (req: Request, res: Response): Promise<void> 
         }
 
         await contribution.save();
+        if (oldOriginalFile) {
+          try {
+            await deleteOriginalPdfAsset(oldOriginalFile);
+          } catch (cleanupErr: any) {
+            console.warn('Uploaded the replacement PDF but could not delete the old asset:', cleanupErr.message);
+          }
+        }
         savedContribution = contribution;
       } else {
         // Create new SourceContribution marked as manual staging/moderator upload
@@ -2540,11 +2544,11 @@ export const uploadPdfFile = async (req: Request, res: Response): Promise<void> 
         savedContribution = contribution;
       }
     } catch (dbErr: any) {
-      // Prevent orphan Cloudinary assets: if DB save fails, clean up the asset
+      // Prevent orphan storage assets if DB save fails.
       try {
-        await deleteAsset(uploadResult.public_id, uploadResult.resource_type);
+        await deleteProcessedPdfUpload(uploadResult);
       } catch (cleanupErr: any) {
-        console.error(`Failed to clean up Cloudinary asset ${uploadResult.public_id}:`, cleanupErr.message);
+        console.error('Failed to clean up uploaded PDF asset:', cleanupErr.message);
       }
       throw dbErr;
     }
@@ -2553,9 +2557,7 @@ export const uploadPdfFile = async (req: Request, res: Response): Promise<void> 
       success: true,
       message: 'Tải lên PDF thành công.',
       data: {
-        public_id: uploadResult.public_id,
-        secure_url: uploadResult.secure_url,
-        resource_type: uploadResult.resource_type,
+        storageProvider: uploadResult.storageProvider,
         format: uploadResult.format,
         bytes: uploadResult.bytes,
         original_filename: uploadResult.original_filename,
@@ -2564,7 +2566,7 @@ export const uploadPdfFile = async (req: Request, res: Response): Promise<void> 
     });
 
   } catch (err: any) {
-    res.status(400).json({
+    res.status(err.status || 400).json({
       success: false,
       message: err.message || 'Lỗi khi xử lý hoặc tải lên tệp PDF.'
     });
@@ -2606,7 +2608,9 @@ export const deleteSource = async (req: Request, res: Response): Promise<void> =
       return;
     }
 
+    const originalFileRef = contribution.originalFile ? { ...(contribution.originalFile as any).toObject?.(), ...contribution.originalFile } : undefined;
     const publicId = contribution.originalFile?.cloudinaryPublicId;
+    const firebasePath = contribution.originalFile?.firebaseStoragePath;
     const storageProvider = contribution.originalFile?.storageProvider;
     let isAssetShared = false;
     if (publicId && storageProvider === 'cloudinary') {
@@ -2620,6 +2624,12 @@ export const deleteSource = async (req: Request, res: Response): Promise<void> =
       if (otherSourceCount > 0 || otherContributionCount > 0) {
         isAssetShared = true;
       }
+    } else if (firebasePath && storageProvider === 'firebase') {
+      const [otherSourceCount, otherContributionCount] = await Promise.all([
+        AcademicSource.countDocuments({ 'originalFile.firebaseStoragePath': firebasePath }),
+        SourceContribution.countDocuments({ _id: { $ne: contribution._id }, 'originalFile.firebaseStoragePath': firebasePath })
+      ]);
+      isAssetShared = otherSourceCount > 0 || otherContributionCount > 0;
     }
 
     const deletedCounts = {
@@ -2690,12 +2700,12 @@ export const deleteSource = async (req: Request, res: Response): Promise<void> =
       await session.endSession();
     }
 
-    if (publicId && storageProvider === 'cloudinary' && !isAssetShared) {
+    if (originalFileRef && !isAssetShared) {
       try {
-        await deleteAsset(publicId, contribution.originalFile?.cloudinaryResourceType || 'raw');
+        await deleteOriginalPdfAsset(originalFileRef);
         deletedCounts.cloudinaryAssets = 1;
-      } catch (cloudinaryErr: any) {
-        console.error('Failed to delete Cloudinary asset after DB commit:', cloudinaryErr);
+      } catch (storageErr: any) {
+        console.error('Failed to delete PDF asset after DB commit:', storageErr);
       }
     }
 
@@ -2708,7 +2718,9 @@ export const deleteSource = async (req: Request, res: Response): Promise<void> =
   }
 
   // 2. Check Cloudinary asset reuse for AcademicSource
+  const originalFileRef = source.originalFile ? { ...(source.originalFile as any).toObject?.(), ...source.originalFile } : undefined;
   const publicId = source.originalFile?.cloudinaryPublicId;
+  const firebasePath = source.originalFile?.firebaseStoragePath;
   const storageProvider = source.originalFile?.storageProvider;
   let isAssetShared = false;
   if (publicId && storageProvider === 'cloudinary') {
@@ -2719,6 +2731,12 @@ export const deleteSource = async (req: Request, res: Response): Promise<void> =
     if (otherSourceCount > 0) {
       isAssetShared = true;
     }
+  } else if (firebasePath && storageProvider === 'firebase') {
+    const otherSourceCount = await AcademicSource.countDocuments({
+      _id: { $ne: source._id },
+      'originalFile.firebaseStoragePath': firebasePath
+    });
+    if (otherSourceCount > 0) isAssetShared = true;
   }
 
   // Define counts object to track deleted items
@@ -2835,15 +2853,14 @@ export const deleteSource = async (req: Request, res: Response): Promise<void> =
     await session.endSession();
   }
 
-  // 5. Only after successful commit, delete the Cloudinary asset as a best-effort
-  if (publicId && storageProvider === 'cloudinary' && !isAssetShared) {
+  // 5. Only after successful commit, delete the stored PDF as a best-effort.
+  if (originalFileRef && !isAssetShared) {
     try {
-      const destroyRes = await deleteAsset(publicId, source.originalFile?.cloudinaryResourceType || 'raw');
-      console.log(`Cloudinary asset deleted: ${publicId}`, destroyRes);
+      await deleteOriginalPdfAsset(originalFileRef);
       deletedCounts.cloudinaryAssets = 1;
-    } catch (cloudinaryErr: any) {
-      console.error('Failed to delete Cloudinary asset after DB commit:', cloudinaryErr);
-      warnings.push(`Xóa tệp Cloudinary thất bại: ${cloudinaryErr.message || cloudinaryErr}`);
+    } catch (storageErr: any) {
+      console.error('Failed to delete PDF asset after DB commit:', storageErr);
+      warnings.push(`Xóa tệp PDF thất bại: ${storageErr.message || storageErr}`);
     }
   }
 
@@ -3316,6 +3333,16 @@ export const getContributionPdfInline = async (req: Request, res: Response): Pro
       return;
     }
 
+    if (hasStoredOriginalPdf(contribution.originalFile)) {
+      const filename = contribution.originalFile?.originalFileName || 'document.pdf';
+      const stream = await createOriginalPdfReadStream(contribution.originalFile!);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(filename)}`);
+      res.status(200);
+      await pipeline(stream, res);
+      return;
+    }
+
     let pdfUrl = '';
     let isCloudinary = false;
     let cloudinaryPublicId = '';
@@ -3468,59 +3495,31 @@ export const deleteContributionPdf = async (req: Request, res: Response): Promis
       return;
     }
 
-    // Check if there is a valid Cloudinary original PDF to delete
     const orig = source.originalFile as any;
-    if (!orig || !orig.cloudinaryPublicId || orig.storageProvider !== 'cloudinary') {
-      if (source.originalFile) {
-        source.originalFile = undefined;
-        await source.save();
-      }
+    if (!orig || !hasStoredOriginalPdf(orig)) {
       res.status(200).json({
         success: true,
         status: 'no_asset',
-        message: 'Không có PDF đã lưu trên Cloudinary.',
+        message: 'Không có PDF gốc đã lưu.',
         source: mapSourceContribution(source)
       });
       return;
     }
 
-    const publicId = orig.cloudinaryPublicId;
-    const resourceType = orig.cloudinaryResourceType || 'raw';
-
-    // Attempt to delete from Cloudinary
-    let cloudinaryStatus: 'deleted' | 'not_found' = 'deleted';
     try {
-      const deleteResult = await deleteAsset(publicId, resourceType);
-      if (deleteResult?.result === 'not found') {
-        cloudinaryStatus = 'not_found';
-      }
+      await deleteOriginalPdfAsset(orig);
     } catch (delErr: any) {
-      const errMsg = (delErr.message || '').toLowerCase();
-      if (errMsg.includes('not found') || errMsg.toLowerCase().includes('not_found')) {
-        cloudinaryStatus = 'not_found';
-      } else {
-        console.error(`Cloudinary delete failed for contribution ${publicId}:`, delErr.message);
-        res.status(500).json({
-          success: false,
-          message: `Lỗi khi xóa tệp trên Cloudinary: ${delErr.message}`,
-          error: delErr.message
-        });
-        return;
-      }
+      res.status(500).json({ success: false, message: 'Không thể xóa PDF khỏi kho lưu trữ.' });
+      return;
     }
 
-    // Clear originalFile from DB after successful Cloudinary delete or not_found
     source.originalFile = undefined;
     await source.save();
 
-    const message = cloudinaryStatus === 'not_found'
-      ? 'Tệp không còn tồn tại trên Cloudinary. Đã xóa thông tin lưu trữ trong hệ thống.'
-      : 'Đã xóa PDF gốc lưu trên Cloudinary thành công.';
-
     res.status(200).json({
       success: true,
-      status: cloudinaryStatus,
-      message,
+      status: 'deleted',
+      message: 'Đã xóa PDF gốc thành công.',
       source: mapSourceContribution(source)
     });
 
@@ -3558,4 +3557,3 @@ export const processUploadedPdfForContribution = async (req: Request, res: Respo
     });
   }
 };
-

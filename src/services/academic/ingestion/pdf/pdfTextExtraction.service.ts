@@ -4,9 +4,9 @@ import mongoose from 'mongoose';
 import SourceContribution from '../../../../models/SourceContribution';
 import AcademicSource from '../../../../models/AcademicSource';
 import { parsePdf } from './legacy/PdfParser';
-import { downloadCloudinaryRawAsset } from '../../../storage/cloudinaryStorage.service';
-import { PDFParse } from 'pdf-parse';
+import { downloadOriginalPdfAsset, hasStoredOriginalPdf } from '../../../storage/originalPdfStorage.service';
 import { ExtractedDocument, ExtractedPage, ExtractedBlock } from '../../types/extractedDocument.types';
+import { probePdfTextLayer } from './pdfTextLayerProbe.service';
 
 export interface ExtractPdfInput {
   targetType: 'contribution' | 'approved_source';
@@ -44,10 +44,9 @@ export async function extractPdfTextLayer(input: ExtractPdfInput): Promise<Extra
     throw new Error(`Không tìm thấy tài liệu với ID: ${targetId}`);
   }
 
-  // 2. Validate originalFile exists in Cloudinary
+  // 2. Validate originalFile exists in the configured original-PDF store.
   const originalFile = target.originalFile;
-  const publicId = originalFile?.cloudinaryPublicId;
-  if (!originalFile || !publicId || originalFile.storageProvider !== 'cloudinary') {
+  if (!originalFile || !hasStoredOriginalPdf(originalFile)) {
     throw new Error('Tài liệu không có tệp PDF gốc được lưu trữ trên hệ thống.');
   }
 
@@ -73,20 +72,52 @@ export async function extractPdfTextLayer(input: ExtractPdfInput): Promise<Extra
       await target.save();
     }
 
-    // 3. Download and validate PDF from Cloudinary raw private storage
-    const buffer = await downloadCloudinaryRawAsset(publicId);
+    // 3. Download and validate PDF from Firebase or legacy Cloudinary storage.
+    const buffer = await downloadOriginalPdfAsset(originalFile);
 
     fs.writeFileSync(tempPath, buffer);
     hasTempFile = true;
 
-    // 4. Retrieve exact physical page count via pdf-parse
-    let physicalPageCount = 0;
-    try {
-      const parser = new PDFParse({ data: buffer });
-      const infoResult = await parser.getInfo();
-      physicalPageCount = infoResult.total || 0;
-    } catch (parseErr: any) {
-      console.warn('[PDF Extraction] Failed to parse document info via pdf-parse:', parseErr.message);
+    // 4. Probe the text layer without running layout reconstruction. This is
+    // intentionally cheap even for very large scanned books and prevents the
+    // legacy 30-second parser from blocking OCR routing.
+    const probe = await probePdfTextLayer(tempPath);
+    const physicalPageCount = probe.pageCount;
+
+    if (!probe.hasUsableTextLayer) {
+      const pages: ExtractedPage[] = Array.from({ length: physicalPageCount }, (_, pageIndex) => ({
+        pageIndex,
+        physicalPageNumber: pageIndex + 1,
+        wordCount: 0,
+        characterCount: 0,
+        blocks: []
+      }));
+      const qualitySignals = {
+        pagesWithText: probe.pagesWithText,
+        emptyPageCount: Math.max(0, physicalPageCount - probe.pagesWithText),
+        averageCharactersPerPage: Math.round(probe.averageCharactersPerPage),
+        lowTextPageCount: Math.max(0, physicalPageCount - probe.pagesWithText)
+      };
+      const result: ExtractedDocument = {
+        pageCount: physicalPageCount,
+        pages,
+        totalWordCount: 0,
+        totalCharacterCount: probe.totalCharacterCount,
+        extractedVia: 'pdf_text',
+        hasUsableTextLayer: false,
+        qualitySignals
+      };
+
+      const hasValidReader = target.readableInApp || target.fullTextStatus === 'imported' || ['jats', 'html'].includes(target.extractionMethod || '');
+      const canOverwriteMethod = !hasValidReader || force;
+      target.pdfPageCount = physicalPageCount;
+      if (canOverwriteMethod) {
+        target.extractionMethod = undefined;
+        target.extractionQuality = 'poor';
+      }
+      if (targetType === 'contribution') target.extractionStatus = 'completed';
+      await target.save();
+      return result;
     }
 
     // 5. Parse layout blocks via existing PyMuPDF wrapper

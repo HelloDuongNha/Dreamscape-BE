@@ -19,7 +19,7 @@ export interface ISourceContribution extends Document {
   authors?: string[];
   year?: number;
   originalFile?: {
-    storageProvider?: 'cloudinary' | 'local' | 'gridfs';
+    storageProvider?: 'firebase' | 'cloudinary' | 'local' | 'gridfs';
     originalFileName?: string;
     mimeType?: string;
     fileSize?: number;
@@ -27,6 +27,8 @@ export interface ISourceContribution extends Document {
     cloudinarySecureUrl?: string;
     cloudinaryResourceType?: 'image' | 'raw' | 'video';
     cloudinaryFormat?: string;
+    firebaseStorageBucket?: string;
+    firebaseStoragePath?: string;
     uploadedBy?: Types.ObjectId;
     uploadedAt?: Date;
     fileHash?: string;
@@ -142,6 +144,8 @@ const SourceContributionSchema = new Schema<ISourceContribution>(
       cloudinarySecureUrl: String,
       cloudinaryResourceType: String,
       cloudinaryFormat: String,
+      firebaseStorageBucket: String,
+      firebaseStoragePath: String,
       uploadedBy: Schema.Types.ObjectId,
       uploadedAt: Date,
       fileHash: String,

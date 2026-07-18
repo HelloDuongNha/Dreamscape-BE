@@ -1,0 +1,4 @@
+# Isolated Docling runtime (Python 3.10+). Keep separate from BE/requirements.txt,
+# which belongs to the legacy PyMuPDF parser runtime.
+docling==2.113.0
+ocrmac==1.0.1; sys_platform == "darwin"

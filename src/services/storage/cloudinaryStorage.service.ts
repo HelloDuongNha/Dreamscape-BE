@@ -1,4 +1,9 @@
 import cloudinary from '../../config/cloudinary';
+import {
+  PDF_DOWNLOAD_TIMEOUT_MS,
+  PDF_MAX_FILE_SIZE_BYTES,
+  PDF_MAX_FILE_SIZE_LABEL,
+} from '../../config/pdfLimits';
 
 export interface CloudinaryUploadResult {
   public_id: string;
@@ -7,41 +12,6 @@ export interface CloudinaryUploadResult {
   format?: string;
   bytes: number;
   original_filename?: string;
-}
-
-/**
- * Uploads a PDF file to Cloudinary using resource_type 'raw' to preserve PDF structure.
- * @param filePath Local path to the temp file
- * @param filename Custom target filename/public_id
- */
-export async function uploadPdf(filePath: string, filename: string): Promise<CloudinaryUploadResult> {
-  return new Promise((resolve, reject) => {
-    cloudinary.uploader.upload(
-      filePath,
-      {
-        resource_type: 'raw',
-        folder: 'academic_sources',
-        public_id: filename,
-        use_filename: true,
-      },
-      (error, result) => {
-        if (error) {
-          reject(error);
-        } else if (!result) {
-          reject(new Error('Cloudinary returned empty response'));
-        } else {
-          resolve({
-            public_id: result.public_id,
-            secure_url: result.secure_url,
-            resource_type: result.resource_type as any,
-            format: result.format,
-            bytes: result.bytes,
-            original_filename: result.original_filename,
-          });
-        }
-      }
-    );
-  });
 }
 
 /**
@@ -126,7 +96,7 @@ export async function getAssetMetadata(publicId: string, resourceType: string = 
 
 /**
  * Downloads a raw asset stored in Cloudinary server-side using a signed download URL.
- * Validates that the downloaded file is a non-empty PDF within the 25MB limit.
+ * Validates that the downloaded file is a non-empty PDF within the configured limit.
  */
 export async function downloadCloudinaryRawAsset(publicId: string, resourceType: string = 'raw'): Promise<Buffer> {
   if (!publicId) {
@@ -140,7 +110,7 @@ export async function downloadCloudinaryRawAsset(publicId: string, resourceType:
   });
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 seconds bounded timeout
+  const timeoutId = setTimeout(() => controller.abort(), PDF_DOWNLOAD_TIMEOUT_MS);
 
   try {
     const response = await fetch(signedUrl, { signal: controller.signal });
@@ -153,8 +123,8 @@ export async function downloadCloudinaryRawAsset(publicId: string, resourceType:
     const contentLengthHeader = response.headers.get('content-length');
     if (contentLengthHeader) {
       const size = parseInt(contentLengthHeader, 10);
-      if (size > 25 * 1024 * 1024) {
-        throw new Error('Kích thước tệp vượt quá giới hạn cho phép (25MB).');
+      if (size > PDF_MAX_FILE_SIZE_BYTES) {
+        throw new Error(`Kích thước tệp vượt quá giới hạn cho phép (${PDF_MAX_FILE_SIZE_LABEL}).`);
       }
     }
 
@@ -166,8 +136,8 @@ export async function downloadCloudinaryRawAsset(publicId: string, resourceType:
       throw new Error('Tải tệp từ Cloudinary không có dữ liệu.');
     }
 
-    if (buffer.length > 25 * 1024 * 1024) {
-      throw new Error('Kích thước tệp thực tế vượt quá giới hạn cho phép (25MB).');
+    if (buffer.length > PDF_MAX_FILE_SIZE_BYTES) {
+      throw new Error(`Kích thước tệp thực tế vượt quá giới hạn cho phép (${PDF_MAX_FILE_SIZE_LABEL}).`);
     }
 
     // Validate PDF magic bytes (%PDF)
@@ -187,4 +157,3 @@ export async function downloadCloudinaryRawAsset(publicId: string, resourceType:
     clearTimeout(timeoutId);
   }
 }
-

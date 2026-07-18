@@ -6,10 +6,17 @@ export function collectCandidates(source: any): FullTextCandidate[] {
 
   // Check if it is an uploaded PDF (priority 1.0 confidence)
   const originalFile = source.originalFile;
-  if (originalFile && originalFile.storageProvider === 'cloudinary' && originalFile.cloudinarySecureUrl) {
+  const hasFirebasePdf = originalFile?.storageProvider === 'firebase'
+    && originalFile.firebaseStorageBucket
+    && originalFile.firebaseStoragePath;
+  const hasCloudinaryPdf = originalFile?.storageProvider === 'cloudinary'
+    && originalFile.cloudinaryPublicId;
+  if (hasFirebasePdf || hasCloudinaryPdf) {
     candidates.push({
       sourceType: 'uploaded_pdf',
-      url: originalFile.cloudinarySecureUrl,
+      // This opaque marker is never fetched. The importer resolves uploaded_pdf
+      // through the server-side storage adapter.
+      url: originalFile.cloudinarySecureUrl || 'stored://original-pdf',
       contentType: 'pdf',
       confidence: 1.0,
       reason: 'Tệp PDF tải lên bởi người dùng'
