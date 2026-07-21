@@ -3,11 +3,23 @@ import { logger } from './logger';
 export interface ILLMOutput {
   title: string;
   emotional_tone: string;
+  emotional_tone_key?: 'urgent_conflicted' | 'anxious' | 'fearful' | 'sad' | 'calm' | 'mixed' | 'neutral';
   summary: string;
   scientific_context_notes: {
     ruleId: string;
     note: string;
     confidence: number;
+    dreamEvidence?: string[];
+    insightTitle?: string;
+    boundary?: string;
+    ruleCode?: string;
+    ruleStatement?: string;
+    matchedDreamDetails?: string[];
+    evidenceQuotes?: {
+      sourceId: string;
+      chunkId: string;
+      quote: string;
+    }[];
     sources?: {
       sourceId: string;
       title: string;
@@ -23,23 +35,99 @@ export interface ILLMOutput {
     meaning: string;
     relevance: number;
     symbolValence: number;
+    origin?: 'dictionary' | 'contextual_observation';
+    dictionarySymbol?: string;
+    dreamEvidence?: string;
+    contextualTone?: 'threatening' | 'reassuring' | 'ambivalent' | 'neutral';
+    motifStats?: {
+      previousPersonalDreamCount: number;
+      similarDreamCount: number;
+      sameSequenceCount: number;
+      confirmedContextCount: number;
+    };
   }[];
   cultural_symbolic_notes: {
     source: string;
     note: string;
   }[];
   real_life_hypotheses: {
+    ruleId?: string | null;
     hypothesis: string;
     evidenceFromDream: string[];
     confidence: number;
     needsUserConfirmation: boolean;
     followUpQuestion: string;
+    reasonForAsking?: string;
+    ifYesMeaning?: string;
+    ifNoMeaning?: string;
+    questionType?: 'past' | 'present' | 'future';
+    verificationKey?: string;
+    questionBasis?: 'academic_rule' | 'dream_sequence' | 'sleep_context';
+    questionDimension?: string;
+    answerSemantics?: {
+      yes: 'supports' | 'weakens' | 'unresolved';
+      no: 'supports' | 'weakens' | 'unresolved';
+      unsure: 'unresolved';
+    };
+    sources?: {
+      sourceId: string;
+      title: string;
+      authors: string[];
+      year?: number;
+      journal?: string;
+      doi?: string;
+      chunkIds?: string[];
+    }[];
   }[];
-  dreamValenceScore: number;
+  interpretive_threads?: {
+    title: string;
+    dreamEvidence: string[];
+    reasoning: string;
+    alternativeExplanation: string;
+  }[];
+  practical_reflections?: {
+    suggestion: string;
+    rationale: string;
+  }[];
+  similar_dreams?: {
+    dreamId: string;
+    title: string;
+    excerpt: string;
+    createdAt: string;
+    authorDisplayName: string;
+    sameAuthor: boolean;
+    similarity: number;
+    matchedOn: string[];
+  }[];
+  feedback_revision?: {
+    hypothesis: string;
+    status: 'supported' | 'weakened' | 'unresolved';
+    interpretation: string;
+    ruleId?: string;
+  }[];
   confidence: number;
   core_analysis: string;
   disclaimer: string;
-  score_breakdown?: any;
+  feedback_conclusion?: string | null;
+  feedback_changed_paths?: string[];
+  feedback_analysis?: {
+    confirmedFacts: string[];
+    rejectedDirections: string[];
+    interpretation: string;
+    nextSteps: string[];
+  } | null;
+  grounding_summary?: {
+    narrativeUsed: boolean;
+    resolvedContextCount: number;
+    unresolvedContextCount: number;
+    dictionaryMotifCount: number;
+    contextualMotifCount: number;
+    appliedRuleCount: number;
+    explanatoryRuleCount: number;
+    similarDreamCount: number;
+    sleepContextFactCount: number;
+  };
+  analysis_mode?: 'llm_grounded' | 'structured_fallback';
 }
 
 /**
@@ -71,13 +159,10 @@ export function validateLLMOutput(data: any): data is ILLMOutput {
     return false;
   }
 
-  // Validate confidence and dreamValenceScore
+  // Confidence is retained for internal diagnostics; it is not presented as a
+  // psychological probability to the user.
   if (typeof data.confidence !== 'number' || data.confidence < 0.0 || data.confidence > 1.0) {
     logger.warn(`LLM validation failed: confidence must be a number between 0.0 and 1.0. Found: ${data.confidence}`);
-    return false;
-  }
-  if (typeof data.dreamValenceScore !== 'number' || data.dreamValenceScore < 0 || data.dreamValenceScore > 100) {
-    logger.warn(`LLM validation failed: dreamValenceScore must be a number between 0 and 100. Found: ${data.dreamValenceScore}`);
     return false;
   }
 
@@ -142,6 +227,14 @@ export function validateLLMOutput(data: any): data is ILLMOutput {
       logger.warn('LLM validation failed: symbolic_notes element missing or invalid symbolValence');
       return false;
     }
+    if (item.origin !== undefined && !['dictionary', 'contextual_observation'].includes(item.origin)) {
+      logger.warn('LLM validation failed: symbolic_notes element origin invalid');
+      return false;
+    }
+    if (item.contextualTone !== undefined && !['threatening', 'reassuring', 'ambivalent', 'neutral'].includes(item.contextualTone)) {
+      logger.warn('LLM validation failed: symbolic_notes element contextualTone invalid');
+      return false;
+    }
   }
 
   if (!Array.isArray(data.cultural_symbolic_notes)) {
@@ -190,6 +283,10 @@ export function validateLLMOutput(data: any): data is ILLMOutput {
       logger.warn('LLM validation failed: real_life_hypotheses element missing followUpQuestion');
       return false;
     }
+    if (item.questionType !== undefined && !['past', 'present', 'future'].includes(item.questionType)) {
+      logger.warn('LLM validation failed: real_life_hypotheses element questionType invalid');
+      return false;
+    }
   }
 
   return true;
@@ -209,6 +306,9 @@ export class OllamaServiceError extends Error {
  * Helper to fetch with timeout.
  */
 async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return fetch(url, options);
+  }
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -275,7 +375,11 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 export async function generateAnalysis(prompt: string): Promise<ILLMOutput> {
   const baseUrl = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
   const model = process.env.OLLAMA_MODEL || 'qwen2.5:14b';
-  const timeoutMs = parseInt(process.env.OLLAMA_TIMEOUT || '120000', 10);
+  // Generation is a background job and must not be cancelled merely because a
+  // local CPU model is slow. Operators may opt into a real deadline explicitly.
+  const timeoutMs = parseInt(process.env.OLLAMA_ANALYSIS_TIMEOUT || '0', 10);
+  const temperature = Number(process.env.OLLAMA_DREAM_TEMPERATURE || '0');
+  const seed = parseInt(process.env.OLLAMA_DREAM_SEED || '42', 10);
 
   try {
     const response = await fetchWithTimeout(
@@ -288,6 +392,10 @@ export async function generateAnalysis(prompt: string): Promise<ILLMOutput> {
           prompt,
           format: 'json',
           stream: false,
+          options: {
+            temperature: Number.isFinite(temperature) ? temperature : 0,
+            seed: Number.isFinite(seed) ? seed : 42,
+          },
         }),
       },
       timeoutMs
@@ -314,9 +422,6 @@ export async function generateAnalysis(prompt: string): Promise<ILLMOutput> {
     if (parsedResult && typeof parsedResult === 'object') {
       if (parsedResult.confidence !== undefined) {
         parsedResult.confidence = Math.min(1.0, Math.max(0.0, Number(parsedResult.confidence) || 0.0));
-      }
-      if (parsedResult.dreamValenceScore !== undefined) {
-        parsedResult.dreamValenceScore = Math.min(100, Math.max(0, Math.round(Number(parsedResult.dreamValenceScore) || 0)));
       }
       if (Array.isArray(parsedResult.scientific_context_notes)) {
         parsedResult.scientific_context_notes.forEach((note: any) => {

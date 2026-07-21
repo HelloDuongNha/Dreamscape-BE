@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import Dream, { IDream } from '../models/Dream';
 import Comment           from '../models/Comment';
 import { Types }         from 'mongoose';
+import crypto            from 'crypto';
 import Notification      from '../models/Notification';
 import User              from '../models/User';
 import { calculateRank } from '../services/user/rank.service';
@@ -9,6 +10,13 @@ import { runDreamAnalysis } from '../services/dream/analyze.service';
 import { OllamaServiceError } from '../services/infrastructure/llm.service';
 import { logger } from '../services/infrastructure/logger';
 import { retrieveSymbolsHybrid } from '../services/dream/symbolRetrieval.service';
+import {
+  buildFeedbackChangeSet,
+  buildFeedbackConclusion,
+  buildFeedbackRevision,
+  enrichScientificNotesForResponse,
+} from '../services/dream/dreamAnalysisGrounding.service';
+import { materializeDreamSymbolObservations } from '../services/dream/symbolObservation.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -45,9 +53,39 @@ function mapDreamResponse(dream: any): any {
   if (!dream) return dream;
   const obj = typeof dream.toObject === 'function' ? dream.toObject() : { ...dream };
   if (obj.ai_result) {
+    obj.ai_result = enrichScientificNotesForResponse(obj.ai_result, obj.retrievedContext, obj.content || obj.dreamText || '');
     obj.aiAnalysis = obj.ai_result;
+    obj.mood_tag = obj.ai_result.emotional_tone || obj.mood_tag || '';
   }
   return obj;
+}
+
+function normalizedDreamContent(value: string): string {
+  return value.normalize('NFKC').replace(/\s+/gu, ' ').trim();
+}
+
+function dreamContentHash(value: string): string {
+  return crypto.createHash('sha256').update(normalizedDreamContent(value), 'utf8').digest('hex');
+}
+
+async function syncDreamSymbolObservations(dream: any): Promise<void> {
+  try {
+    await materializeDreamSymbolObservations({
+      dreamId: new Types.ObjectId(String(dream._id)),
+      userId: new Types.ObjectId(String(dream.userId)),
+      isPublic: dream.privacy === 'public' || dream.is_public === true,
+      symbolicNotes: Array.isArray(dream.ai_result?.symbolic_notes)
+        ? dream.ai_result.symbolic_notes
+        : [],
+    });
+  } catch (error) {
+    // The primary analysis remains valid if the secondary observation index
+    // cannot be refreshed. The failure is visible in logs and can be replayed.
+    logger.warn('Could not refresh dream symbol observations.', {
+      dreamId: String(dream?._id || ''),
+      error: String(error),
+    });
+  }
 }
 
 // ─── POST /api/dreams ─────────────────────────────────────────────────────────
@@ -70,11 +108,25 @@ export const createDream = async (req: Request, res: Response): Promise<void> =>
       return;
     }
 
+    const normalizedContent = normalizedDreamContent(content);
+    const contentHash = dreamContentHash(normalizedContent);
+    const analysisStartedAt = new Date();
     const dream = await Dream.create({
       userId:    req.user!._id as Types.ObjectId,
-      content:   content.trim(),
+      content:   normalizedContent,
+      contentHash,
       mood_tag:  mood_tag?.trim() ?? '',
       is_public: is_public !== undefined ? is_public : true,
+      privacy: is_public === false ? 'private' : 'public',
+      analysisMetadata: {
+        currentStage: 'preparing',
+        progress: 8,
+        statusMessage: 'Đang chuẩn bị hồ sơ và ngữ cảnh phân tích...',
+        currentMiniStep: 'Đang đọc hồ sơ và tách phần lời kể cần phân tích.',
+        stageResults: {},
+        startedAt: analysisStartedAt,
+        lastProgressAt: analysisStartedAt,
+      },
       // ai_status and ai_result use schema defaults ('pending' and null)
     });
 
@@ -219,7 +271,8 @@ export const updateDream = async (req: Request, res: Response): Promise<void> =>
 
     // Archive the current content before overwriting
     dream.edit_history.push({ content: dream.content, editedAt: new Date() });
-    dream.content = content.trim();
+    dream.content = normalizedDreamContent(content);
+    dream.contentHash = dreamContentHash(dream.content);
 
     await dream.save();
 
@@ -323,6 +376,13 @@ export const toggleLike = async (req: Request, res: Response): Promise<void> => 
     const dream = await Dream.findById(new Types.ObjectId(dreamId));
     if (!dream) {
       res.status(404).json({ success: false, message: 'Dream not found.' });
+      return;
+    }
+    const populatedOwner: any = dream.userId;
+    const ownerId = String(populatedOwner?._id || populatedOwner);
+    const requesterId = String(req.user!._id);
+    if ((dream.privacy === 'private' || dream.is_public === false) && ownerId !== requesterId) {
+      res.status(403).json({ success: false, message: 'Bạn không có quyền xem giấc mơ này.' });
       return;
     }
 
@@ -538,6 +598,7 @@ export const getDream = async (req: Request, res: Promise<void> | any): Promise<
       res.status(404).json({ success: false, message: 'Dream not found.' });
       return;
     }
+    res.setHeader('Cache-Control', 'no-store');
     res.status(200).json({ success: true, data: mapDreamResponse(dream) });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Failed to fetch dream.', error: err });
@@ -579,7 +640,7 @@ export const analyzeDream = async (req: Request, res: Response): Promise<void> =
     logger.info('Starting dream analysis pipeline', { userId, visibility: targetVisibility });
 
     // Execute the analysis orchestration service
-    const { aiAnalysis, retrievedContext, strategyUsed } = await runDreamAnalysis(
+    const { aiAnalysis, retrievedContext, strategyUsed, analysisEmbedding } = await runDreamAnalysis(
       userId,
       dreamText,
       sleepContext || {}
@@ -594,6 +655,7 @@ export const analyzeDream = async (req: Request, res: Response): Promise<void> =
       privacy: targetVisibility,
       ai_status: 'completed',
       ai_result: aiAnalysis as any,
+      analysisEmbedding,
       // Auditable analysis fields
       dreamText: dreamText.trim(),
       sleepContext: sleepContext || {},
@@ -606,7 +668,7 @@ export const analyzeDream = async (req: Request, res: Response): Promise<void> =
         ragTopK: retrievedContext.componentA.usedSymbols.length,
         minSimilarityScore: parseFloat(process.env.SYMBOL_RAG_MIN_SCORE || '0.55'),
         vectorBackend: retrievedContext.componentA.retrievalConfig.vectorBackend,
-        analysisVersion: '1.0.0',
+        analysisVersion: '2.0.0-grounded',
         generatedAt: new Date()
       } as any
     });
@@ -619,6 +681,7 @@ export const analyzeDream = async (req: Request, res: Response): Promise<void> =
     }
 
     await savedDream.save();
+    await syncDreamSymbolObservations(savedDream);
 
     // Logging: Log retrieval counts, model name, validation status, and saved dream ID.
     // Never log full dreamText in production.
@@ -732,22 +795,36 @@ export const runBackgroundAnalysis = async (
   sleepContext: any
 ): Promise<void> => {
   logger.info(`Starting background analysis for dream ${dreamId}`);
-
-  const analysisPromise = runDreamAnalysis(userId, content, sleepContext || {});
-  
-  // Timeout guard (90 seconds = 90000ms)
-  const timeoutMs = 90000;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => {
-      reject(new Error("Phân tích AI mất quá nhiều thời gian. Vui lòng thử lại sau."));
-    }, timeoutMs);
-  });
+  const analysisStartedAt = new Date();
 
   try {
-    const { aiAnalysis, retrievedContext, strategyUsed } = await Promise.race([
-      analysisPromise,
-      timeoutPromise
-    ]);
+    // Local models can legitimately take several minutes. Do not turn an estimate
+    // into a cancellation deadline; the job remains pending until it finishes or
+    // the provider returns a real error.
+    const { aiAnalysis, retrievedContext, strategyUsed, analysisEmbedding } = await runDreamAnalysis(
+      userId,
+      content,
+      sleepContext || {},
+      async stage => {
+        const progressFields: Record<string, unknown> = {
+          'analysisMetadata.currentStage': stage.stage,
+          'analysisMetadata.progress': stage.progress,
+          'analysisMetadata.statusMessage': stage.message,
+          'analysisMetadata.currentMiniStep': stage.miniStep || '',
+          'analysisMetadata.startedAt': analysisStartedAt,
+          'analysisMetadata.lastProgressAt': new Date(),
+        };
+        if (stage.resultSummary) {
+          progressFields[`analysisMetadata.stageResults.${stage.stage}`] = stage.resultSummary;
+        }
+        await Dream.updateOne(
+          { _id: dreamId, ai_status: 'pending' },
+          {
+            $set: progressFields,
+          }
+        );
+      },
+    );
 
     // Late Overwrite Protection: re-read the dream from database
     const freshDream = await Dream.findById(dreamId);
@@ -764,7 +841,10 @@ export const runBackgroundAnalysis = async (
     // Save completed result
     freshDream.ai_status = 'completed';
     freshDream.ai_result = aiAnalysis as any;
+    freshDream.mood_tag = aiAnalysis.emotional_tone || '';
+    freshDream.analysisEmbedding = analysisEmbedding;
     freshDream.retrievedContext = retrievedContext as any;
+    const progressHistory = (freshDream.analysisMetadata as any)?.stageResults || {};
     freshDream.analysisMetadata = {
       strategyUsed,
       llmModel: process.env.OLLAMA_MODEL || 'qwen2.5:14b',
@@ -772,8 +852,15 @@ export const runBackgroundAnalysis = async (
       ragTopK: retrievedContext.componentA.usedSymbols.length,
       minSimilarityScore: parseFloat(process.env.SYMBOL_RAG_MIN_SCORE || '0.55'),
       vectorBackend: retrievedContext.componentA.retrievalConfig.vectorBackend,
-      analysisVersion: '1.0.0',
-      generatedAt: new Date()
+      analysisVersion: '2.0.0-grounded',
+      currentStage: 'completed',
+      progress: 100,
+      statusMessage: 'Phân tích hoàn tất.',
+      currentMiniStep: 'Kết quả đã sẵn sàng.',
+      stageResults: progressHistory,
+      startedAt: analysisStartedAt,
+      generatedAt: new Date(),
+      durationMs: Date.now() - analysisStartedAt.getTime(),
     } as any;
 
     // Remove duplicate aiAnalysis if any
@@ -783,6 +870,21 @@ export const runBackgroundAnalysis = async (
     }
 
     await freshDream.save();
+    await syncDreamSymbolObservations(freshDream);
+    try {
+      await Notification.create({
+        recipientId: freshDream.userId,
+        senderId: freshDream.userId,
+        type: 'dream_analysis',
+        postId: freshDream._id,
+      });
+    } catch (notificationError) {
+      // The analysis result is already durable. A notification failure must not
+      // downgrade a completed analysis or make the client retry the LLM job.
+      logger.warn(`Could not persist completion notification for dream ${dreamId}`, {
+        error: notificationError instanceof Error ? notificationError.message : String(notificationError),
+      });
+    }
     logger.info(`Background analysis completed successfully for dream ${dreamId}`);
   } catch (err: any) {
     logger.error(`Background analysis failed for dream ${dreamId}`, err);
@@ -803,7 +905,6 @@ export const runBackgroundAnalysis = async (
           symbolic_notes: [],
           cultural_symbolic_notes: [],
           real_life_hypotheses: [],
-          dreamValenceScore: 50,
           confidence: 0,
           core_analysis: "Đã xảy ra lỗi trong quá trình phân tích giấc mơ. Vui lòng thử lại.",
           disclaimer: "Phân tích không thành công do lỗi hệ thống hoặc quá hạn thời gian."
@@ -849,6 +950,10 @@ export const analyzeDreamById = async (req: Request, res: Response): Promise<voi
     // Update status to pending
     dream.ai_status = 'pending';
     dream.ai_result = null;
+    // Feedback is bound to the exact generated question text. A new analysis may
+    // produce different questions, so old answers must not be counted against
+    // the replacement hypotheses.
+    dream.realLifeHypothesesFeedback = [];
     await dream.save();
 
     // Start background analysis once
@@ -874,9 +979,10 @@ export const saveHypothesisFeedback = async (req: Request, res: Response): Promi
   try {
     const dreamId = String(req.params.id);
     const userId = String(req.user!._id);
-    const { hypothesisIndex, answer } = req.body as {
-      hypothesisIndex: number;
-      answer: 'yes' | 'no' | 'unsure';
+    const { hypothesisIndex, verificationKey: requestedVerificationKey, answer } = req.body as {
+      hypothesisIndex?: number;
+      verificationKey?: string;
+      answer: 'yes' | 'no' | 'unsure' | null;
     };
 
     if (!Types.ObjectId.isValid(dreamId)) {
@@ -884,12 +990,15 @@ export const saveHypothesisFeedback = async (req: Request, res: Response): Promi
       return;
     }
 
-    if (hypothesisIndex === undefined || isNaN(hypothesisIndex) || hypothesisIndex < 0) {
-      res.status(400).json({ success: false, message: 'Index giả thuyết không hợp lệ.' });
+    const hasValidIndex = typeof hypothesisIndex === 'number' && Number.isInteger(hypothesisIndex) && hypothesisIndex >= 0;
+    const cleanRequestedKey = String(requestedVerificationKey || '').trim();
+    if (!hasValidIndex && !cleanRequestedKey) {
+      res.status(400).json({ success: false, message: 'Thiếu mã câu hỏi hợp lệ.' });
       return;
     }
 
-    if (!['yes', 'no', 'unsure'].includes(answer)) {
+    const isClearingAnswer = answer === null;
+    if (!isClearingAnswer && !['yes', 'no', 'unsure'].includes(answer as string)) {
       res.status(400).json({ success: false, message: 'Câu trả lời không hợp lệ.' });
       return;
     }
@@ -908,13 +1017,23 @@ export const saveHypothesisFeedback = async (req: Request, res: Response): Promi
 
     // 2. Validate index against stored hypotheses in ai_result / aiAnalysis
     const activeAnalysis = dream.ai_result || (dream as any).aiAnalysis || {};
-    const hypotheses = (activeAnalysis as any).real_life_hypotheses;
-    if (!Array.isArray(hypotheses) || hypothesisIndex >= hypotheses.length) {
-      res.status(400).json({ success: false, message: 'Không tìm thấy giả thuyết tương ứng với index được cung cấp.' });
+    const renderedAnalysis = enrichScientificNotesForResponse(
+      activeAnalysis,
+      dream.retrievedContext,
+      dream.content || '',
+    );
+    const hypotheses = (renderedAnalysis as any).real_life_hypotheses;
+    const matchedIndex = Array.isArray(hypotheses)
+      ? (cleanRequestedKey
+          ? hypotheses.findIndex((item: any) => String(item?.verificationKey || '') === cleanRequestedKey)
+          : Number(hypothesisIndex))
+      : -1;
+    if (!Array.isArray(hypotheses) || matchedIndex < 0 || matchedIndex >= hypotheses.length) {
+      res.status(400).json({ success: false, message: 'Không tìm thấy câu hỏi tương ứng.' });
       return;
     }
 
-    const matchedHypothesis = hypotheses[hypothesisIndex];
+    const matchedHypothesis = hypotheses[matchedIndex];
     if (!matchedHypothesis || !matchedHypothesis.followUpQuestion) {
       res.status(400).json({ success: false, message: 'Không tìm thấy câu hỏi tương ứng cho giả thuyết này.' });
       return;
@@ -922,6 +1041,21 @@ export const saveHypothesisFeedback = async (req: Request, res: Response): Promi
 
     // Get questionText from DB, do not trust frontend payload blindly
     const questionText = matchedHypothesis.followUpQuestion;
+    const ruleId = matchedHypothesis.ruleId ? String(matchedHypothesis.ruleId) : undefined;
+    if (!ruleId) {
+      res.status(400).json({
+        success: false,
+        message: 'Câu hỏi này không gắn với một quy luật đã duyệt nên không thể dùng để xác minh.'
+      });
+      return;
+    }
+    const verificationKey = matchedHypothesis.verificationKey
+      ? String(matchedHypothesis.verificationKey)
+      : undefined;
+    const declaredEffect = isClearingAnswer ? undefined : matchedHypothesis.answerSemantics?.[answer as 'yes' | 'no' | 'unsure'];
+    const effect: 'supports' | 'weakens' | 'unresolved' = ['supports', 'weakens', 'unresolved'].includes(declaredEffect)
+      ? declaredEffect
+      : 'unresolved';
 
     // 3. Update realLifeHypothesesFeedback source of truth
     if (!dream.realLifeHypothesesFeedback) {
@@ -929,54 +1063,87 @@ export const saveHypothesisFeedback = async (req: Request, res: Response): Promi
     }
 
     const existingIndex = dream.realLifeHypothesesFeedback.findIndex(
-      (f: any) => f.hypothesisIndex === hypothesisIndex
+      (f: any) => verificationKey
+        ? f.verificationKey === verificationKey
+        : f.hypothesisIndex === hypothesisIndex
     );
 
     const feedbackEntry = {
-      hypothesisIndex,
-      answer,
+      hypothesisIndex: matchedIndex,
+      ruleId,
+      ...(verificationKey ? { verificationKey } : {}),
+      answer: answer as 'yes' | 'no' | 'unsure',
+      effect,
       questionText,
       userId: new Types.ObjectId(userId),
       updatedAt: new Date()
     };
 
-    if (existingIndex !== -1) {
+    if (isClearingAnswer && existingIndex !== -1) {
+      dream.realLifeHypothesesFeedback.splice(existingIndex, 1);
+    } else if (!isClearingAnswer && existingIndex !== -1) {
       dream.realLifeHypothesesFeedback[existingIndex] = feedbackEntry;
-    } else {
+    } else if (!isClearingAnswer) {
       dream.realLifeHypothesesFeedback.push(feedbackEntry);
     }
 
-    // 4. Update the render cache mirror fields:
-    // Update ai_result.real_life_hypotheses[index].userFeedback
-    if (dream.ai_result && (dream.ai_result as any).real_life_hypotheses) {
-      const activeHypotheses = (dream.ai_result as any).real_life_hypotheses;
-      if (activeHypotheses[hypothesisIndex]) {
-        activeHypotheses[hypothesisIndex].userFeedback = answer;
-        dream.markModified('ai_result');
-      }
+    if (String(matchedHypothesis?.questionDimension || '') === 'external_sound_at_wake') {
+      const nextSleepContext = { ...(dream.sleepContext || {}) };
+      if (isClearingAnswer || answer === 'unsure') delete nextSleepContext.externalSoundAtWake;
+      else nextSleepContext.externalSoundAtWake = answer === 'yes';
+      dream.sleepContext = nextSleepContext;
+      dream.markModified('sleepContext');
+      const retrievedContext = (dream.retrievedContext || {}) as any;
+      retrievedContext.componentA = retrievedContext.componentA || {};
+      retrievedContext.componentA.sleepContext = nextSleepContext;
+      dream.retrievedContext = retrievedContext;
+      dream.markModified('retrievedContext');
     }
 
-    // Update aiAnalysis.real_life_hypotheses[index].userFeedback
-    if ((dream as any).aiAnalysis && ((dream as any).aiAnalysis as any).real_life_hypotheses) {
-      const activeHypotheses = ((dream as any).aiAnalysis as any).real_life_hypotheses;
-      if (activeHypotheses[hypothesisIndex]) {
-        activeHypotheses[hypothesisIndex].userFeedback = answer;
-        dream.markModified('aiAnalysis');
-      }
+    // 4. Re-materialize the complete analysis from the new answer. Feedback is
+    // not a counter: it changes the synthesis, retained interpretation threads,
+    // contextual details and practical next steps returned to the reader.
+    const activeHypotheses = hypotheses;
+    activeHypotheses[matchedIndex].userFeedback = isClearingAnswer ? null : answer;
+    const feedbackRevision = buildFeedbackRevision(
+      activeHypotheses,
+      dream.realLifeHypothesesFeedback || [],
+    );
+    const analysisWithFeedback = {
+      ...renderedAnalysis,
+      real_life_hypotheses: activeHypotheses,
+      feedback_revision: feedbackRevision,
+      feedback_conclusion: buildFeedbackConclusion(feedbackRevision),
+    };
+    const refreshedAnalysis = enrichScientificNotesForResponse(
+      analysisWithFeedback,
+      dream.retrievedContext,
+      dream.content || '',
+    );
+    const feedbackChanges = buildFeedbackChangeSet(renderedAnalysis, refreshedAnalysis);
+    refreshedAnalysis.feedback_changed_paths = feedbackChanges.paths;
+    refreshedAnalysis.feedback_changed_fragments = feedbackChanges.fragments;
+    dream.ai_result = refreshedAnalysis;
+    dream.markModified('ai_result');
+    if ((dream as any).aiAnalysis) {
+      (dream as any).aiAnalysis = refreshedAnalysis;
+      dream.markModified('aiAnalysis');
     }
 
     await dream.save();
+    await syncDreamSymbolObservations(dream);
 
     res.status(200).json({
       success: true,
-      message: 'Đã ghi nhận phản hồi.',
+      message: isClearingAnswer ? 'Đã bỏ lựa chọn.' : 'Đã ghi nhận phản hồi.',
       data: {
-        feedback: dream.realLifeHypothesesFeedback
+        feedback: dream.realLifeHypothesesFeedback,
+        feedbackRevision: refreshedAnalysis?.feedback_revision || [],
+        feedbackConclusion: refreshedAnalysis?.feedback_conclusion || null,
+        analysis: refreshedAnalysis,
       }
     });
   } catch (err: any) {
     res.status(500).json({ success: false, message: 'Không thể lưu phản hồi.', error: err.message });
   }
 };
-
-

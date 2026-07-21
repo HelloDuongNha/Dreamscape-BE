@@ -17,6 +17,7 @@ export interface IRetrievedSymbol {
   suppressedBoostReasons: string[];
   canonicalSymbol: string;
   matchedVariants: string[];
+  matchedTextVariant?: string;
   metadataFromVariant?: string;
 }
 
@@ -77,8 +78,8 @@ const variantMap: Record<string, string[]> = {
   "scream": ["scream", "screaming", "screamed"],
   "eat": ["eat", "eating", "ate", "food", "meal", "dinner", "lunch", "breakfast", "ăn", "ăn cơm", "bữa ăn", "đồ ăn"],
   "eating": ["eat", "eating", "ate", "food", "meal", "dinner", "lunch", "breakfast", "ăn", "ăn cơm", "bữa ăn", "đồ ăn"],
-  "chase": ["chase", "chasing", "chased", "bị đuổi"],
-  "run": ["run", "running", "ran", "chạy trốn"],
+  "chase": ["chase", "chasing", "chased", "bị đuổi", "đuổi theo", "rượt đuổi"],
+  "run": ["run", "running", "ran", "chạy", "chạy trốn"],
   "fear": ["fear", "fearing", "feared", "sợ"],
   "panic": ["panic", "panicked", "panicking", "hoảng loạn"],
   "trap": ["trap", "trapped", "trapping", "mắc kẹt"],
@@ -88,13 +89,14 @@ const variantMap: Record<string, string[]> = {
   "snake": ["snake", "snakes", "rắn"],
   "fire": ["fire", "fires", "lửa"],
   "water": ["water", "nước"],
-  "school": ["school", "schools", "trường học"],
+  "school": ["school", "schools", "trường học", "trường"],
   "exam": ["exam", "exams", "thi"]
 };
 
 function hasTokenOrNgram(set: Set<string>, target: string, isEnglish: boolean): boolean {
   const normTarget = target.toLowerCase().trim();
   const diacriticFreeTarget = removeVietnameseDiacritics(normTarget);
+  const targetActuallyHasVietnameseDiacritics = diacriticFreeTarget !== normTarget;
   
   if (isEnglish) {
     if (diacriticFreeTarget === 'an' && normTarget === 'ăn') {
@@ -105,14 +107,20 @@ function hasTokenOrNgram(set: Set<string>, target: string, isEnglish: boolean): 
     }
   }
 
-  if (set.has(normTarget) || set.has(diacriticFreeTarget)) {
+  if (set.has(normTarget)) {
     return true;
   }
+  // Only a Vietnamese target is allowed to use its own diacritic-free alias.
+  // Folding every source token made English "cap" match Vietnamese "cấp" and
+  // English "can" match Vietnamese "căn".
+  if (targetActuallyHasVietnameseDiacritics && set.has(diacriticFreeTarget)) return true;
   for (const item of set) {
     const normItem = item.toLowerCase().trim();
-    if (normItem === normTarget || removeVietnameseDiacritics(normItem) === diacriticFreeTarget) {
+    if (normItem === normTarget) {
       return true;
     }
+    if (targetActuallyHasVietnameseDiacritics
+      && removeVietnameseDiacritics(normItem) === diacriticFreeTarget) return true;
   }
   return false;
 }
@@ -157,6 +165,14 @@ export function isStrictExactMatch(
 
     return { matched: false };
   }
+}
+
+export function hasStandaloneVietnameseHouseMeaning(tokens: string[]): boolean {
+  const blockedFollowingWords = new Set(['ga', 'trường', 'máy', 'hàng', 'thờ', 'hát', 'nước', 'xuất']);
+  const blockedPrecedingWords = new Set(['mái', 'sàn']);
+  return tokens.some((token, index) => token === 'nhà'
+    && !blockedFollowingWords.has(tokens[index + 1] || '')
+    && !blockedPrecedingWords.has(tokens[index - 1] || ''));
 }
 
 /**
@@ -288,7 +304,7 @@ export interface IDreamSegments {
 }
 
 function splitSentenceIntoClauses(sentence: string): string[] {
-  return sentence.split(/,\s+(?=then\b|and\s+then\b|but\b)|\s+(?=then\b|and\s+then\b)/i);
+  return sentence.split(/,\s+(?=then\b|and\s+then\b|but\b|although\b|even though\b|dù\s|mặc dù\s|ngoài đời(?:\s|,))|\s+(?=then\b|and\s+then\b)/i);
 }
 
 export function isExplicitSleepContextClause(clause: string): { matched: boolean; trigger?: string; reason?: string } {
@@ -386,6 +402,16 @@ export function extractDreamSegments(rawText: string): IDreamSegments {
   const wakingReactionParts: string[] = [];
   const sleepContextParts: string[] = [];
   const segmentationReasons: string[] = [];
+  let explicitWakingContextStarted = false;
+
+  const wakingContextPrefixes = [
+    'ngoài đời', 'trong thực tế', 'thực tế là', 'tuần vừa rồi', 'gần đây', 'hiện tại',
+    'in real life', 'in reality', 'last week', 'recently', 'currently',
+  ];
+  const embeddedWakingContextPatterns = [
+    /^(?:dù|mặc dù)\s+(?:ngày mai|hôm nay|tuần này|sắp tới)\b/i,
+    /^(?:although|even though)\s+(?:tomorrow|today|this week|soon)\b/i,
+  ];
 
   const dreamSceneTriggers = [
     "woke up in",
@@ -450,6 +476,9 @@ export function extractDreamSegments(rawText: string): IDreamSegments {
       let isDreamScene = false;
       let matchedSceneTrigger = "";
       const lower = trimmedClause.toLowerCase();
+      const beginsWakingContext = wakingContextPrefixes.some(prefix => lower.startsWith(prefix));
+      const isEmbeddedWakingContext = embeddedWakingContextPatterns.some(pattern => pattern.test(trimmedClause));
+      if (beginsWakingContext) explicitWakingContextStarted = true;
       for (const trigger of dreamSceneTriggers) {
         if (lower.includes(trigger)) {
           isDreamScene = true;
@@ -468,7 +497,10 @@ export function extractDreamSegments(rawText: string): IDreamSegments {
         }
       }
       
-      if (sleepCheck.matched) {
+      if (explicitWakingContextStarted || isEmbeddedWakingContext) {
+        wakingReactionParts.push(trimmedClause);
+        segmentationReasons.push(`Moved "${trimmedClause}" to wakingReactionText due to explicit waking-life context`);
+      } else if (sleepCheck.matched) {
         sleepContextParts.push(trimmedClause);
         segmentationReasons.push(`Moved "${trimmedClause}" to sleepContextText due to trigger "${sleepCheck.trigger}" (${sleepCheck.reason})`);
       } else if (isWakingReaction) {
@@ -674,7 +706,20 @@ export async function retrieveSymbolsHybrid(dreamText: string): Promise<{
 
     // Check strict matching
     const matchResult = isStrictExactMatch(normSym, tokensSet, ngramSet, isEnglish);
-    const exact = matchResult.matched;
+    let exact = matchResult.matched;
+    let matchedTextVariant = exact
+      ? (variantMap[normSym] || [normSym]).find(variant =>
+          hasTokenOrNgram(variant.includes(' ') ? ngramSet : tokensSet, variant, isEnglish))
+      : undefined;
+    // Vietnamese "nhà" is part of many compound nouns. In "nhà ga" it
+    // means station, not house. Treat House as exact only when at least one
+    // occurrence is not consumed by a known compound noun.
+    if (normSym === 'house' && matchedTextVariant === 'nhà') {
+      if (!hasStandaloneVietnameseHouseMeaning(tokens)) {
+        exact = false;
+        matchedTextVariant = undefined;
+      }
+    }
     const appearsInText = exact;
 
     const fullTextScore = fullTextScores.get(normSym);
@@ -794,7 +839,8 @@ export async function retrieveSymbolsHybrid(dreamText: string): Promise<{
         boostReasons,
         suppressedBoostReasons,
         canonicalSymbol: canonicalForInitial,
-        matchedVariants: [s.symbol]
+        matchedVariants: [s.symbol],
+        matchedTextVariant,
       });
     }
   }
@@ -833,6 +879,7 @@ export async function retrieveSymbolsHybrid(dreamText: string): Promise<{
         existing.rawSimilarityScore = c.rawSimilarityScore;
         existing.lowConfidence = c.lowConfidence;
         existing.fallbackReason = c.fallbackReason;
+        existing.matchedTextVariant = c.matchedTextVariant || existing.matchedTextVariant;
       }
 
       if (preferNewMetadata) {
@@ -892,26 +939,22 @@ export async function retrieveSymbolsHybrid(dreamText: string): Promise<{
     return true;
   });
 
+  // Vector similarity alone must be strong enough to name a symbol. Never pad
+  // the result to an arbitrary minimum with unrelated dictionary entries.
+  const reliableCandidates = cleanedCandidates.filter(s =>
+    s.retrievalMethods.includes('exact_match')
+    || s.boostReasons.length > 0
+    || s.adjustedScore >= 0.70
+  );
+
   // Filter using SYMBOL_RAG_MIN_SCORE
   const minScore = parseFloat(process.env.SYMBOL_RAG_MIN_SCORE || '0.55');
-  let finalSymbols = cleanedCandidates.filter((s) => s.adjustedScore >= minScore);
+  let finalSymbols = reliableCandidates.filter((s) =>
+    s.retrievalMethods.includes('exact_match') || s.adjustedScore >= minScore
+  );
 
   if (finalSymbols.length > 8) {
     finalSymbols = finalSymbols.slice(0, 8);
-  }
-
-  // Fallback: If < 3 symbols pass, return top 3 overall with lowConfidence
-  if (finalSymbols.length < 3) {
-    let fallbackCandidates = cleanedCandidates.filter(s => s.adjustedScore > 0);
-    if (fallbackCandidates.length === 0) {
-      fallbackCandidates = cleanedCandidates;
-    }
-    const fallbackSymbols = fallbackCandidates.slice(0, 3).map((s) => ({
-      ...s,
-      lowConfidence: true,
-      fallbackReason: 'below_min_similarity_threshold',
-    }));
-    finalSymbols = fallbackSymbols;
   }
 
   // Log counts and retrieval details

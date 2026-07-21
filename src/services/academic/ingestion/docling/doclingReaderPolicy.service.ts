@@ -38,6 +38,20 @@ export class DoclingReaderPolicyService {
     );
   }
 
+  private static isLikelyAuthorLine(text: string): boolean {
+    const clean = text.trim();
+    if (!clean || clean.length > 300) return false;
+    const hasAuthorSeparator = /\b(?:and|&|và)\b|[,;·|]/iu.test(clean);
+    const nameCount = (clean.match(/\b\p{Lu}[\p{L}'’.-]+(?:\s+\p{Lu}[\p{L}'’.-]+)+/gu) || []).length;
+    return hasAuthorSeparator && nameCount >= 2 && !/[.!?]\s*$/.test(clean);
+  }
+
+  private static isLikelyAffiliation(text: string): boolean {
+    const clean = text.trim();
+    if (!clean || clean.length > 500) return false;
+    return /^(?:[a-z0-9,*†‡§]+\s+)?(?:department|division|faculty|school|institute|institution|university|college|hospital|laboratory|research (?:institute|center|centre)|khoa|trường|viện|đại học|bệnh viện)\b/iu.test(clean);
+  }
+
   /**
    * Docling can emit the left-column Introduction before the right-column
    * Abstract on page one. Move only the page-one Abstract group ahead of the
@@ -300,6 +314,17 @@ export class DoclingReaderPolicyService {
       // `evaluateItem` receives a normalized shallow copy, so object identity
       // is intentionally not stable here. Item IDs are the canonical identity.
       const currentIndex = allItems.findIndex((candidate) => candidate.id === item.id);
+
+      // General front-matter evidence independent of publisher names. Author
+      // lists and institutional affiliations are useful metadata, but never
+      // reader prose. Limit this rule to material before Abstract/Introduction
+      // so identically worded organizations in the article body are preserved.
+      const firstBodyStartIndex = allItems.findIndex((candidate) => this.isBodyStartHeading(candidate));
+      if (
+        currentIndex >= 0 &&
+        (firstBodyStartIndex < 0 || currentIndex < firstBodyStartIndex) &&
+        (this.isLikelyAuthorLine(text) || this.isLikelyAffiliation(text))
+      ) return true;
 
       // Publisher/navigation furniture preceding a reliable article title.
       if (titleIndex >= 0 && currentIndex >= 0 && currentIndex < titleIndex) return true;

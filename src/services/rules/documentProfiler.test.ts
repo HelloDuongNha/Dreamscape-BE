@@ -1039,6 +1039,34 @@ console.log('\n=== V. NEW SAFETY REGRESSION FIXTURES (B1.4 SPECIFIC) ===');
 // ════════════════════════════════════════════════════════════════════════════════
 // VI. DETERMINISM TESTS
 // ════════════════════════════════════════════════════════════════════════════════
+{
+  const input: DocumentProfileInput = {
+    documentId: 'safety_vietnamese_book',
+    parserEngine: 'docling',
+    source: { detectedLanguage: 'vi', title: 'Con người và biểu tượng' },
+    sections: [
+      sec('s1', 'MỤC LỤC', 'heading', 0, 5),
+      sec('s2', 'LỜI NÓI ĐẦU', 'heading', 1, 8),
+      sec('s3', '1. TIẾP CẬN VÔ THỨC', 'heading', 2, 100),
+      sec('s4', 'Những giấc mơ quan trọng', 'heading', 3, 80),
+      sec('s5', '2. NHỮNG HUYỀN THOẠI CỔ XƯA', 'heading', 4, 120),
+      sec('s6', 'Biểu tượng trong đời sống', 'heading', 5, 90),
+      sec('s7', '3. QUÁ TRÌNH CÁ THỂ HÓA', 'heading', 6, 110),
+      sec('s8', 'KẾT LUẬN', 'heading', 7, 20),
+      sec('s9', 'CHÚ GIẢI', 'heading', 8, 40),
+      sec('s10', 'VỀ CÁC TÁC GIẢ', 'heading', 9, 10),
+    ],
+  };
+  const profile = profileDocument(input);
+  const plan = routeExtractionStrategy(profile);
+  assertDocType('Book: numbered Vietnamese chapters resolve to book_or_monograph', profile.documentType === 'book_or_monograph', `got ${profile.documentType}`);
+  assertUsage('Book: table of contents is skipped', plan.sectionDecisions[0].usage === 'skip');
+  assertUsage('Book: explicit preface is skipped as front matter', plan.sectionDecisions[1].usage === 'skip');
+  assertUsage('Book: chapter body is target evidence', plan.sectionDecisions[2].usage === 'target' && plan.sectionDecisions[3].usage === 'target');
+  assertStrategy('Book: chapter uses book_argument strategy', plan.sectionDecisions[2].strategy === 'book_argument');
+  assertUsage('Book: notes and following back matter are skipped', plan.sectionDecisions[8].usage === 'skip' && plan.sectionDecisions[9].usage === 'skip');
+}
+
 console.log('\n=== VI. DETERMINISM TESTS ===');
 {
   const input: DocumentProfileInput = {

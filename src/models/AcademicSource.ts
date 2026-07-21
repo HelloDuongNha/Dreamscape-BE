@@ -65,6 +65,13 @@ export interface IAcademicSource extends Document {
   extractionQuality?: 'good' | 'partial' | 'poor';
   pdfPageCount?: number;
   detectedLanguage?: string;
+  readerBuildSnapshots?: Array<{
+    engine: string;
+    sourceType: string;
+    sectionCount: number;
+    chunkCount: number;
+    builtAt: Date;
+  }>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -284,6 +291,14 @@ const AcademicSourceSchema = new Schema<IAcademicSource>(
     detectedLanguage: {
       type: String,
     },
+    readerBuildSnapshots: [{
+      engine: { type: String, required: true },
+      sourceType: { type: String, required: true },
+      sectionCount: { type: Number, required: true, min: 0 },
+      chunkCount: { type: Number, required: true, min: 0 },
+      builtAt: { type: Date, required: true },
+      _id: false,
+    }],
   },
   {
     timestamps: true,

@@ -8,6 +8,8 @@ export interface IEditHistoryEntry {
 export interface IDream extends Document {
   userId: Types.ObjectId;
   content: string;
+  contentHash?: string;
+  analysisEmbedding?: number[];
   mood_tag: string;
   is_public: boolean;
   privacy: 'public' | 'private';
@@ -23,15 +25,13 @@ export interface IDream extends Document {
   analysisMetadata?: Record<string, any> | null;
   realLifeHypothesesFeedback?: Array<{
     hypothesisIndex: number;
+    ruleId?: string;
+    verificationKey?: string;
     answer: 'yes' | 'no' | 'unsure';
+    effect: 'supports' | 'weakens' | 'unresolved';
     questionText: string;
     userId: Types.ObjectId;
     updatedAt: Date;
-  }> | null;
-  ruleFeedback?: Array<{
-    ruleId: string;
-    confirmed: boolean;
-    feedbackAt: Date;
   }> | null;
 }
 
@@ -55,6 +55,18 @@ const DreamSchema = new Schema<IDream>(
       type: String,
       required: true,
       trim: true,
+    },
+    contentHash: {
+      type: String,
+      required: false,
+      select: false,
+      match: /^[a-f0-9]{64}$/,
+    },
+    analysisEmbedding: {
+      type: [Number],
+      required: false,
+      select: false,
+      default: undefined,
     },
     mood_tag: {
       type: String,
@@ -117,20 +129,13 @@ const DreamSchema = new Schema<IDream>(
       type: [
         {
           hypothesisIndex: { type: Number, required: true },
+          ruleId: { type: String, required: false },
+          verificationKey: { type: String, required: false },
           answer: { type: String, enum: ['yes', 'no', 'unsure'], required: true },
+          effect: { type: String, enum: ['supports', 'weakens', 'unresolved'], required: true, default: 'unresolved' },
           questionText: { type: String, required: true },
           userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
           updatedAt: { type: Date, default: Date.now },
-        },
-      ],
-      default: [],
-    },
-    ruleFeedback: {
-      type: [
-        {
-          ruleId: { type: String, required: true },
-          confirmed: { type: Boolean, required: true },
-          feedbackAt: { type: Date, default: Date.now },
         },
       ],
       default: [],
@@ -143,6 +148,10 @@ const DreamSchema = new Schema<IDream>(
 
 // Timeline Index
 DreamSchema.index({ userId: 1, created_at: -1 });
+DreamSchema.index({ userId: 1, contentHash: 1, created_at: -1 });
+DreamSchema.index({ 'realLifeHypothesesFeedback.ruleId': 1 });
+DreamSchema.index({ 'realLifeHypothesesFeedback.verificationKey': 1 });
+DreamSchema.index({ userId: 1, 'ai_result.symbolic_notes.symbol': 1, created_at: -1 });
 
 // Global Feed Index
 DreamSchema.index({ created_at: -1 });

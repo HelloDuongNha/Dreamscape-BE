@@ -5,18 +5,6 @@ import {
   reviewSource,
   importFullText,
   buildChunks,
-  getRuleCandidates,
-  getRuleCandidateDetail,
-  updateRuleCandidate,
-  approveRuleCandidate,
-  rejectRuleCandidate,
-  analyzeRules,
-  deactivateRule,
-  deactivateSourceRules,
-  restoreRejectedCandidate,
-  clearAllRejectedCandidates,
-  deleteCandidate,
-  getAnalyzeProgress,
   uploadPdfMiddleware,
   uploadPdfFile,
   deleteSource,
@@ -27,7 +15,18 @@ import {
   deleteContributionPdf,
   processUploadedPdfForContribution
 } from '../controllers/moderationController';
-import { getKnowledgeRules } from '../controllers/knowledgeEvidenceController';
+import {
+  previewRuleV3Plan,
+  dryRunRuleV3Extraction,
+  startFullRuleV3Extraction,
+  getFullRuleV3ExtractionProgress,
+  getRuleV3SourceAnalysisSummary,
+  getRuleV3Candidates,
+  getRuleV3CandidateDetail,
+  approveRuleV3Candidate,
+  rejectRuleV3Candidate,
+  bulkRuleV3Action
+} from '../controllers/ruleV3ModerationController';
 
 const router = Router();
 
@@ -122,28 +121,17 @@ router.delete('/sources/:id/original-pdf', authMiddleware, isModerator, deleteCo
 router.post('/sources/upload-pdf', authMiddleware, isModerator, uploadPdfMiddleware, uploadPdfFile);
 router.post('/sources/:id/import-fulltext', authMiddleware, isModerator, importFullText);
 router.post('/sources/:id/build-chunks', authMiddleware, isModerator, buildChunks);
-router.post('/sources/:id/analyze-rules', authMiddleware, isModerator, analyzeRules);
-router.get('/sources/:id/analyze-progress', authMiddleware, isModerator, getAnalyzeProgress);
+router.get('/sources/:id/rules-v3/plan-preview', authMiddleware, isModerator, previewRuleV3Plan);
+router.post('/sources/:id/rules-v3/work-units/:workUnitId/dry-run', authMiddleware, isModerator, dryRunRuleV3Extraction);
+router.post('/sources/:id/rules-v3/extract', authMiddleware, isModerator, startFullRuleV3Extraction);
+router.get('/sources/:id/rules-v3/summary', authMiddleware, isModerator, getRuleV3SourceAnalysisSummary);
+router.get('/rules-v3/runs/:runId', authMiddleware, isModerator, getFullRuleV3ExtractionProgress);
+router.get('/rules-v3/candidates', authMiddleware, isModerator, getRuleV3Candidates);
+router.get('/rules-v3/candidates/:id', authMiddleware, isModerator, getRuleV3CandidateDetail);
+router.post('/rules-v3/candidates/:id/approve', authMiddleware, isModerator, approveRuleV3Candidate);
+router.post('/rules-v3/candidates/:id/reject', authMiddleware, isModerator, rejectRuleV3Candidate);
+router.post('/rules-v3/bulk-action', authMiddleware, isModerator, bulkRuleV3Action);
 router.delete('/sources/:id', authMiddleware, isModerator, deleteSource);
 router.post('/sources/:id/reimport-fulltext', authMiddleware, isModerator, reimportFullText);
-router.get('/rule-candidates', authMiddleware, isModerator, getRuleCandidates);
-router.get('/rule-candidates/:id', authMiddleware, isModerator, getRuleCandidateDetail);
-router.patch('/rule-candidates/:id', authMiddleware, isModerator, updateRuleCandidate);
-router.post('/rule-candidates/:id/approve', authMiddleware, isModerator, approveRuleCandidate);
-router.post('/rule-candidates/:id/reject', authMiddleware, isModerator, rejectRuleCandidate);
-
-// Deactivation, restoration, and deletion routes (with confirmation)
-router.post('/rules/:ruleId/deactivate', authMiddleware, isModerator, deactivateRule);
-router.post('/sources/:id/deactivate-rules', authMiddleware, isModerator, deactivateSourceRules);
-router.post('/rule-candidates/:id/restore', authMiddleware, isModerator, restoreRejectedCandidate);
-router.delete('/rule-candidates/rejected', authMiddleware, isModerator, clearAllRejectedCandidates);
-router.delete('/rule-candidates/:id', authMiddleware, isModerator, deleteCandidate);
-
-// Knowledge Evidence Linking Endpoints
-router.get('/knowledge-rules', authMiddleware, isModerator, getKnowledgeRules);
-// router.get('/sources/:id/chunks/search', authMiddleware, isModerator, searchSourceChunks);
-// router.post('/knowledge-rules/:ruleId/evidence-links', authMiddleware, isModerator, createEvidenceLink);
-// router.get('/knowledge-rules/:ruleId/evidence-links', authMiddleware, isModerator, getEvidenceLinks);
-// router.delete('/knowledge-rules/:ruleId/evidence-links/:linkId', authMiddleware, isModerator, removeEvidenceLink);
 
 export default router;

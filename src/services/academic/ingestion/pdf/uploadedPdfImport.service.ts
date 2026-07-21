@@ -214,6 +214,16 @@ export async function runUploadedPdfImport(
       target = await AcademicSource.findById(targetId);
     }
 
+    if (
+      target &&
+      (!Array.isArray(target.authors) || target.authors.length === 0) &&
+      doclingResult.metadataHints?.authors?.length
+    ) {
+      target.authors = doclingResult.metadataHints.authors;
+      await target.save();
+      metadataEnriched = true;
+    }
+
     return {
       success: true,
       targetType,

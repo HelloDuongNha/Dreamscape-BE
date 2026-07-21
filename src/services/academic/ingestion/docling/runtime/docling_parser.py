@@ -458,8 +458,16 @@ def main():
                         and "abstract" not in text.lower()):
                     item_type = "title"
                     has_extracted_title = True
-                if text.lower() == "references":
+                normalized_heading = re.sub(r'[^a-z0-9\u00c0-\u024f]+', ' ', text.lower()).strip()
+                if normalized_heading in ["references", "bibliography", "literature cited", "tài liệu tham khảo"]:
                     has_seen_references = True
+                elif has_seen_references:
+                    # Reference mode is a section state, not a permanent
+                    # document state. Layout engines can emit a later column
+                    # heading (for example Conclusion) after a References
+                    # heading. Never turn that later section into numbered
+                    # bibliography entries.
+                    has_seen_references = False
             elif item_label == "page_header":
                 item_type = "page_header"
             elif item_label == "page_footer":

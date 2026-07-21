@@ -69,6 +69,7 @@ export type DocumentResearchType =
   | 'meta_analysis'
   | 'narrative_review'
   | 'theoretical_or_conceptual'
+  | 'book_or_monograph'
   | 'case_report'
   | 'mixed'
   | 'non_research'
@@ -99,6 +100,7 @@ export type DocumentProfileReasonCode =
   | 'systematic_review_markers'    // PRISMA/GRADE/systematic search keywords found
   | 'meta_analysis_markers'        // Forest plot/pooled effect/heterogeneity keywords found
   | 'theoretical_markers_found'    // Theory/conceptual framework/model-building keywords
+  | 'book_chapter_structure'       // Multi-chapter book/monograph structure without IMRaD evidence
   | 'case_report_markers'          // Case presentation/case discussion section pattern
   | 'review_only_structure'        // Only review sections, no methods/results
   | 'non_research_structure'       // Editorial/commentary/letter/news pattern
@@ -162,6 +164,7 @@ export type ExtractionStrategy =
   | 'qualitative_themes'      // For qualitative_empirical findings sections
   | 'review_synthesis'        // For systematic_review or meta_analysis
   | 'theoretical_framework'   // For theoretical_or_conceptual documents
+  | 'book_argument'           // For evidence-bearing chapters in books/monographs
   | 'case_scoped'             // For case_report documents
   | 'mixed_section_routing'   // For mixed documents, re-routes per section role
   | 'skip';                   // References, metadata, supplementary, non_research

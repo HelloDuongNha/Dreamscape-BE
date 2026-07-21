@@ -563,7 +563,7 @@ export const getApprovedSources = async (req: Request, res: Response): Promise<v
     
     // Project only public safe catalog fields, completely ignoring contribution note, contributor details, and raw files
     const items = await AcademicSource.find(filter)
-      .select('_id title authors year journal publisher doi url sourceProvider verificationStatus allowedUse copyrightStatus createdAt fullTextStatus fullTextUrl license oaStatus readableInApp fullTextSourceType originalFile pdfUrl sourceOrigin metadata smartReaderStats')
+      .select('_id title authors year journal publisher doi url sourceProvider verificationStatus allowedUse copyrightStatus createdAt fullTextStatus fullTextUrl license oaStatus readableInApp fullTextSourceType originalFile pdfUrl sourceOrigin metadata smartReaderStats readerBuildSnapshots')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
@@ -620,7 +620,7 @@ export const getApprovedSourceById = async (req: Request, res: Response): Promis
     }
 
     const source = await AcademicSource.findById(id)
-      .select('_id title authors year journal publisher doi url sourceProvider verificationStatus allowedUse copyrightStatus createdAt fullTextStatus fullTextUrl license oaStatus readableInApp fullTextSourceType fullTextImportError fullTextImportedAt fullTextImportedBy landingPageUrl pdfUrl xmlUrl htmlUrl chunkBuildStatus chunkBuiltAt chunkEmbeddingModel chunkCount chunkBuildError originalFile sourceOrigin metadata pmcid normalizedPmcid smartReaderStats');
+      .select('_id title authors year journal publisher doi url sourceProvider verificationStatus allowedUse copyrightStatus createdAt fullTextStatus fullTextUrl license oaStatus readableInApp fullTextSourceType fullTextImportError fullTextImportedAt fullTextImportedBy landingPageUrl pdfUrl xmlUrl htmlUrl chunkBuildStatus chunkBuiltAt chunkEmbeddingModel chunkCount chunkBuildError originalFile sourceOrigin metadata pmcid normalizedPmcid smartReaderStats readerBuildSnapshots');
 
     if (!source) {
       res.status(404).json({

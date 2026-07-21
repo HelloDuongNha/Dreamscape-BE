@@ -13,6 +13,9 @@ export interface IKnowledgeRuleEvidenceV3 extends Document {
   stance: 'supports' | 'refutes' | 'limits';
   exactness: 'canonical_exact'; // Slicing only produces canonical_exact. Future callers can assign source_exact or extraction_derived.
   verificationScore: number; // 0 to 1
+  researchType?: 'quantitative_empirical' | 'qualitative_empirical' | 'systematic_review' | 'meta_analysis' | 'narrative_review' | 'theoretical_or_conceptual' | 'book_or_monograph' | 'case_report' | 'mixed' | 'non_research' | 'unknown';
+  researchTypeConfidence?: 'high' | 'medium' | 'low';
+  sourceQuality?: 'peer_reviewed' | 'preprint' | 'informal';
   createdAt: Date;
 }
 
@@ -90,6 +93,21 @@ const KnowledgeRuleEvidenceV3Schema = new Schema<IKnowledgeRuleEvidenceV3>(
       min: 0,
       max: 1,
       default: 1.0
+    },
+    researchType: {
+      type: String,
+      enum: ['quantitative_empirical', 'qualitative_empirical', 'systematic_review', 'meta_analysis', 'narrative_review', 'theoretical_or_conceptual', 'book_or_monograph', 'case_report', 'mixed', 'non_research', 'unknown'],
+      required: false
+    },
+    researchTypeConfidence: {
+      type: String,
+      enum: ['high', 'medium', 'low'],
+      required: false
+    },
+    sourceQuality: {
+      type: String,
+      enum: ['peer_reviewed', 'preprint', 'informal'],
+      required: false
     },
     createdAt: {
       type: Date,

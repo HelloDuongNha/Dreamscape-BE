@@ -3,7 +3,7 @@ import { locateCitationInText } from './exactCitationLocator.service';
 import KnowledgeRuleEvidenceV3 from '../../models/rulesV3/KnowledgeRuleEvidence';
 import KnowledgeRuleV3 from '../../models/rulesV3/KnowledgeRule';
 
-function runTests() {
+async function runTests() {
   console.log('--- STARTING PURE IN-MEMORY ASSERTIONS ---');
   
   let locatorPass = 0;
@@ -263,6 +263,38 @@ function runTests() {
   });
   assertSchema("9. unique { sourceLanguage, dedupKey } index exists", hasUniqueDedupIndex);
 
+  // 10. Async validation must execute document middleware without requiring a callback.
+  const asyncValidationDoc = new KnowledgeRuleV3({
+    ruleCode: 'KR3_ASYNC01',
+    status: 'pending',
+    sourceLanguage: 'en',
+    statement: 'Async middleware validation contract.',
+    claimType: 'association',
+    effectPolarity: 'neutral',
+    evidenceInterpretation: 'associational',
+    subject: 'subject',
+    outcome: 'outcome',
+    conditions: ['  retained condition  ', ''],
+    limitations: [],
+    dreamFeatureTags: [],
+    classifications: [],
+    dedupKey: 'b'.repeat(64),
+    certaintyTier: 'weak',
+    evidenceScore: 0,
+    supportingSourceCount: 0,
+    contradictingSourceCount: 0,
+    version: 1
+  });
+  try {
+    await asyncValidationDoc.validate();
+    assertSchema(
+      '10. async validation middleware runs and normalizes arrays',
+      asyncValidationDoc.conditions.length === 1 && asyncValidationDoc.conditions[0] === 'retained condition'
+    );
+  } catch (error: any) {
+    assertSchema('10. async validation middleware runs and normalizes arrays', false, error?.message);
+  }
+
   console.log('\n======================================');
   console.log(`LOCATOR ASSERTIONS: ${locatorPass} PASSED, ${locatorFail} FAILED`);
   console.log(`SCHEMA ASSERTIONS:  ${schemaPass} PASSED, ${schemaFail} FAILED`);
@@ -275,4 +307,7 @@ function runTests() {
   }
 }
 
-runTests();
+runTests().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

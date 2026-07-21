@@ -219,6 +219,31 @@ export async function buildAndSaveSmartReaderData(
     session.endSession();
   }
 
+  // Keep only lightweight build provenance. Reader text/table/figure data is
+  // never duplicated here; the snapshot exists solely so moderators can
+  // compare a structured DOI build with a Docling PDF build.
+  try {
+    await source.constructor.updateOne(
+      { _id: source._id },
+      {
+        $push: {
+          readerBuildSnapshots: {
+            $each: [{
+              engine: parserEngine,
+              sourceType,
+              sectionCount: cleanBlocks.filter(block => block.blockType === 'heading').length || 1,
+              chunkCount: cleanBlocks.length,
+              builtAt: new Date(),
+            }],
+            $slice: -6,
+          },
+        },
+      },
+    );
+  } catch (snapshotError) {
+    console.warn('[Reader Build Snapshot] Reader was saved, but its lightweight comparison snapshot could not be recorded.');
+  }
+
   return {
     ragChunkCount,
     embedModel: 'nomic-embed-text:latest'

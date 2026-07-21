@@ -58,6 +58,13 @@ export interface ISourceContribution extends Document {
   };
   pdfPageCount?: number;
   detectedLanguage?: string;
+  readerBuildSnapshots?: Array<{
+    engine: string;
+    sourceType: string;
+    sectionCount: number;
+    chunkCount: number;
+    builtAt: Date;
+  }>;
 }
 
 const SourceContributionSchema = new Schema<ISourceContribution>(
@@ -210,6 +217,14 @@ const SourceContributionSchema = new Schema<ISourceContribution>(
     detectedLanguage: {
       type: String,
     },
+    readerBuildSnapshots: [{
+      engine: { type: String, required: true },
+      sourceType: { type: String, required: true },
+      sectionCount: { type: Number, required: true, min: 0 },
+      chunkCount: { type: Number, required: true, min: 0 },
+      builtAt: { type: Date, required: true },
+      _id: false,
+    }],
   },
   {
     timestamps: true,

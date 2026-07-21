@@ -6,7 +6,7 @@ import mongoose, { Document, Schema, Types } from 'mongoose';
 export interface INotification extends Document {
   recipientId: Types.ObjectId; // User receiving the notification
   senderId:    Types.ObjectId; // User who performed the action
-  type:        'like' | 'comment' | 'follow';
+  type:        'like' | 'comment' | 'follow' | 'dream_analysis';
   postId?:     Types.ObjectId; // The dream post linked to the notification
   isRead:      boolean;
   timestamp:   Date;
@@ -27,7 +27,7 @@ const NotificationSchema = new Schema<INotification>(
     },
     type: {
       type: String,
-      enum: ['like', 'comment', 'follow'],
+      enum: ['like', 'comment', 'follow', 'dream_analysis'],
       required: [true, 'Notification type is required'],
     },
     postId: {

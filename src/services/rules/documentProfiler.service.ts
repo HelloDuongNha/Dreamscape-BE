@@ -217,6 +217,20 @@ const CASE_KEYWORDS = ['case report', 'case presentation', 'case discussion', 'c
 const NARRATIVE_KEYWORDS = ['narrative review', 'literature review', 'review article', 'tổng quan tài liệu'];
 const NON_RES_KEYWORDS = ['editorial', 'commentary', 'opinion', 'letter to the editor', 'correspondence', 'news', 'bình luận', 'thư gửi biên tập'];
 
+export function isMajorChapterHeading(heading: string): boolean {
+  return /^\s*(?:chapter|chương)?\s*\d+\s*[.):-]\s+\S/i.test(heading.trim());
+}
+
+export function isBookBackMatterHeading(heading: string): boolean {
+  const normalized = normalizeHeading(heading).replace(/^\d+(?:\.\d+)*\.?\s*/, '');
+  return /^(?:chu giai|chú giải|glossary|index|bibliography|references|tai lieu tham khao|tài liệu tham khảo|about the author|ve tac gia|về tác giả)(?:\b|$)/i.test(normalized);
+}
+
+export function isBookFrontMatterHeading(heading: string): boolean {
+  const normalized = normalizeHeading(heading);
+  return /^(?:muc luc|mục lục|contents|table of contents|loi noi dau|lời nói đầu|loi tua|lời tựa|preface|foreword|copyright)(?:\b|$)/i.test(normalized);
+}
+
 function hasKeywords(text: string, keywords: string[]): boolean {
   return keywords.some(k => contains(text, k));
 }
@@ -313,6 +327,15 @@ function evaluateGenreEvidence(
     () => false
   );
 
+  // 9. Book/monograph. This is intentionally structural: a long document
+  // needs at least two numbered major chapters and must not look like an
+  // empirical IMRaD paper. It therefore works across languages without
+  // classifying every long PDF as a book.
+  const majorChapterCount = input.sections.filter(s => isMajorChapterHeading(s.heading)).length;
+  const isBookStructure = input.sections.length >= 8 && majorChapterCount >= 2 && !hasMethods && !hasResults;
+  const bookChannels = new Set<'title' | 'abstract' | 'section_structure' | 'chunk_sample'>();
+  if (isBookStructure) bookChannels.add('section_structure');
+
   // Check independently strong evidence for mixed method:
   // Both quantitative and qualitative must have >= 2 active channels
   const strongQuant = quantChannels.size >= 2;
@@ -339,6 +362,7 @@ function evaluateGenreEvidence(
     { type: 'case_report', score: caseChannels.size, reasons: ['case_report_markers'] },
     { type: 'narrative_review', score: narrativeChannels.size, reasons: ['review_only_structure'] },
     { type: 'non_research', score: nonResChannels.size, reasons: ['non_research_structure'] }
+    ,{ type: 'book_or_monograph', score: bookChannels.size, reasons: ['book_chapter_structure'] }
   ];
 
   candidates.sort((a, b) => b.score - a.score);
@@ -356,6 +380,7 @@ function evaluateGenreEvidence(
       case 'case_report': return Array.from(caseChannels);
       case 'narrative_review': return Array.from(narrativeChannels);
       case 'non_research': return Array.from(nonResChannels);
+      case 'book_or_monograph': return Array.from(bookChannels);
       default: return [];
     }
   };
@@ -690,6 +715,28 @@ function determineUsageAndStrategy(
       };
     }
 
+    case 'book_or_monograph': {
+      if (['introduction', 'limitations'].includes(sectionRole)) {
+        return {
+          usage: 'context',
+          strategy: 'skip',
+          reason: `Book section role '${sectionRole}' provides context.`
+        };
+      }
+      if (['body', 'results', 'discussion', 'conclusion', 'qualitative_findings'].includes(sectionRole)) {
+        return {
+          usage: 'target',
+          strategy: 'book_argument',
+          reason: 'Evidence-bearing book/monograph chapter.'
+        };
+      }
+      return {
+        usage: 'skip',
+        strategy: 'skip',
+        reason: `Section role '${sectionRole}' is skipped in a book/monograph.`
+      };
+    }
+
     case 'case_report': {
       if (['abstract', 'introduction', 'methods'].includes(sectionRole)) {
         return {
@@ -764,7 +811,39 @@ function determineUsageAndStrategy(
  * each section to an extraction strategy. This function performs no I/O.
  */
 export function routeExtractionStrategy(profile: DocumentResearchProfile): DocumentExtractionPlan {
+  let reachedBookBody = false;
+  let reachedBookBackMatter = false;
   const sectionDecisions: ExtractionStrategyDecision[] = profile.sectionProfiles.map(sp => {
+    if (profile.documentType === 'book_or_monograph') {
+      if (isBookBackMatterHeading(sp.heading)) reachedBookBackMatter = true;
+      if (isMajorChapterHeading(sp.heading)) reachedBookBody = true;
+
+      if (reachedBookBackMatter || isBookFrontMatterHeading(sp.heading)) {
+        return {
+          sectionId: sp.sectionId,
+          sectionRole: sp.resolvedRole,
+          usage: 'skip',
+          strategy: 'skip',
+          strategyReason: reachedBookBackMatter
+            ? 'Book back matter is excluded from rule evidence.'
+            : 'Book front matter/table of contents is excluded from rule evidence.',
+          roleConfidence: sp.roleConfidence,
+          roleReasonCodes: sp.roleReasonCodes,
+        };
+      }
+
+      if (!reachedBookBody) {
+        return {
+          sectionId: sp.sectionId,
+          sectionRole: sp.resolvedRole,
+          usage: 'context',
+          strategy: 'skip',
+          strategyReason: 'Material before the first numbered chapter is context only.',
+          roleConfidence: sp.roleConfidence,
+          roleReasonCodes: sp.roleReasonCodes,
+        };
+      }
+    }
     const { usage, strategy, reason } = determineUsageAndStrategy(
       profile.documentType,
       sp.resolvedRole,

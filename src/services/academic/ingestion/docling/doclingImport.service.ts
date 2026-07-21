@@ -25,6 +25,30 @@ export interface DoclingImportResult {
   detectedPictureCount: number;
   acceptedFigureCount: number;
   discardedFurnitureCount: number;
+  metadataHints?: {
+    authors?: string[];
+  };
+}
+
+function titleCasePersonName(value: string): string {
+  return value.trim().toLocaleLowerCase().replace(/(^|[\s-])\p{L}/gu, match => match.toLocaleUpperCase());
+}
+
+export function detectFrontMatterAuthors(blocks: CanonicalBlock[]): string[] | undefined {
+  const firstBlocks = blocks.slice(0, 30);
+  const rolePattern = /^(?:chủ\s*biên|tác\s*giả|author|editor|edited\s+by|editor-in-chief)\b/iu;
+  for (let index = 0; index < firstBlocks.length - 1; index++) {
+    const candidate = firstBlocks[index].text.trim();
+    const immediateRole = firstBlocks[index + 1]?.text.trim() || '';
+    if (!rolePattern.test(immediateRole)) continue;
+    const words = candidate.split(/\s+/).filter(Boolean);
+    const isShortPersonName = words.length >= 2 && words.length <= 7 &&
+      candidate.length <= 100 &&
+      !/[.!?:]$/.test(candidate) &&
+      words.every(word => /^[\p{L}.'’()-]+$/u.test(word));
+    if (isShortPersonName) return [titleCasePersonName(candidate)];
+  }
+  return undefined;
 }
 
 function escapeHtml(text: string): string {
@@ -148,6 +172,7 @@ export async function runDoclingPdfImport(input: DoclingImportInput): Promise<Do
     if (!run.result.success) throw new Error(run.result.errorDetail || 'Docling không thể phân tích PDF.');
 
     const adapter = DoclingAdapterService.mapToCanonicalBlocks(run.result, run.artifacts);
+    const frontMatterAuthors = detectFrontMatterAuthors(adapter.canonicalOutput.blocks);
     const figureBlocks = adapter.canonicalOutput.blocks.filter((block) => block.blockType === 'figure');
     if (figureBlocks.length !== adapter.figureArtifacts.length) {
       throw new Error('Không thể đối chiếu figure Docling với artifact đã trích xuất.');
@@ -191,7 +216,8 @@ export async function runDoclingPdfImport(input: DoclingImportInput): Promise<Do
         compileResult,
         detectedPictureCount: adapter.detectedPictureCount,
         acceptedFigureCount: adapter.acceptedFigureCount,
-        discardedFurnitureCount: adapter.discardedFurnitureCount
+        discardedFurnitureCount: adapter.discardedFurnitureCount,
+        metadataHints: { authors: frontMatterAuthors }
       };
     }
 
@@ -200,7 +226,8 @@ export async function runDoclingPdfImport(input: DoclingImportInput): Promise<Do
       compileResult,
       detectedPictureCount: adapter.detectedPictureCount,
       acceptedFigureCount: adapter.acceptedFigureCount,
-      discardedFurnitureCount: adapter.discardedFurnitureCount
+      discardedFurnitureCount: adapter.discardedFurnitureCount,
+      metadataHints: { authors: frontMatterAuthors }
     };
   } catch (error) {
     await deleteImageAssets(uploadedIds);

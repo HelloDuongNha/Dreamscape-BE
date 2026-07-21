@@ -30,6 +30,7 @@ export interface IKnowledgeRuleV3 extends Document {
   supportingSourceCount: number;
   contradictingSourceCount: number;
   embedding?: number[];
+  embeddingModel?: string;
   version: number;
   createdAt: Date;
   updatedAt: Date;
@@ -208,10 +209,16 @@ const KnowledgeRuleV3Schema = new Schema<IKnowledgeRuleV3>(
           if ((this.status === 'pending' || this.status === 'rejected') && val && val.length > 0) {
             return false;
           }
-          return true;
+          const expectedDimension = Number.parseInt(process.env.RULE_V3_EMBEDDING_DIMENSION || '768', 10);
+          return !val || val.length === 0 || (val.length === expectedDimension && val.every(Number.isFinite));
         },
-        message: 'Không được lưu embedding cho quy luật ở trạng thái pending hoặc rejected.'
+        message: 'Embedding Rule V3 không hợp lệ về trạng thái, số chiều hoặc giá trị số.'
       }
+    },
+    embeddingModel: {
+      type: String,
+      required: false,
+      trim: true
     },
     version: {
       type: Number,
@@ -231,7 +238,7 @@ const KnowledgeRuleV3Schema = new Schema<IKnowledgeRuleV3>(
 );
 
 // Pre-validate hook to clean up arrays: trim items and filter out empty strings
-KnowledgeRuleV3Schema.pre('validate', function(this: any, next: any) {
+KnowledgeRuleV3Schema.pre('validate', function(this: any) {
   const cleanArray = (arr: string[] | undefined) => {
     if (!arr) return [];
     return arr
@@ -244,9 +251,8 @@ KnowledgeRuleV3Schema.pre('validate', function(this: any, next: any) {
   this.classifications = cleanArray(this.classifications);
 
   // Invariant 3: null findings are valid candidates and must not be silently discarded.
-  // We document here that null_finding is explicitly processed and allowed by validators.
-  
-  next();
+  // This hook is intentionally synchronous. Current Mongoose does not pass a `next`
+  // callback to synchronous document middleware.
 });
 
 // Indexes justified by real query paths:

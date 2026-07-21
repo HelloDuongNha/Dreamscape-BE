@@ -46,4 +46,36 @@ const huge = planEvidenceBatches(plan, [
 assert.strictEqual(huge.batches[0].oversizedSingleChunk, true);
 assert.strictEqual(huge.batches[0].chunks[0].text.length, 2500);
 
-console.log('EVIDENCE BATCH PLANNER: 15 PASSED, 0 FAILED');
+// ─── Section-boundary batching contract ─────────────────────────────────────
+{
+  const sectionPlan: DocumentExtractionPlan = {
+    documentId: 'section-boundary-doc',
+    documentType: 'quantitative_empirical',
+    sourceLanguage: 'en',
+    hasTargets: true,
+    allExcluded: false,
+    sectionDecisions: [
+      { sectionId: 'secA', sectionRole: 'results', usage: 'target', strategy: 'quantitative_results', strategyReason: '', roleConfidence: 'high', roleReasonCodes: [] },
+      { sectionId: 'secB', sectionRole: 'results', usage: 'target', strategy: 'quantitative_results', strategyReason: '', roleConfidence: 'high', roleReasonCodes: [] },
+    ],
+  };
+
+  const adjacentChunks = [
+    { chunkId: 'c1', sectionId: 'secA', chunkOrder: 0, text: 'Small chunk in A.' },
+    { chunkId: 'c2', sectionId: 'secB', chunkOrder: 1, text: 'Small chunk in B.' },
+  ];
+
+  // Even with large limits that would fit both chunks into one batch,
+  // it must create exactly 2 batches because the section ID changed.
+  const batchPlan = planEvidenceBatches(sectionPlan, adjacentChunks, {
+    maxCharactersPerBatch: 1000,
+    maxChunksPerBatch: 10,
+  });
+
+  assert.strictEqual(batchPlan.batches.length, 2);
+  assert.strictEqual(batchPlan.batches[0].chunks[0].chunkId, 'c1');
+  assert.strictEqual(batchPlan.batches[1].chunks[0].chunkId, 'c2');
+  console.log('[PASS] Section changed triggers immediate batch flush');
+}
+
+console.log('EVIDENCE BATCH PLANNER: 16 PASSED, 0 FAILED');

@@ -89,9 +89,10 @@ export function planEvidenceBatches(
 
   for (const chunk of selected) {
     const strategyChanged = current.length > 0 && current[0].strategy !== chunk.strategy;
+    const sectionChanged = current.length > 0 && current[0].sectionId !== chunk.sectionId;
     const wouldOverflow = current.length > 0 && currentCharacters + chunk.text.length > maxCharacters;
     const reachedChunkLimit = current.length >= maxChunks;
-    if (strategyChanged || wouldOverflow || reachedChunkLimit) flush();
+    if (strategyChanged || sectionChanged || wouldOverflow || reachedChunkLimit) flush();
     current.push(chunk);
     currentCharacters += chunk.text.length;
     if (chunk.text.length > maxCharacters) flush();
