@@ -5,6 +5,7 @@ import KnowledgeRuleV3 from '../../models/rulesV3/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../../models/rulesV3/KnowledgeRuleEvidence';
 import { buildRuleV3PlanPreviewRaw } from './ruleV3PlanPreview.service';
 import { extractRuleV3Candidates } from './ruleV3Extractor.service';
+import { calculateSourceContentHash } from '../academic/reader/canonicalReaderIdentity.service';
 import type { RuleV3GenerationProvider } from './ruleV3GenerationProvider.types';
 import { logger } from '../infrastructure/logger';
 import { RULE_V3_SCORING_VERSION, scoreRuleV3 } from './ruleV3Scoring.service';
@@ -118,7 +119,7 @@ export async function startRuleV3FullExtraction(
 ): Promise<RuleV3FullRunStartResult> {
   const raw = await buildRuleV3PlanPreviewRaw(inputId);
   const sourceId = String(raw.approved?._id || raw.contribution?._id || inputId);
-  const sourceContentHash = sha256(raw.chunks.map((chunk: any) => `${chunk._id}:${chunk.text}`).join('\n'));
+  const sourceContentHash = calculateSourceContentHash(raw.chunks);
   const fingerprint = {
     academicSourceId: new mongoose.Types.ObjectId(sourceId),
     sourceContentHash,

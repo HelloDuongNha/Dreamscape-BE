@@ -1,17 +1,11 @@
 import mongoose from 'mongoose';
 import AcademicSection from '../../../models/AcademicSection';
-import AcademicChunk, { IAcademicChunk } from '../../../models/AcademicChunk';
+import AcademicChunk from '../../../models/AcademicChunk';
 import { IAcademicDocument } from '../../../models/AcademicDocument';
+import { ApiResponseSection } from './canonicalReaderIdentity.types';
+import { mapChunkToBlock } from './canonicalReaderIdentity.service';
 
-export interface ApiResponseSection {
-  sectionIndex: number;
-  sectionType: string;
-  text: string;
-  html: string | null;
-  marker: string | null;
-  pageStart: number;
-  pageEnd: number;
-}
+export { ApiResponseSection };
 
 export async function buildReaderResponse(
   doc: IAcademicDocument,
@@ -41,18 +35,7 @@ export async function buildReaderResponse(
     .limit(limit);
 
   const apiSections: ApiResponseSection[] = readerChunks.map((chunk, idx) => {
-    const parentSec = sectionMap.get(chunk.sectionId.toString());
-    const sectionType = chunk.blockType || (parentSec ? parentSec.sectionType : 'paragraph');
-
-    return {
-      sectionIndex: skip + idx,
-      sectionType: sectionType,
-      text: chunk.text,
-      html: chunk.html || null,
-      marker: chunk.marker || null,
-      pageStart: 1, // Will fall back to page break tags or standard pagination on client
-      pageEnd: 1
-    };
+    return mapChunkToBlock(chunk, sectionMap, skip, idx);
   });
 
   return {

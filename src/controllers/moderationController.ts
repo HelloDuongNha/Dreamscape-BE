@@ -8,6 +8,7 @@ import AcademicSection from '../models/AcademicSection';
 import AcademicChunk from '../models/AcademicChunk';
 import { generateEmbedding } from '../services/infrastructure/llm.service';
 import { removeRuleV3SourceData } from '../services/rules/ruleV3Lifecycle.service';
+import { calculateSourceContentHash, normalizeLanguageCode, deriveDocumentIdFromChunks, mapChunkToBlock } from '../services/academic/reader/canonicalReaderIdentity.service';
 import {
   isUrlSafe,
   isValidHttpUrl,
@@ -1938,7 +1939,7 @@ export const getSourcePreview = async (req: Request, res: Response): Promise<voi
       readableInApp: contribution.fullTextStatus === 'imported' || readerChunkCount > 0,
       copyrightStatus: 'copyrighted_with_open_access',
       // Factual quality metrics
-      metadataResolved: !!(contribution.title && contribution.authors && contribution.authors.length > 0),
+          metadataResolved: !!(contribution.title && contribution.authors && contribution.authors.length > 0),
       fullTextAvailable: contribution.allowedUse === 'open_access_fulltext',
       originalPdfAvailable: !!(contribution.originalFile && (contribution.originalFile.originalFileName || contribution.originalFile.cloudinarySecureUrl)) || !!contribution.pdfUrl,
       smartReaderAvailable: contribution.fullTextStatus === 'imported',
@@ -1962,76 +1963,73 @@ export const getSourcePreview = async (req: Request, res: Response): Promise<voi
     
     let sectionsPayload: any[] = [];
     let fullTextPayload: any = null;
+    let readerIdentity: any = null;
 
-    if (doc) {
-      // Reconstruct sections and reader chunks on-the-fly using the same logic as the approved reader response
-      const sections = await AcademicSection.find({ documentId: doc._id }).sort({ sectionOrder: 1 });
+    const chunks = doc
+      ? await AcademicChunk.find({ documentId: doc._id, chunkPurpose: 'reader' }).sort({ chunkOrder: 1 })
+      : await AcademicChunk.find({ previewContributionId: contribution._id, chunkPurpose: 'reader' }).sort({ chunkOrder: 1 });
+
+    if (chunks.length > 0) {
+      let documentId = '';
+      if (doc) {
+        documentId = doc._id.toString();
+      } else {
+        try {
+          documentId = deriveDocumentIdFromChunks(chunks);
+        } catch (e: any) {
+          res.status(400).json({
+            success: false,
+            message: 'Ambiguous document reference in reader chunks.'
+          });
+          return;
+        }
+      }
+
+      // Build sectionMap in ONE single query for the unique documentId
+      const sections = await AcademicSection.find({ documentId }).sort({ sectionOrder: 1 });
       const sectionMap = new Map<string, typeof sections[0]>();
       for (const sec of sections) {
         sectionMap.set(sec._id.toString(), sec);
       }
 
-      // Query reader chunks
-      const chunks = await AcademicChunk.find({
-        documentId: doc._id,
-        chunkPurpose: 'reader',
-      }).sort({ chunkOrder: 1 });
-
       sectionsPayload = chunks.map((chunk, idx) => {
-        const parentSec = chunk.sectionId ? sectionMap.get(chunk.sectionId.toString()) : undefined;
-        const sectionType = chunk.blockType || (parentSec ? parentSec.sectionType : 'paragraph');
-
-        return {
-          sectionIndex: idx,
-          sectionType: sectionType,
-          text: chunk.text,
-          html: chunk.html || null,
-          marker: chunk.marker || null,
-          pageStart: 1,
-          pageEnd: 1
-        };
+        return mapChunkToBlock(chunk, sectionMap, 0, idx);
       });
 
-      fullTextPayload = {
-        wordCount: chunks.reduce((acc, c) => acc + (c.text.split(/\s+/).filter(Boolean).length), 0),
-        characterCount: chunks.reduce((acc, c) => acc + c.text.length, 0),
-        sectionCount: chunks.length,
-        importedAt: doc.createdAt,
-        extractionEngine: doc.parserEngine || 'pymupdf',
-        extractionQuality: 'high',
-        structureVersion: 'smart-reader-v2'
+      const sourceContentHash = calculateSourceContentHash(chunks);
+      readerIdentity = {
+        documentId,
+        sourceLanguage: normalizeLanguageCode(contribution.detectedLanguage),
+        sourceContentHash,
+        parserEngine: doc ? (doc.parserEngine || null) : null,
+        parserVersion: doc ? (doc.parserVersion != null ? String(doc.parserVersion) : null) : null,
+        updatedAt: doc ? (doc.updatedAt ? doc.updatedAt.toISOString() : null) : null
       };
-      sourceData.readerSectionCount = sections.length;
-      sourceData.readerParserEngine = doc.parserEngine;
-      sourceData.readerBuiltAt = doc.updatedAt;
-    } else if (readerChunkCount > 0) {
-      // Query reader chunks directly by previewContributionId
-      const chunks = await AcademicChunk.find({
-        previewContributionId: contribution._id,
-        chunkPurpose: 'reader'
-      }).sort({ chunkOrder: 1 });
 
-      sectionsPayload = chunks.map((chunk, idx) => {
-        return {
-          sectionIndex: idx,
-          sectionType: chunk.blockType || 'paragraph',
-          text: chunk.text,
-          html: chunk.html || null,
-          marker: chunk.marker || null,
-          pageStart: 1,
-          pageEnd: 1
+      if (doc) {
+        fullTextPayload = {
+          wordCount: chunks.reduce((acc, c) => acc + (c.text.split(/\s+/).filter(Boolean).length), 0),
+          characterCount: chunks.reduce((acc, c) => acc + c.text.length, 0),
+          sectionCount: chunks.length,
+          importedAt: doc.createdAt,
+          extractionEngine: doc.parserEngine || 'pymupdf',
+          extractionQuality: 'high',
+          structureVersion: 'smart-reader-v2'
         };
-      });
-
-      fullTextPayload = {
-        wordCount: chunks.reduce((acc, c) => acc + (c.text.split(/\s+/).filter(Boolean).length), 0),
-        characterCount: chunks.reduce((acc, c) => acc + c.text.length, 0),
-        sectionCount: chunks.length,
-        importedAt: contribution.updatedAt,
-        extractionEngine: 'GenericHtmlParser',
-        extractionQuality: 'high',
-        structureVersion: 'smart-reader-v2'
-      };
+        sourceData.readerSectionCount = sections.length;
+        sourceData.readerParserEngine = doc.parserEngine;
+        sourceData.readerBuiltAt = doc.updatedAt;
+      } else {
+        fullTextPayload = {
+          wordCount: chunks.reduce((acc, c) => acc + (c.text.split(/\s+/).filter(Boolean).length), 0),
+          characterCount: chunks.reduce((acc, c) => acc + c.text.length, 0),
+          sectionCount: chunks.length,
+          importedAt: contribution.updatedAt,
+          extractionEngine: 'GenericHtmlParser',
+          extractionQuality: 'high',
+          structureVersion: 'smart-reader-v2'
+        };
+      }
     }
 
     res.status(200).json({
@@ -2039,6 +2037,7 @@ export const getSourcePreview = async (req: Request, res: Response): Promise<voi
       data: {
         source: sourceData,
         fullText: fullTextPayload,
+        readerIdentity,
         sections: sectionsPayload
       }
     });

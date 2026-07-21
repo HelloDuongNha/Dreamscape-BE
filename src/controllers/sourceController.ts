@@ -4,7 +4,9 @@ import SourceContribution from '../models/SourceContribution';
 import AcademicSource from '../models/AcademicSource';
 import AcademicDocument from '../models/AcademicDocument';
 import AcademicSection from '../models/AcademicSection';
+import AcademicChunk from '../models/AcademicChunk';
 import { buildReaderResponse } from '../services/academic/reader/readerResponseBuilder.service';
+import { calculateSourceContentHash, normalizeLanguageCode } from '../services/academic/reader/canonicalReaderIdentity.service';
 import { normalizeDoi, fetchUnpaywallMetadata } from '../services/source/openAccess.service';
 import { incrementSubmitted } from '../services/contribution/contributionStats.service';
 import { resolveSourceImport } from '../services/source/sourceImportResolver.service';
@@ -715,6 +717,23 @@ export const getApprovedSourceRead = async (req: Request, res: Response): Promis
       return;
     }
 
+    // Query all chunks to calculate the global sourceContentHash
+    const allChunks = await AcademicChunk.find(
+      { documentId: fullText._id, chunkPurpose: 'reader' },
+      { _id: 1, text: 1, chunkOrder: 1 }
+    ).sort({ chunkOrder: 1 }).lean();
+
+    const sourceContentHash = calculateSourceContentHash(allChunks);
+
+    const readerIdentity = {
+      documentId: fullText._id.toString(),
+      sourceLanguage: normalizeLanguageCode(source.detectedLanguage),
+      sourceContentHash,
+      parserEngine: fullText.parserEngine || null,
+      parserVersion: fullText.parserVersion != null ? String(fullText.parserVersion) : null,
+      updatedAt: fullText.updatedAt ? fullText.updatedAt.toISOString() : null
+    };
+
     const ftAny = fullText as any;
     res.status(200).json({
       success: true,
@@ -746,6 +765,7 @@ export const getApprovedSourceRead = async (req: Request, res: Response): Promis
           layoutQuality: ftAny.layoutQuality,
           warnings: ftAny.warnings
         },
+        readerIdentity,
         sections: apiSections,
         pagination: {
           page,
