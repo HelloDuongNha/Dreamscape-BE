@@ -5,6 +5,12 @@ export interface IEditHistoryEntry {
   editedAt: Date;
 }
 
+export interface IDreamAddition {
+  sequence: number;
+  content: string;
+  addedAt: Date;
+}
+
 export interface IDream extends Document {
   userId: Types.ObjectId;
   content: string;
@@ -20,6 +26,7 @@ export interface IDream extends Document {
   ai_status: 'pending' | 'sensing' | 'completed' | 'failed';
   ai_result: Record<string, unknown> | null;
   edit_history: IEditHistoryEntry[];
+  additions: IDreamAddition[];
   sleepContext?: Record<string, any>;
   retrievedContext?: Record<string, any> | null;
   analysisMetadata?: Record<string, any> | null;
@@ -39,6 +46,15 @@ const EditHistorySchema = new Schema<IEditHistoryEntry>(
   {
     content: { type: String, required: true },
     editedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
+const DreamAdditionSchema = new Schema<IDreamAddition>(
+  {
+    sequence: { type: Number, required: true, min: 1 },
+    content: { type: String, required: true, trim: true },
+    addedAt: { type: Date, default: Date.now },
   },
   { _id: false }
 );
@@ -111,6 +127,10 @@ const DreamSchema = new Schema<IDream>(
     },
     edit_history: {
       type: [EditHistorySchema],
+      default: [],
+    },
+    additions: {
+      type: [DreamAdditionSchema],
       default: [],
     },
     sleepContext: {

@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
 import {
+  classifyRuleApplicationTier,
   expandDreamRetrievalConcepts,
   extractDreamRuleFeatures,
   lexicalOverlap,
   rankRuleV3Candidates,
 } from './ruleV3Retrieval.service';
+
+assert.equal(classifyRuleApplicationTier({ evidenceScore: 19, supportingSourceCount: 1 }), 'exploratory');
+assert.equal(classifyRuleApplicationTier({ evidenceScore: 60, supportingSourceCount: 2 }), 'supported');
 
 const dream = 'Tôi cầm cuốn sổ trắng, sợ mình sẽ quên, rồi chạy về căn nhà cũ của bà ngoại.';
 const expanded = expandDreamRetrievalConcepts(dream);
@@ -24,6 +28,9 @@ assert.ok(stationFeatures.includes('future event combination'));
 assert.ok(stationFeatures.includes('multiple time points'));
 assert.ok(stationFeatures.includes('implausible scenarios'));
 assert.ok(stationFeatures.includes('later in the night'));
+const recombinationFeatures = extractDreamRuleFeatures('Lớp học cũ biến thành lịch họp; tàu bàn phím bay tới Mặt Trăng trước buổi trình bày sắp tới.');
+assert.ok(recombinationFeatures.includes('weak associations'));
+assert.ok(recombinationFeatures.includes('implausible scenarios'));
 
 const baseRule = {
   status: 'verified', sourceLanguage: 'en', evidenceScore: 35, embedding: [1, 0], conditions: [],
@@ -46,4 +53,16 @@ assert.equal(rankedIds.includes('awakening-latency'), false);
 assert.equal(rankedIds.includes('termite'), false);
 assert.equal(rankedIds.includes('brain-damage'), false);
 
-console.log('RULE V3 RETRIEVAL: 19 PASSED, 0 FAILED');
+const targetDream = 'Tôi quay lại lớp học cũ; bảng biến thành lịch họp. Tôi đi tàu làm bằng bàn phím tới Mặt Trăng để trình bày dự án, rồi ghép đồ chơi tuổi thơ thành một cây cầu.';
+const targetComposite = {
+  ...baseRule, _id: 'target-composite', subject: 'weak associations', outcome: 'creative thinking',
+  statement: 'Weak associations may contribute to flexible thinking in implausible future-related dreams.',
+  dreamFeatureTags: ['weak associations', 'implausible scenarios', 'future anticipation'],
+  isComposite: true,
+  compositeComponents: [{ statement: 'Future-related dreams are often highly implausible scenarios.', subject: 'future-related dreams', outcome: 'implausible scenarios' },
+    { statement: 'Weak associations may contribute to creative thinking.', subject: 'weak associations', outcome: 'creative thinking' }],
+};
+assert.equal(rankRuleV3Candidates([targetComposite], targetDream, [1, 0], 'vi')[0]?.rule._id, 'target-composite',
+  'the exact user test dream must pass semantic retrieval for the approved composite rule');
+
+console.log('RULE V3 RETRIEVAL: ALL ASSERTIONS PASSED');

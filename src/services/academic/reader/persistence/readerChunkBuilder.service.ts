@@ -18,11 +18,28 @@ export async function buildAndSaveSmartReaderData(
   const stripHtml = (htmlStr: string) => htmlStr.replace(/<\/?[^>]+(>|$)/g, "");
   const normTitle = normalizeString(title);
 
-  const cleanBlocks = blocks.map(b => ({
-    ...b,
-    text: String(b.text || '').trim(),
-    html: String(b.html || '')
-  })).filter(b => {
+  const normalizeExtractedLabel = (value: string) => {
+    const trimmed = value.trim();
+    // Some PDF/HTML sources encode display letter-spacing as real spaces.
+    // Collapse only a whole-block label with at least four separated letters;
+    // never rewrite prose, formulas, citations, or arbitrary inner spacing.
+    return /^(?:\p{L}\s+){3,}\p{L}$/u.test(trimmed)
+      ? trimmed.replace(/\s+/g, '')
+      : trimmed;
+  };
+
+  const cleanBlocks = blocks.map(b => {
+    const originalText = String(b.text || '').trim();
+    const normalizedText = normalizeExtractedLabel(originalText);
+    const originalHtml = String(b.html || '');
+    return {
+      ...b,
+      text: normalizedText,
+      html: normalizedText !== originalText && originalHtml.includes(originalText)
+        ? originalHtml.replace(originalText, normalizedText)
+        : originalHtml
+    };
+  }).filter(b => {
     // AcademicChunk.text is required. Empty layout artifacts must be rejected
     // before any existing reader data is touched.
     if (!b.text) return false;

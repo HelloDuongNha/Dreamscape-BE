@@ -38,6 +38,9 @@ export interface RuleV3QualityCandidate {
 export interface RuleV3QualityEvidence {
   exactQuote?: string;
   stance: 'supports' | 'refutes' | 'limits';
+  chunkId?: unknown;
+  startOffset?: number;
+  endOffset?: number;
 }
 
 export interface RuleV3CandidateQualityResult {
@@ -230,6 +233,51 @@ function assessAtomicSupport(candidate: RuleV3QualityCandidate, evidence: RuleV3
       ? `Trích dẫn gần nhất chỉ bao phủ ${percent(best.statement)}% kết luận; chủ thể ${percent(best.subject)}% và kết quả ${percent(best.outcome)}%, dưới ngưỡng hỗ trợ.`
       : 'Không có trích dẫn mang vai trò hỗ trợ để đối chiếu với kết luận.'
   };
+}
+
+/**
+ * A provider may select a transitional sentence such as "But this does not
+ * imply..." from the same paragraph as a valid claim. Exact citation matching
+ * proves where the sentence came from, not that the sentence supports the
+ * claim. Keep only local evidence clusters that entail at least part of the
+ * atomic claim; nearby example sentences remain attached to their direct
+ * anchor, while distant orphan transitions are removed.
+ */
+export function pruneUnsupportedSupportingEvidence<T extends RuleV3QualityEvidence>(
+  candidate: RuleV3QualityCandidate,
+  evidence: T[],
+  maxClusterGap = 240,
+): T[] {
+  const retained = evidence.filter(item => item.stance !== 'supports');
+  const byChunk = new Map<string, T[]>();
+  for (const item of evidence.filter(entry => entry.stance === 'supports')) {
+    const chunkKey = String(item.chunkId || '__unknown_chunk__');
+    const entries = byChunk.get(chunkKey) || [];
+    entries.push(item);
+    byChunk.set(chunkKey, entries);
+  }
+
+  for (const entries of byChunk.values()) {
+    const sorted = [...entries].sort((a, b) => Number(a.startOffset || 0) - Number(b.startOffset || 0));
+    const clusters: T[][] = [];
+    for (const item of sorted) {
+      const current = clusters[clusters.length - 1];
+      const previous = current?.[current.length - 1];
+      const gap = previous && Number.isFinite(previous.endOffset) && Number.isFinite(item.startOffset)
+        ? Number(item.startOffset) - Number(previous.endOffset)
+        : Number.POSITIVE_INFINITY;
+      if (!current || gap > maxClusterGap) clusters.push([item]);
+      else current.push(item);
+    }
+    for (const cluster of clusters) {
+      const combinedQuote = cluster.map(item => String(item.exactQuote || '')).join(' ');
+      const support = assessAtomicSupport(candidate, [{ exactQuote: combinedQuote, stance: 'supports' }]);
+      if (support.level !== 'none') retained.push(...cluster);
+    }
+  }
+
+  const retainedSet = new Set(retained);
+  return evidence.filter(item => retainedSet.has(item));
 }
 
 function hasClaimTypeMismatch(candidate: RuleV3QualityCandidate, combinedText: string): boolean {

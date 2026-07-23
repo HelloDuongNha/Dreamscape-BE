@@ -99,6 +99,19 @@ export interface ILLMOutput {
     similarity: number;
     matchedOn: string[];
   }[];
+  creative_continuation?: {
+    title: string;
+    continuation: string;
+    connectionToCurrentDream: string;
+    inspirationIndexes: number[];
+    disclaimer?: string;
+    inspirations?: Array<{
+      dreamId: string;
+      title: string;
+      similarity: number;
+      matchedOn: string[];
+    }>;
+  };
   feedback_revision?: {
     hypothesis: string;
     status: 'supported' | 'weakened' | 'unresolved';
@@ -286,6 +299,21 @@ export function validateLLMOutput(data: any): data is ILLMOutput {
     if (item.questionType !== undefined && !['past', 'present', 'future'].includes(item.questionType)) {
       logger.warn('LLM validation failed: real_life_hypotheses element questionType invalid');
       return false;
+    }
+  }
+
+  if (data.creative_continuation !== undefined) {
+    const continuation = data.creative_continuation;
+    if (!continuation || typeof continuation !== 'object'
+      || typeof continuation.title !== 'string'
+      || typeof continuation.continuation !== 'string'
+      || typeof continuation.connectionToCurrentDream !== 'string'
+      || !Array.isArray(continuation.inspirationIndexes)
+      || continuation.inspirationIndexes.some((index: unknown) => !Number.isInteger(index))) {
+      // This is an optional creative feature. A malformed continuation must
+      // never discard an otherwise valid evidence-grounded dream analysis.
+      logger.warn('Dropping malformed optional creative_continuation');
+      delete data.creative_continuation;
     }
   }
 

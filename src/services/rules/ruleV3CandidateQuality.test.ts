@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import {
   assessRuleV3CandidateQuality,
   hasSpecificRuleCondition,
-  hasSpecificRuleLimitation
+  hasSpecificRuleLimitation,
+  pruneUnsupportedSupportingEvidence,
 } from './ruleV3CandidateQuality.service';
 
 const base = {
@@ -147,4 +148,27 @@ const applicableBookMechanism = assessRuleV3CandidateQuality({
 assert.equal(applicableBookMechanism.accepted, true);
 assert.equal(applicableBookMechanism.applicationReadiness, 'conditional');
 
-console.log('RULE V3 CANDIDATE QUALITY: 36 PASSED, 0 FAILED');
+const processDifferenceCandidate = {
+  ...base,
+  statement: 'Dreaming is likely not strictly the same process as waking prospective thought.',
+  claimType: 'theoretical_proposition',
+  evidenceInterpretation: 'interpretive',
+  effectPolarity: 'neutral',
+  subject: 'dreaming',
+  outcome: 'not strictly the same process as waking prospective thought',
+};
+const prunedEvidence = pruneUnsupportedSupportingEvidence(processDifferenceCandidate, [{
+  chunkId: 'chunk-a', startOffset: 0, endOffset: 161, stance: 'supports' as const,
+  exactQuote: 'Yet despite the resemblance of dreams to waking constructive episodic simulation, dreaming is likely not strictly the same process as waking prospective thought.',
+}, {
+  chunkId: 'chunk-a', startOffset: 1015, endOffset: 1075, stance: 'supports' as const,
+  exactQuote: 'But this does not imply that such dreams are non-functional.',
+}, {
+  chunkId: 'chunk-a', startOffset: 1076, endOffset: 1211, stance: 'limits' as const,
+  exactQuote: 'To the contrary, the activation of weak associations may support creative and divergent thinking.',
+}]);
+assert.equal(prunedEvidence.length, 2);
+assert.equal(prunedEvidence.some(item => item.exactQuote.startsWith('But this does not imply')), false);
+assert.equal(prunedEvidence.some(item => item.stance === 'limits'), true);
+
+console.log('RULE V3 CANDIDATE QUALITY: ORPHAN EVIDENCE FILTER PASSED');

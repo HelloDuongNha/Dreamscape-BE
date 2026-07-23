@@ -8,7 +8,15 @@ import AcademicSection from '../models/AcademicSection';
 import AcademicChunk from '../models/AcademicChunk';
 import { generateEmbedding } from '../services/infrastructure/llm.service';
 import { removeRuleV3SourceData } from '../services/rules/ruleV3Lifecycle.service';
-import { calculateSourceContentHash, normalizeLanguageCode, deriveDocumentIdFromChunks, mapChunkToBlock } from '../services/academic/reader/canonicalReaderIdentity.service';
+import { calculateSourceContentHash, deriveDocumentIdFromChunks, mapChunkToBlock, CanonicalBlockIdentityError } from '../services/academic/reader/canonicalReaderIdentity.service';
+import type { CanonicalReaderIdentity } from '../services/academic/reader/canonicalReaderIdentity.types';
+import { validateRequestShape, checkHttpBodyLimit } from '../services/academic/reader/readerTranslationValidator.service';
+import { translateReaderTargets } from '../services/academic/reader/canonicalReaderTranslation.service';
+import { resolveTranslationProvider } from '../services/academic/reader/readerTranslationProvider.registry';
+import { resolvePreviewContributionContext, loadTranslationChunks } from '../services/academic/reader/readerTranslationContext.service';
+import type { TranslationServiceDeps } from '../services/academic/reader/readerTranslation.types';
+import { getTranslationDeadlineMs } from '../config/translationConfig';
+import { resolveReaderLanguage } from '../services/academic/reader/readerLanguage.service';
 import {
   isUrlSafe,
   isValidHttpUrl,
@@ -1963,7 +1971,7 @@ export const getSourcePreview = async (req: Request, res: Response): Promise<voi
     
     let sectionsPayload: any[] = [];
     let fullTextPayload: any = null;
-    let readerIdentity: any = null;
+    let readerIdentity: CanonicalReaderIdentity | null = null;
 
     const chunks = doc
       ? await AcademicChunk.find({ documentId: doc._id, chunkPurpose: 'reader' }).sort({ chunkOrder: 1 })
@@ -1977,10 +1985,19 @@ export const getSourcePreview = async (req: Request, res: Response): Promise<voi
         try {
           documentId = deriveDocumentIdFromChunks(chunks);
         } catch (e: any) {
-          res.status(400).json({
-            success: false,
-            message: 'Ambiguous document reference in reader chunks.'
-          });
+          if (e.message === 'AMBIGUOUS_DOCUMENT_ID') {
+            res.status(400).json({
+              success: false,
+              code: 'reader_identity_ambiguous',
+              message: 'Ambiguous document reference in reader chunks.'
+            });
+          } else {
+            res.status(400).json({
+              success: false,
+              code: 'reader_identity_unavailable',
+              message: 'Reader document identity could not be determined.'
+            });
+          }
           return;
         }
       }
@@ -1992,14 +2009,26 @@ export const getSourcePreview = async (req: Request, res: Response): Promise<voi
         sectionMap.set(sec._id.toString(), sec);
       }
 
-      sectionsPayload = chunks.map((chunk, idx) => {
-        return mapChunkToBlock(chunk, sectionMap, 0, idx);
-      });
+      try {
+        sectionsPayload = chunks.map((chunk, idx) => {
+          return mapChunkToBlock(chunk, sectionMap, 0, idx);
+        });
+      } catch (e: any) {
+        if (e instanceof CanonicalBlockIdentityError) {
+          res.status(400).json({
+            success: false,
+            code: 'reader_block_identity_invalid',
+            message: 'A reader block has invalid canonical identity.'
+          });
+          return;
+        }
+        throw e;
+      }
 
       const sourceContentHash = calculateSourceContentHash(chunks);
       readerIdentity = {
         documentId,
-        sourceLanguage: normalizeLanguageCode(contribution.detectedLanguage),
+        sourceLanguage: resolveReaderLanguage(contribution.detectedLanguage, chunks),
         sourceContentHash,
         parserEngine: doc ? (doc.parserEngine || null) : null,
         parserVersion: doc ? (doc.parserVersion != null ? String(doc.parserVersion) : null) : null,
@@ -2301,5 +2330,89 @@ export const processUploadedPdfForContribution = async (req: Request, res: Respo
       success: false,
       message: err.message || 'Lỗi xử lý tệp PDF đóng góp.'
     });
+  }
+};
+/**
+ * POST /api/moderation/sources/:id/preview/translate
+ * Translates Smart Reader targets for a moderation preview (contribution).
+ * Access: Authenticated moderators only (enforced by route middleware).
+ *
+ * Uses a display-overlay translation provider. Canonical source data is unchanged.
+ */
+export const getSourcePreviewTranslation = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const id = req.params.id as string;
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      res.status(404).json({ success: false, code: 'reader_translation_document_unavailable', message: 'Source not found.' });
+      return;
+    }
+
+    // Check HTTP body limit before DB reads using exact captured raw body length
+    const rawBodyBytes = req.rawBodyLength ?? 0;
+    const bodyLimitError = checkHttpBodyLimit(rawBodyBytes);
+    if (bodyLimitError) {
+      res.status(413).json({ success: false, code: bodyLimitError.code, message: 'Request too large.' });
+      return;
+    }
+
+    const parseResult = validateRequestShape(req.body);
+    if (!parseResult.valid) {
+      res.status(parseResult.error.httpStatus).json({ success: false, code: parseResult.error.code, message: 'Invalid translation request.' });
+      return;
+    }
+
+    // Wire client disconnect cancellation
+    const clientAbort = new AbortController();
+    const onReqAborted = () => {
+      clientAbort.abort();
+    };
+    const onResClose = () => {
+      if (!res.writableEnded) {
+        clientAbort.abort();
+      }
+    };
+    req.on('aborted', onReqAborted);
+    res.on('close', onResClose);
+
+    const deps: TranslationServiceDeps = {
+      resolveCanonicalContext: resolvePreviewContributionContext,
+      loadChunks: loadTranslationChunks,
+      resolveProvider: resolveTranslationProvider,
+      now: () => Date.now(),
+      deadlineMs: getTranslationDeadlineMs(),
+      createAbortController: () => new AbortController(),
+      setTimer: (cb, ms) => setTimeout(cb, ms),
+      clearTimer: (h) => clearTimeout(h),
+    };
+
+    let result;
+    try {
+      result = await translateReaderTargets(
+        { routeId: id, path: 'preview', request: parseResult.request, clientSignal: clientAbort.signal },
+        deps
+      );
+    } finally {
+      req.removeListener('aborted', onReqAborted);
+      res.removeListener('close', onResClose);
+    }
+
+    if (!result.success) {
+      const { code, httpStatus } = result.error;
+      const message = code === 'reader_translation_identity_stale'
+        ? 'The source content has changed. Please refresh and retry.'
+        : code === 'reader_translation_provider_unavailable'
+        ? 'Translation provider is not available.'
+        : code === 'reader_translation_limit_exceeded'
+        ? 'Request exceeds size limit.'
+        : code === 'reader_translation_document_unavailable'
+        ? 'Document not found.'
+        : 'Invalid translation request.';
+      res.status(httpStatus).json({ success: false, code, message });
+      return;
+    }
+
+    res.status(200).json({ success: true, data: result.response });
+  } catch (err: any) {
+    res.status(500).json({ success: false, code: 'reader_translation_internal_error', message: 'An internal error occurred.' });
   }
 };

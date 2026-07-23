@@ -1,8 +1,15 @@
+/**
+ * canonicalReaderIdentity.test.ts
+ * Phase I18N-3B.1.3 — Global Canonical Hash Validation Cleanup
+ *
+ * Standalone contract test suite. Run with:
+ *   npx tsx src/services/academic/reader/canonicalReaderIdentity.test.ts
+ */
 import assert from 'node:assert';
 import mongoose from 'mongoose';
 import crypto from 'node:crypto';
 
-// Import models to spy/block and mock
+// ── Model imports (for spy/block) ─────────────────────────────────────────────
 import AcademicSource from '../../../models/AcademicSource';
 import SourceContribution from '../../../models/SourceContribution';
 import AcademicDocument from '../../../models/AcademicDocument';
@@ -11,472 +18,682 @@ import AcademicChunk from '../../../models/AcademicChunk';
 import KnowledgeRuleV3 from '../../../models/rulesV3/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../../../models/rulesV3/KnowledgeRuleEvidence';
 
-// Import service helpers
+// ── Service helpers ───────────────────────────────────────────────────────────
 import {
   calculateCanonicalChunkContentHash,
   calculateSourceContentHash,
   normalizeLanguageCode,
   deriveDocumentIdFromChunks,
-  mapChunkToBlock
+  mapChunkToBlock,
+  CanonicalBlockIdentityError
 } from './canonicalReaderIdentity.service';
 
-// Import controllers to test
+// ── Controller endpoints under test ──────────────────────────────────────────
 import { getApprovedSourceRead } from '../../../controllers/sourceController';
 import { getSourcePreview } from '../../../controllers/moderationController';
 
-async function runTests() {
-  console.log('=== STARTING CANONICAL SMART READER IDENTITY CONTRACT TESTS ===');
+// ── Write method names that must never be called by reader endpoints ──────────
+const WRITE_METHODS = [
+  'create', 'insertMany', 'updateOne', 'updateMany', 'findOneAndUpdate',
+  'replaceOne', 'bulkWrite', 'deleteOne', 'deleteMany',
+  'findOneAndDelete', 'findByIdAndUpdate', 'findByIdAndDelete'
+] as const;
 
-  let testAssertions = 0;
-  const assertTest = (msg: string, cond: boolean) => {
-    testAssertions++;
-    assert.ok(cond, msg);
-    console.log(`[PASS] ${msg}`);
-  };
+type WriteMethods = typeof WRITE_METHODS[number];
 
-  // Backups of all original Mongoose read/write methods
-  const originals = {
-    // Reads
-    sourceFindById: AcademicSource.findById,
-    contributionFindById: SourceContribution.findById,
-    docFindOne: AcademicDocument.findOne,
-    secFind: AcademicSection.find,
-    chunkFind: AcademicChunk.find,
-    chunkCount: AcademicChunk.countDocuments,
+// ── Per-model backup map strategy ─────────────────────────────────────────────
+function createModelWriteBackup(model: any): Map<WriteMethods, any> {
+  const backup = new Map<WriteMethods, any>();
+  for (const m of WRITE_METHODS) {
+    backup.set(m, model[m]);
+  }
+  return backup;
+}
 
-    // Writes
-    sourceCreate: AcademicSource.create,
-    sourceInsertMany: AcademicSource.insertMany,
-    sourceUpdateOne: AcademicSource.updateOne,
-    sourceUpdateMany: AcademicSource.updateMany,
-    sourceFindOneAndUpdate: AcademicSource.findOneAndUpdate,
-    sourceReplaceOne: AcademicSource.replaceOne,
-    sourceBulkWrite: AcademicSource.bulkWrite,
-    sourceDeleteOne: AcademicSource.deleteOne,
-    sourceDeleteMany: AcademicSource.deleteMany,
-    sourceFindOneAndDelete: AcademicSource.findOneAndDelete,
-    sourceFindByIdAndUpdate: AcademicSource.findByIdAndUpdate,
-    sourceFindByIdAndDelete: AcademicSource.findByIdAndDelete,
+function blockModelWrites(model: any): void {
+  const throwWrite = () => { throw new Error('DATABASE_WRITE_FORBIDDEN_IN_READER'); };
+  for (const m of WRITE_METHODS) {
+    model[m] = throwWrite;
+  }
+}
 
-    contributionCreate: SourceContribution.create,
-    contributionInsertMany: SourceContribution.insertMany,
-    contributionUpdateOne: SourceContribution.updateOne,
-    contributionUpdateMany: SourceContribution.updateMany,
-    contributionFindOneAndUpdate: SourceContribution.findOneAndUpdate,
-    contributionReplaceOne: SourceContribution.replaceOne,
-    contributionBulkWrite: SourceContribution.bulkWrite,
-    contributionDeleteOne: SourceContribution.deleteOne,
-    contributionDeleteMany: SourceContribution.deleteMany,
-    contributionFindOneAndDelete: SourceContribution.findOneAndDelete,
-    contributionFindByIdAndUpdate: SourceContribution.findByIdAndUpdate,
-    contributionFindByIdAndDelete: SourceContribution.findByIdAndDelete,
+function restoreModelWriteBackup(model: any, backup: Map<WriteMethods, any>): void {
+  for (const [method, original] of backup) {
+    model[method] = original;
+  }
+}
 
-    docCreate: AcademicDocument.create,
-    docInsertMany: AcademicDocument.insertMany,
-    docUpdateOne: AcademicDocument.updateOne,
-    docUpdateMany: AcademicDocument.updateMany,
-    docFindOneAndUpdate: AcademicDocument.findOneAndUpdate,
-    docReplaceOne: AcademicDocument.replaceOne,
-    docBulkWrite: AcademicDocument.bulkWrite,
-    docDeleteOne: AcademicDocument.deleteOne,
-    docDeleteMany: AcademicDocument.deleteMany,
-    docFindOneAndDelete: AcademicDocument.findOneAndDelete,
-    docFindByIdAndUpdate: AcademicDocument.findByIdAndUpdate,
-    docFindByIdAndDelete: AcademicDocument.findByIdAndDelete,
+// ── Chainable query mock factory ──────────────────────────────────────────────
+// Implements real skip/limit semantics on the provided data array so pagination
+// is actually exercised, not silently bypassed.
+function createMockQuery(dataFactory: () => any[], sortKey?: string) {
+  let _skip = 0;
+  let _limit: number | null = null;
 
-    secCreate: AcademicSection.create,
-    secInsertMany: AcademicSection.insertMany,
-    secUpdateOne: AcademicSection.updateOne,
-    secUpdateMany: AcademicSection.updateMany,
-    secFindOneAndUpdate: AcademicSection.findOneAndUpdate,
-    secReplaceOne: AcademicSection.replaceOne,
-    secBulkWrite: AcademicSection.bulkWrite,
-    secDeleteOne: AcademicSection.deleteOne,
-    secDeleteMany: AcademicSection.deleteMany,
-    secFindOneAndDelete: AcademicSection.findOneAndDelete,
-    secFindByIdAndUpdate: AcademicSection.findByIdAndUpdate,
-    secFindByIdAndDelete: AcademicSection.findByIdAndDelete,
-
-    chunkCreate: AcademicChunk.create,
-    chunkInsertMany: AcademicChunk.insertMany,
-    chunkUpdateOne: AcademicChunk.updateOne,
-    chunkUpdateMany: AcademicChunk.updateMany,
-    chunkFindOneAndUpdate: AcademicChunk.findOneAndUpdate,
-    chunkReplaceOne: AcademicChunk.replaceOne,
-    chunkBulkWrite: AcademicChunk.bulkWrite,
-    chunkDeleteOne: AcademicChunk.deleteOne,
-    chunkDeleteMany: AcademicChunk.deleteMany,
-    chunkFindOneAndDelete: AcademicChunk.findOneAndDelete,
-    chunkFindByIdAndUpdate: AcademicChunk.findByIdAndUpdate,
-    chunkFindByIdAndDelete: AcademicChunk.findByIdAndDelete,
-
-    protoSave: mongoose.Model.prototype.save
-  };
-
-  const blockWrites = () => {
-    const throwWrite = () => {
-      throw new Error('DATABASE_WRITE_FORBIDDEN_IN_READER');
-    };
-
-    const models = [AcademicSource, SourceContribution, AcademicDocument, AcademicSection, AcademicChunk, KnowledgeRuleV3, KnowledgeRuleEvidenceV3];
-    for (const m of models) {
-      m.create = throwWrite as any;
-      m.insertMany = throwWrite as any;
-      m.updateOne = throwWrite as any;
-      m.updateMany = throwWrite as any;
-      m.findOneAndUpdate = throwWrite as any;
-      m.replaceOne = throwWrite as any;
-      m.bulkWrite = throwWrite as any;
-      m.deleteOne = throwWrite as any;
-      m.deleteMany = throwWrite as any;
-      m.findOneAndDelete = throwWrite as any;
-      m.findByIdAndUpdate = throwWrite as any;
-      m.findByIdAndDelete = throwWrite as any;
-    }
-    mongoose.Model.prototype.save = throwWrite as any;
-  };
-
-  const restoreAll = () => {
-    AcademicSource.findById = originals.sourceFindById;
-    SourceContribution.findById = originals.contributionFindById;
-    AcademicDocument.findOne = originals.docFindOne;
-    AcademicSection.find = originals.secFind;
-    AcademicChunk.find = originals.chunkFind;
-    AcademicChunk.countDocuments = originals.chunkCount;
-
-    const models = [AcademicSource, SourceContribution, AcademicDocument, AcademicSection, AcademicChunk, KnowledgeRuleV3, KnowledgeRuleEvidenceV3];
-    const keys = [
-      'create', 'insertMany', 'updateOne', 'updateMany', 'findOneAndUpdate',
-      'replaceOne', 'bulkWrite', 'deleteOne', 'deleteMany', 'findOneAndDelete',
-      'findByIdAndUpdate', 'findByIdAndDelete'
-    ];
-    for (const m of models) {
-      const prefix = m.modelName === 'AcademicSource' ? 'source' :
-                     m.modelName === 'SourceContribution' ? 'contribution' :
-                     m.modelName === 'AcademicDocument' ? 'doc' :
-                     m.modelName === 'AcademicSection' ? 'sec' : 'chunk';
-      for (const k of keys) {
-        const origKey = (prefix + k.charAt(0).toUpperCase() + k.slice(1)) as keyof typeof originals;
-        if (originals[origKey]) {
-          (m as any)[k] = originals[origKey];
+  const proxy: any = {
+    sort(_: any) { return proxy; },
+    skip(n: number) { _skip = n; return proxy; },
+    limit(n: number) { _limit = n; return proxy; },
+    lean() { return proxy; },
+    then(resolve: (value: any) => any, reject?: (reason?: any) => any) {
+      return Promise.resolve().then(() => {
+        let data = dataFactory();
+        if (sortKey) {
+          data = [...data].sort((a, b) => a[sortKey] - b[sortKey]);
         }
-      }
+        data = data.slice(_skip);
+        if (_limit !== null) data = data.slice(0, _limit);
+        return data;
+      }).then(resolve, reject);
     }
-    mongoose.Model.prototype.save = originals.protoSave;
+  };
+  return proxy;
+}
+
+// Simple one-shot mock (no pagination)
+function mockQuery(data: any) {
+  const proxy: any = {
+    sort() { return proxy; },
+    skip() { return proxy; },
+    limit() { return proxy; },
+    lean() { return proxy; },
+    then(resolve: (value: any) => any, reject?: (reason?: any) => any) {
+      return Promise.resolve(data).then(resolve, reject);
+    }
+  };
+  return proxy;
+}
+
+// ── Test harness ──────────────────────────────────────────────────────────────
+async function runTests() {
+  console.log('=== CANONICAL SMART READER IDENTITY CONTRACT TESTS — I18N-3B.1.3 ===\n');
+
+  let behavioralAssertions = 0;
+  let restorationAssertions = 0;
+
+  const assertTest = (msg: string, cond: boolean) => {
+    behavioralAssertions++;
+    assert.ok(cond, msg);
+    console.log(`  [PASS] ${msg}`);
+  };
+
+  const assertRestoration = (msg: string, cond: boolean) => {
+    restorationAssertions++;
+    assert.ok(cond, msg);
+    console.log(`  [PASS] ${msg}`);
+  };
+
+  // ── Per-model write backups (exact, non-cross-pollinating) ─────────────────
+  const backups: Array<[any, Map<WriteMethods, any>]> = [
+    [AcademicSource,          createModelWriteBackup(AcademicSource)],
+    [SourceContribution,      createModelWriteBackup(SourceContribution)],
+    [AcademicDocument,        createModelWriteBackup(AcademicDocument)],
+    [AcademicSection,         createModelWriteBackup(AcademicSection)],
+    [AcademicChunk,           createModelWriteBackup(AcademicChunk)],
+    [KnowledgeRuleV3,         createModelWriteBackup(KnowledgeRuleV3)],
+    [KnowledgeRuleEvidenceV3, createModelWriteBackup(KnowledgeRuleEvidenceV3)],
+  ];
+  const originalProtoSave = mongoose.Model.prototype.save;
+
+  let restoreCallCount = 0;
+  const restoreAll = () => {
+    restoreCallCount++;
+    for (const [model, backup] of backups) {
+      restoreModelWriteBackup(model, backup);
+    }
+    mongoose.Model.prototype.save = originalProtoSave;
   };
 
   try {
-    // 1. Language Normalization Tests
-    assertTest('normalizeLanguageCode handles vi lowercase', normalizeLanguageCode('vi') === 'vi');
-    assertTest('normalizeLanguageCode handles vi-VN regional', normalizeLanguageCode('vi-VN') === 'vi');
-    assertTest('normalizeLanguageCode handles vi_VN regional', normalizeLanguageCode('vi_VN') === 'vi');
-    assertTest('normalizeLanguageCode handles en uppercase/spaces', normalizeLanguageCode('  EN-US  ') === 'en');
-    assertTest('normalizeLanguageCode returns null for unknown', normalizeLanguageCode('unknown') === null);
-    assertTest('normalizeLanguageCode returns null for und', normalizeLanguageCode('und') === null);
-    assertTest('normalizeLanguageCode returns null for empty', normalizeLanguageCode('') === null);
-    assertTest('normalizeLanguageCode returns null for unsupported', normalizeLanguageCode('fr') === null);
-    assertTest('normalizeLanguageCode returns null for null', normalizeLanguageCode(null) === null);
+    // ════════════════════════════════════════════════════════════════════════
+    // §1. normalizeLanguageCode — accepted forms
+    // ════════════════════════════════════════════════════════════════════════
+    console.log('\n§1. normalizeLanguageCode — accepted forms');
+    assertTest('vi -> vi', normalizeLanguageCode('vi') === 'vi');
+    assertTest('vi-VN -> vi', normalizeLanguageCode('vi-VN') === 'vi');
+    assertTest('vi_VN -> vi', normalizeLanguageCode('vi_VN') === 'vi');
+    assertTest('en -> en', normalizeLanguageCode('en') === 'en');
+    assertTest('en-US -> en', normalizeLanguageCode('en-US') === 'en');
+    assertTest('en_GB -> en', normalizeLanguageCode('en_GB') === 'en');
+    assertTest('  EN-US  (with whitespace) -> en', normalizeLanguageCode('  EN-US  ') === 'en');
+    assertTest('VI-VN (uppercase) -> vi', normalizeLanguageCode('VI-VN') === 'vi');
 
-    // 2. Hash Formula and Determinism Tests
-    const chunk1 = { _id: new mongoose.Types.ObjectId(), text: 'Bản đọc mẫu Tiếng Việt.', chunkOrder: 1 };
-    const chunk2 = { _id: new mongoose.Types.ObjectId(), text: 'Sample text English with \n newlines.', chunkOrder: 2 };
-    const chunk3 = { _id: new mongoose.Types.ObjectId(), text: '  Leading and trailing whitespace  ', chunkOrder: 3 };
+    // ────────────────────────────────────────────────────────────────────────
+    // §1b. normalizeLanguageCode — malformed & rejected forms
+    // ────────────────────────────────────────────────────────────────────────
+    console.log('\n§1b. normalizeLanguageCode — rejected / malformed forms');
+    assertTest('unknown -> null', normalizeLanguageCode('unknown') === null);
+    assertTest('und -> null', normalizeLanguageCode('und') === null);
+    assertTest('"" -> null', normalizeLanguageCode('') === null);
+    assertTest('null -> null', normalizeLanguageCode(null) === null);
+    assertTest('undefined -> null', normalizeLanguageCode(undefined) === null);
+    assertTest('fr (unsupported) -> null', normalizeLanguageCode('fr') === null);
+    assertTest('zh-CN -> null', normalizeLanguageCode('zh-CN') === null);
+    assertTest('vi-??? -> null', normalizeLanguageCode('vi-???') === null);
+    assertTest('en-123 -> null', normalizeLanguageCode('en-123') === null);
+    assertTest('vi-extra-long -> null', normalizeLanguageCode('vi-extra-long') === null);
+    assertTest('vi--VN (double dash) -> null', normalizeLanguageCode('vi--VN') === null);
+    assertTest('arbitrary prose -> null', normalizeLanguageCode('some language name') === null);
 
-    const hash1 = calculateCanonicalChunkContentHash(chunk1.text);
-    const expectedHash1 = crypto.createHash('sha256').update(chunk1.text, 'utf8').digest('hex');
-    assertTest('calculateCanonicalChunkContentHash equals direct sha256', hash1 === expectedHash1);
+    // ════════════════════════════════════════════════════════════════════════
+    // §2. Hash formula and determinism
+    // ════════════════════════════════════════════════════════════════════════
+    console.log('\n§2. Hash formula and determinism');
+    const id1 = new mongoose.Types.ObjectId('65a100000000000000000001');
+    const id2 = new mongoose.Types.ObjectId('65a100000000000000000002');
+    const id3 = new mongoose.Types.ObjectId('65a100000000000000000003');
 
-    const sourceHash = calculateSourceContentHash([chunk2, chunk1, chunk3]); // Out of order inputs
-    const expectedSourceHash = crypto.createHash('sha256').update(
-      [chunk1, chunk2, chunk3].map(c => `${c._id.toString()}:${c.text}`).join('\n'),
-      'utf8'
-    ).digest('hex');
-    assertTest('calculateSourceContentHash matches sorted order and Rule V3 fingerprint format', sourceHash === expectedSourceHash);
+    const chunk1 = { _id: id1, text: 'Bản đọc mẫu Tiếng Việt.', chunkOrder: 10 };
+    const chunk2 = { _id: id2, text: 'Sample text English with \n newlines.', chunkOrder: 20 };
+    const chunk3 = { _id: id3, text: '  Leading and trailing whitespace  ', chunkOrder: 30 };
 
-    // Verify changing text changes hash
-    const chunk1Modified = { ...chunk1, text: 'Bản đọc mẫu Tiếng Việt đã sửa.' };
-    const hash1Modified = calculateCanonicalChunkContentHash(chunk1Modified.text);
-    assertTest('Changing chunk text changes contentHash', hash1 !== hash1Modified);
+    const directHash1 = crypto.createHash('sha256').update(chunk1.text, 'utf8').digest('hex');
+    assertTest(
+      `calculateCanonicalChunkContentHash == sha256("${chunk1.text}")`,
+      calculateCanonicalChunkContentHash(chunk1.text) === directHash1
+    );
 
-    const sourceHashModified = calculateSourceContentHash([chunk1Modified, chunk2, chunk3]);
-    assertTest('Changing chunk text changes sourceContentHash', sourceHash !== sourceHashModified);
+    const EXPECTED_3_CHUNK_LITERAL_HASH = '39ac124971e93b2d4ca2b9acede2255a1c00631561d53cc668d93357af7e8e31';
 
-    // Verify changing HTML or non-text labels does not affect hashes
-    const chunk1WithHtml = { ...chunk1, html: '<p>Bản đọc mẫu Tiếng Việt.</p>' };
-    const sourceHashWithHtml = calculateSourceContentHash([chunk1WithHtml, chunk2, chunk3]);
-    assertTest('Changing HTML does not change sourceContentHash', sourceHash === sourceHashWithHtml);
+    const sortedChunks = [chunk1, chunk2, chunk3];
+    const canonicalJoin = sortedChunks.map(c => `${c._id}:${c.text}`).join('\n');
+    const cryptoHash = crypto.createHash('sha256').update(canonicalJoin, 'utf8').digest('hex');
 
-    // 3. Document ID Derivation Fallback
+    const originalInputArray = [chunk3, chunk1, chunk2];
+    const originalInputSnapshot = [...originalInputArray];
+    const actualSourceHash = calculateSourceContentHash(originalInputArray);
+
+    // Check 1: calculateSourceContentHash(fixture) equals exact literal value
+    assertTest(
+      'calculateSourceContentHash equals literal SHA-256 string',
+      calculateSourceContentHash(sortedChunks) === EXPECTED_3_CHUNK_LITERAL_HASH
+    );
+
+    // Check 2: independently constructed canonical join hashed with node:crypto equals exact literal value
+    assertTest(
+      'independently constructed canonical join hashed with node:crypto equals literal SHA-256 string',
+      cryptoHash === EXPECTED_3_CHUNK_LITERAL_HASH
+    );
+
+    // Check 3: out-of-order input still equals exact literal value
+    assertTest(
+      'calculateSourceContentHash out-of-order input equals literal SHA-256 string',
+      actualSourceHash === EXPECTED_3_CHUNK_LITERAL_HASH
+    );
+
+    assertTest(
+      'input array is not mutated by defensive sorting',
+      originalInputArray[0] === originalInputSnapshot[0] &&
+      originalInputArray[1] === originalInputSnapshot[1] &&
+      originalInputArray[2] === originalInputSnapshot[2]
+    );
+
+    console.log(`    [HASH INFO] Fixture text: "${chunk1.text}"`);
+    console.log(`    [HASH INFO] chunk1 contentHash (actual):     ${calculateCanonicalChunkContentHash(chunk1.text)}`);
+    console.log(`    [HASH INFO] sourceContentHash (3 chunks, literal): ${EXPECTED_3_CHUNK_LITERAL_HASH}`);
+
+    // Text change must change hash
+    const chunk1Mod = { ...chunk1, text: 'Bản đọc mẫu Tiếng Việt đã sửa.' };
+    assertTest('Changing chunk text changes contentHash', calculateCanonicalChunkContentHash(chunk1.text) !== calculateCanonicalChunkContentHash(chunk1Mod.text));
+    assertTest('Changing chunk text changes sourceContentHash', actualSourceHash !== calculateSourceContentHash([chunk1Mod, chunk2, chunk3]));
+
+    // HTML field must not participate in hash
+    const chunk1WithHtml = { ...chunk1, html: '<p>Bản đọc mẫu.</p>' };
+    assertTest('HTML field excluded from sourceContentHash', actualSourceHash === calculateSourceContentHash([chunk1WithHtml, chunk2, chunk3]));
+
+    // Whitespace is NOT trimmed (canonical contract)
+    const hashWithSpaces = calculateCanonicalChunkContentHash('  leading  ');
+    const hashNoSpaces   = calculateCanonicalChunkContentHash('leading');
+    assertTest('Canonical text whitespace is NOT normalized', hashWithSpaces !== hashNoSpaces);
+
+    // Empty array behavior preserved
+    const emptyHash = calculateSourceContentHash([]);
+    const expectedEmptyHash = crypto.createHash('sha256').update('', 'utf8').digest('hex');
+    assertTest('Empty chunk array produces sha256("") for Rule V3 compatibility', emptyHash === expectedEmptyHash);
+
+    // ────────────────────────────────────────────────────────────────────────
+    // §2b. calculateSourceContentHash — invalid inputs validation
+    // ────────────────────────────────────────────────────────────────────────
+    console.log('\n  §2b. calculateSourceContentHash — invalid inputs');
+    const validChunkFixture = { _id: new mongoose.Types.ObjectId(), text: 'Valid text', chunkOrder: 1 };
+
+    function expectHashError(label: string, badChunks: any[]) {
+      let caught: any = null;
+      try { calculateSourceContentHash(badChunks); } catch (e) { caught = e; }
+      assertTest(`calculateSourceContentHash ${label} -> throws CanonicalBlockIdentityError`, caught instanceof CanonicalBlockIdentityError);
+      assertTest(`calculateSourceContentHash ${label} -> code is reader_block_identity_invalid`, (caught as any)?.code === 'reader_block_identity_invalid');
+    }
+
+    expectHashError('missing _id (null)', [{ ...validChunkFixture, _id: null }]);
+    expectHashError('missing _id (undefined)', [{ ...validChunkFixture, _id: undefined }]);
+    expectHashError('empty _id string', [{ ...validChunkFixture, _id: '' }]);
+    expectHashError('numeric text (42)', [{ ...validChunkFixture, text: 42 }]);
+    expectHashError('null text', [{ ...validChunkFixture, text: null }]);
+    expectHashError('NaN chunkOrder', [{ ...validChunkFixture, chunkOrder: NaN }]);
+    expectHashError('Infinity chunkOrder', [{ ...validChunkFixture, chunkOrder: Infinity }]);
+
+    // ════════════════════════════════════════════════════════════════════════
+    // §3. deriveDocumentIdFromChunks
+    // ════════════════════════════════════════════════════════════════════════
+    console.log('\n§3. deriveDocumentIdFromChunks');
     const docId = new mongoose.Types.ObjectId();
-    const mockChunksWithSameDocId = [
-      { documentId: docId },
-      { documentId: docId }
-    ];
-    assertTest('deriveDocumentIdFromChunks resolves unique ID', deriveDocumentIdFromChunks(mockChunksWithSameDocId) === docId.toString());
+    assertTest(
+      'all chunks same documentId -> returns it',
+      deriveDocumentIdFromChunks([{ documentId: docId }, { documentId: docId }]) === docId.toString()
+    );
 
-    const mockChunksWithMultipleDocIds = [
-      { documentId: docId },
-      { documentId: new mongoose.Types.ObjectId() }
-    ];
-    let threwDerivation = false;
+    // Empty input
+    let threw: string | null = null;
+    try { deriveDocumentIdFromChunks([]); } catch (e: any) { threw = e.message; }
+    assertTest('empty input -> DOCUMENT_ID_UNAVAILABLE', threw === 'DOCUMENT_ID_UNAVAILABLE');
+
+    // Two distinct IDs -> AMBIGUOUS
+    threw = null;
     try {
-      deriveDocumentIdFromChunks(mockChunksWithMultipleDocIds);
-    } catch (e: any) {
-      threwDerivation = e.message === 'AMBIGUOUS_DOCUMENT_ID';
-    }
-    assertTest('deriveDocumentIdFromChunks throws AMBIGUOUS_DOCUMENT_ID on ambiguity', threwDerivation);
+      deriveDocumentIdFromChunks([{ documentId: docId }, { documentId: new mongoose.Types.ObjectId() }]);
+    } catch (e: any) { threw = e.message; }
+    assertTest('two distinct IDs -> AMBIGUOUS_DOCUMENT_ID', threw === 'AMBIGUOUS_DOCUMENT_ID');
 
-    let threwEmpty = false;
+    // Missing documentId
+    threw = null;
     try {
-      deriveDocumentIdFromChunks([]);
-    } catch (e: any) {
-      threwEmpty = e.message === 'DOCUMENT_ID_UNAVAILABLE';
-    }
-    assertTest('deriveDocumentIdFromChunks throws DOCUMENT_ID_UNAVAILABLE on empty list', threwEmpty);
+      deriveDocumentIdFromChunks([{ documentId: docId }, { documentId: null }]);
+    } catch (e: any) { threw = e.message; }
+    assertTest('one valid + one null documentId -> DOCUMENT_ID_UNAVAILABLE', threw === 'DOCUMENT_ID_UNAVAILABLE');
 
-    // 4. Missing-Section Fallback mapping tests
-    const chunkWithMissingSection = {
+    threw = null;
+    try {
+      deriveDocumentIdFromChunks([{ documentId: undefined }]);
+    } catch (e: any) { threw = e.message; }
+    assertTest('all chunks missing documentId -> DOCUMENT_ID_UNAVAILABLE', threw === 'DOCUMENT_ID_UNAVAILABLE');
+
+    // ════════════════════════════════════════════════════════════════════════
+    // §4. mapChunkToBlock — valid chunk
+    // ════════════════════════════════════════════════════════════════════════
+    console.log('\n§4. mapChunkToBlock — valid chunk');
+    const secId = new mongoose.Types.ObjectId();
+    const validChunk = {
       _id: new mongoose.Types.ObjectId(),
-      sectionId: new mongoose.Types.ObjectId(),
+      sectionId: secId,
       chunkOrder: 4,
       text: 'No section text.',
       blockType: 'heading'
     };
-    const emptySectionMap = new Map<string, any>();
-    const mappedBlock = mapChunkToBlock(chunkWithMissingSection, emptySectionMap, 0, 0);
-    assertTest('mapChunkToBlock works with missing section', mappedBlock.sectionType === 'heading');
-    assertTest('mapChunkToBlock preserves canonical sectionId', mappedBlock.blockIdentity.sectionId === chunkWithMissingSection.sectionId.toString());
-    assertTest('mapChunkToBlock keeps sectionIdentity sectionId canonical', mappedBlock.sectionIdentity?.sectionId === chunkWithMissingSection.sectionId.toString());
-    assertTest('mapChunkToBlock nullifies sectionOrder for missing section', mappedBlock.sectionIdentity?.sectionOrder === null);
-    assertTest('mapChunkToBlock nullifies heading for missing section', mappedBlock.sectionIdentity?.heading === null);
-    assertTest('mapChunkToBlock nullifies sectionType for missing section', mappedBlock.sectionIdentity?.sectionType === null);
+    const emptyMap = new Map<string, any>();
+    const mapped = mapChunkToBlock(validChunk, emptyMap, 0, 0);
+    assertTest('blockIdentity.chunkId == chunk._id', mapped.blockIdentity.chunkId === validChunk._id.toString());
+    assertTest('blockIdentity.sectionId == chunk.sectionId', mapped.blockIdentity.sectionId === secId.toString());
+    assertTest('blockIdentity.chunkIndex == chunkOrder (not idx)', mapped.blockIdentity.chunkIndex === 4);
+    assertTest('sectionIdentity.sectionId == chunk.sectionId (missing metadata allowed)', mapped.sectionIdentity?.sectionId === secId.toString());
+    assertTest('sectionIdentity.sectionOrder is null for missing section', mapped.sectionIdentity?.sectionOrder === null);
+    assertTest('sectionIdentity.heading is null for missing section', mapped.sectionIdentity?.heading === null);
+    assertTest('sectionIdentity.sectionType is null for missing section', mapped.sectionIdentity?.sectionType === null);
 
-    // 5. Zero-Write and Endpoint Controller Integration Tests
-    blockWrites();
+    // ════════════════════════════════════════════════════════════════════════
+    // §5. mapChunkToBlock — negative / invalid identity cases
+    // ════════════════════════════════════════════════════════════════════════
+    console.log('\n§5. mapChunkToBlock — negative / invalid identity (must throw CanonicalBlockIdentityError)');
 
-    const mockSourceId = new mongoose.Types.ObjectId();
-    const mockContributionId = new mongoose.Types.ObjectId();
-    const mockDocId = new mongoose.Types.ObjectId();
-    const mockSecId = new mongoose.Types.ObjectId();
+    const valid = { _id: new mongoose.Types.ObjectId(), sectionId: secId, chunkOrder: 1, text: 'ok', blockType: 'paragraph' };
+
+    function expectBlockError(label: string, badChunk: any) {
+      let caught: any = null;
+      try { mapChunkToBlock(badChunk, emptyMap, 0, 0); } catch (e) { caught = e; }
+      assertTest(`${label} -> throws CanonicalBlockIdentityError`, caught instanceof CanonicalBlockIdentityError);
+      assertTest(`${label} -> error code is reader_block_identity_invalid`, (caught as any)?.code === 'reader_block_identity_invalid');
+    }
+
+    expectBlockError('missing chunk._id', { ...valid, _id: null });
+    expectBlockError('empty chunk._id string', { ...valid, _id: '' });
+    expectBlockError('missing chunk.sectionId', { ...valid, sectionId: null });
+    expectBlockError('empty chunk.sectionId string', { ...valid, sectionId: '' });
+    expectBlockError('non-finite chunkOrder (NaN)', { ...valid, chunkOrder: NaN });
+    expectBlockError('non-finite chunkOrder (Infinity)', { ...valid, chunkOrder: Infinity });
+    expectBlockError('non-string text (number)', { ...valid, text: 42 });
+    expectBlockError('non-string text (null)', { ...valid, text: null });
+
+    // ════════════════════════════════════════════════════════════════════════
+    // §6. Controller integration (zero-write guard active)
+    // ════════════════════════════════════════════════════════════════════════
+    console.log('\n§6. Controller integration (zero-write guard active)');
+    for (const [model] of backups) {
+      blockModelWrites(model);
+    }
+    mongoose.Model.prototype.save = (() => { throw new Error('DATABASE_WRITE_FORBIDDEN_IN_READER'); }) as any;
+
+    const mockSourceId  = new mongoose.Types.ObjectId('65a200000000000000000001');
+    const mockContribId = new mongoose.Types.ObjectId('65a200000000000000000002');
+    const mockDocId     = new mongoose.Types.ObjectId('65a200000000000000000003');
+    const mockSecId     = new mongoose.Types.ObjectId('65a200000000000000000004');
+    const chunk1Id      = new mongoose.Types.ObjectId('65a200000000000000000005');
+    const chunk2Id      = new mongoose.Types.ObjectId('65a200000000000000000006');
 
     const mockSource = {
-      _id: mockSourceId,
-      title: 'Khảo sát Giấc mơ Việt',
-      authors: ['Nguyễn Văn A'],
-      year: 2026,
-      journal: 'Tạp chí Tâm lý học',
-      doi: '10.5678/dream.vn',
-      license: 'CC-BY',
-      readableInApp: true,
-      fullTextStatus: 'imported',
-      allowedUse: 'open_access_fulltext',
-      detectedLanguage: 'vi-VN',
+      _id: mockSourceId, title: 'Khảo sát Giấc mơ Việt', authors: ['Nguyễn Văn A'],
+      year: 2026, journal: 'Tạp chí Tâm lý học', doi: '10.5678/dream.vn', license: 'CC-BY',
+      readableInApp: true, fullTextStatus: 'imported', allowedUse: 'open_access_fulltext',
+      detectedLanguage: 'vi-VN', originalFile: { fileHash: 'bin_hash_123' }
+    };
+    const mockContrib = {
+      _id: mockContribId, title: 'Khảo sát Giấc mơ Việt (Contribution)',
+      authors: ['Nguyễn Văn A'], year: 2026, journal: 'Tạp chí Tâm lý học',
+      doi: '10.5678/dream.vn', allowedUse: 'open_access_fulltext',
+      detectedLanguage: 'vi-VN', reviewStatus: 'approved',
       originalFile: { fileHash: 'bin_hash_123' }
     };
-
-    const mockContribution = {
-      _id: mockContributionId,
-      title: 'Khảo sát Giấc mơ Việt (Contribution)',
-      authors: ['Nguyễn Văn A'],
-      year: 2026,
-      journal: 'Tạp chí Tâm lý học',
-      doi: '10.5678/dream.vn',
-      allowedUse: 'open_access_fulltext',
-      detectedLanguage: 'vi-VN',
-      reviewStatus: 'approved',
-      originalFile: { fileHash: 'bin_hash_123' }
-    };
-
     const mockDoc = {
-      _id: mockDocId,
-      sourceId: mockSourceId,
-      previewContributionId: mockContributionId,
-      parserEngine: 'docling',
-      parserVersion: 1,
-      updatedAt: new Date(),
-      createdAt: new Date()
+      _id: mockDocId, sourceId: mockSourceId, previewContributionId: mockContribId,
+      parserEngine: 'docling', parserVersion: 1,
+      updatedAt: new Date('2026-01-01T00:00:00Z'), createdAt: new Date('2026-01-01T00:00:00Z')
     };
-
     const mockSec = {
-      _id: mockSecId,
-      documentId: mockDocId,
-      heading: '1. Mở đầu',
-      sectionType: 'introduction',
-      sectionOrder: 1
+      _id: mockSecId, documentId: mockDocId,
+      heading: '1. Mở đầu', sectionType: 'introduction', sectionOrder: 1
     };
-
-    const mockChunks = [
-      {
-        _id: new mongoose.Types.ObjectId(),
-        documentId: mockDocId,
-        sectionId: mockSecId,
-        chunkPurpose: 'reader',
-        chunkOrder: 10,
-        text: 'Nội dung đoạn số 1.',
-        blockType: 'paragraph'
-      },
-      {
-        _id: new mongoose.Types.ObjectId(),
-        documentId: mockDocId,
-        sectionId: mockSecId,
-        chunkPurpose: 'reader',
-        chunkOrder: 20,
-        text: 'Nội dung đoạn số 2.',
-        blockType: 'paragraph'
-      }
-    ];
-
-    const mockQuery = (data: any) => {
-      const q = Promise.resolve(data) as any;
-      q.sort = function() { return this; };
-      q.skip = function() { return this; };
-      q.limit = function() { return this; };
-      q.lean = function() { return this; };
-      return q;
+    const chunkA = {
+      _id: chunk1Id, documentId: mockDocId, sectionId: mockSecId,
+      chunkPurpose: 'reader', chunkOrder: 10, text: 'Nội dung đoạn A.', blockType: 'paragraph'
     };
+    const chunkB = {
+      _id: chunk2Id, documentId: mockDocId, sectionId: mockSecId,
+      chunkPurpose: 'reader', chunkOrder: 20, text: 'Nội dung đoạn B.', blockType: 'paragraph'
+    };
+    const allChunks = [chunkA, chunkB];
 
-    // Mock read queries
-    AcademicSource.findById = (async (id: any) => id.toString() === mockSourceId.toString() ? mockSource : null) as any;
-    SourceContribution.findById = (async (id: any) => id.toString() === mockContributionId.toString() ? mockContribution : null) as any;
+    const EXPECTED_2_CHUNK_LITERAL_HASH = '5461f3a43217972748f6a57814d16e68650415420acf140ce8276651396a9da8';
+
+    const actual2ChunkHash = calculateSourceContentHash(allChunks);
+    const crypto2ChunkHash = crypto.createHash('sha256').update(
+      `${chunk1Id.toString()}:${chunkA.text}\n${chunk2Id.toString()}:${chunkB.text}`,
+      'utf8'
+    ).digest('hex');
+
+    // Check 1: calculateSourceContentHash(allChunks) equals exact literal value
+    assertTest(
+      'calculateSourceContentHash(allChunks) equals literal SHA-256 string',
+      actual2ChunkHash === EXPECTED_2_CHUNK_LITERAL_HASH
+    );
+
+    // Check 2: independently constructed 2-chunk canonical join hashed with node:crypto equals exact literal value
+    assertTest(
+      'independently constructed 2-chunk canonical join hashed with node:crypto equals literal SHA-256 string',
+      crypto2ChunkHash === EXPECTED_2_CHUNK_LITERAL_HASH
+    );
+
+    // Check 3: out-of-order input still equals exact literal value
+    assertTest(
+      'calculateSourceContentHash 2-chunk out-of-order input equals literal SHA-256 string',
+      calculateSourceContentHash([chunkB, chunkA]) === EXPECTED_2_CHUNK_LITERAL_HASH
+    );
+
+    const expectedSourceHashFromFixture = actual2ChunkHash;
+    console.log(`    [HASH INFO] Full sourceContentHash for fixture (2 chunks, literal): ${EXPECTED_2_CHUNK_LITERAL_HASH}`);
+    console.log(`    [HASH INFO] chunk A text: "${chunkA.text}", chunkOrder: ${chunkA.chunkOrder}`);
+    console.log(`    [HASH INFO] chunk B text: "${chunkB.text}", chunkOrder: ${chunkB.chunkOrder}`);
+
+    // ── Default read mocks (all-chunks mode) ──────────────────────────────
+    AcademicSource.findById    = (async (id: any) => id.toString() === mockSourceId.toString() ? mockSource : null) as any;
+    SourceContribution.findById = (async (id: any) => id.toString() === mockContribId.toString() ? mockContrib : null) as any;
+    AcademicDocument.findOne   = (() => mockQuery(mockDoc)) as any;
+    AcademicSection.find       = (() => mockQuery([mockSec])) as any;
+    AcademicChunk.countDocuments = (async () => allChunks.length) as any;
+
+    // ── §6a. Page 1 (limit=1) — returns chunk A ──────────────────────────
+    console.log('\n  §6a. Approved — page 1 returns chunk A');
+    AcademicChunk.find = (() => createMockQuery(() => allChunks, 'chunkOrder')) as any;
+
+    const resPage1 = { statusCode: 200, jsonBody: null as any,
+      status(c: number) { this.statusCode = c; return this; },
+      json(b: any) { this.jsonBody = b; return this; }
+    };
+    await getApprovedSourceRead({ params: { id: mockSourceId.toString() }, query: { page: '1', limit: '1' } } as any, resPage1 as any);
+
+    if (resPage1.statusCode !== 200) console.log('  Page 1 failed:', resPage1.jsonBody);
+    assertTest('Page 1 returns 200', resPage1.statusCode === 200);
+    const p1 = resPage1.jsonBody.data;
+    assertTest('Page 1 readerIdentity present', !!p1.readerIdentity);
+    assertTest('Page 1 sections has 1 block', p1.sections.length === 1);
+    assertTest('Page 1 section[0].blockIdentity.chunkId == chunkA._id', p1.sections[0].blockIdentity.chunkId === chunk1Id.toString());
+    assertTest('Page 1 section[0].blockIdentity.chunkIndex == 10 (persisted chunkOrder)', p1.sections[0].blockIdentity.chunkIndex === 10);
+    assertTest('Page 1 section[0].sectionIndex == 0', p1.sections[0].sectionIndex === 0);
+    assertTest('Page 1 readerIdentity.sourceLanguage == vi', p1.readerIdentity.sourceLanguage === 'vi');
+    assertTest('Page 1 readerIdentity.parserEngine == docling', p1.readerIdentity.parserEngine === 'docling');
+    assertTest('Page 1 readerIdentity.parserVersion == "1" (string)', p1.readerIdentity.parserVersion === '1');
+    assertTest('Page 1 sourceContentHash matches fixture', p1.readerIdentity.sourceContentHash === expectedSourceHashFromFixture);
+
+    // ── §6b. Page 2 (limit=1) — returns chunk B ──────────────────────────
+    console.log('\n  §6b. Approved — page 2 returns chunk B');
+    AcademicChunk.find = (() => createMockQuery(() => allChunks, 'chunkOrder')) as any;
+
+    const resPage2 = { statusCode: 200, jsonBody: null as any,
+      status(c: number) { this.statusCode = c; return this; },
+      json(b: any) { this.jsonBody = b; return this; }
+    };
+    await getApprovedSourceRead({ params: { id: mockSourceId.toString() }, query: { page: '2', limit: '1' } } as any, resPage2 as any);
+
+    if (resPage2.statusCode !== 200) console.log('  Page 2 failed:', resPage2.jsonBody);
+    assertTest('Page 2 returns 200', resPage2.statusCode === 200);
+    const p2 = resPage2.jsonBody.data;
+    assertTest('Page 2 sections has 1 block', p2.sections.length === 1);
+    assertTest('Page 2 section[0].blockIdentity.chunkId == chunkB._id', p2.sections[0].blockIdentity.chunkId === chunk2Id.toString());
+    assertTest('Page 2 section[0].blockIdentity.chunkIndex == 20 (persisted chunkOrder)', p2.sections[0].blockIdentity.chunkIndex === 20);
+    assertTest('Page 2 section[0].sectionIndex == 1 (skip=1, idx=0 -> 1)', p2.sections[0].sectionIndex === 1);
+    assertTest('Page 1 and Page 2 sourceContentHash are identical', p1.readerIdentity.sourceContentHash === p2.readerIdentity.sourceContentHash);
+
+    // ── §6c. Moderation preview — full doc path ───────────────────────────
+    console.log('\n  §6c. Moderation — standard path (doc found)');
     AcademicDocument.findOne = (() => mockQuery(mockDoc)) as any;
+    AcademicChunk.find = (() => mockQuery(allChunks)) as any;
     AcademicSection.find = (() => mockQuery([mockSec])) as any;
-    AcademicChunk.find = (() => mockQuery(mockChunks)) as any;
-    AcademicChunk.countDocuments = (async () => mockChunks.length) as any;
 
-    // Test Approved Library Read Endpoint
-    const reqApproved = {
-      params: { id: mockSourceId.toString() },
-      query: { page: '1', limit: '2' }
-    } as any;
-    const resApproved = {
-      status(code: number) { this.statusCode = code; return this; },
-      json(body: any) { this.jsonBody = body; return this; },
-      statusCode: 200,
-      jsonBody: null
-    } as any;
+    const resMod = { statusCode: 200, jsonBody: null as any,
+      status(c: number) { this.statusCode = c; return this; },
+      json(b: any) { this.jsonBody = b; return this; }
+    };
+    await getSourcePreview({ params: { id: mockContribId.toString() } } as any, resMod as any);
+    if (resMod.statusCode !== 200) console.log('  Moderation failed:', resMod.jsonBody);
+    assertTest('Moderation returns 200', resMod.statusCode === 200);
+    assertTest('Moderation readerIdentity present', !!resMod.jsonBody.data.readerIdentity);
+    assertTest('Moderation readerIdentity.sourceContentHash matches fixture', resMod.jsonBody.data.readerIdentity.sourceContentHash === expectedSourceHashFromFixture);
+    assertTest('Moderation and approved sourceContentHash are identical', resMod.jsonBody.data.readerIdentity.sourceContentHash === p1.readerIdentity.sourceContentHash);
 
-    await getApprovedSourceRead(reqApproved, resApproved);
+    // ── §6d. Moderation fallback — no doc, derive from chunks ─────────────
+    console.log('\n  §6d. Moderation — fallback path (no doc, derives from chunks)');
+    AcademicDocument.findOne = (() => mockQuery(null)) as any;
+    AcademicChunk.find = (() => mockQuery(allChunks)) as any;
+    AcademicSection.find = (() => mockQuery([mockSec])) as any;
 
-    if (resApproved.statusCode !== 200) {
-      console.log('resApproved failed status:', resApproved.statusCode, 'body:', resApproved.jsonBody);
-    }
+    const resFallback = { statusCode: 200, jsonBody: null as any,
+      status(c: number) { this.statusCode = c; return this; },
+      json(b: any) { this.jsonBody = b; return this; }
+    };
+    await getSourcePreview({ params: { id: mockContribId.toString() } } as any, resFallback as any);
+    assertTest('Moderation fallback returns 200', resFallback.statusCode === 200);
+    assertTest('Moderation fallback derivedDocumentId == mockDocId', resFallback.jsonBody.data.readerIdentity.documentId === mockDocId.toString());
+    assertTest('Moderation fallback parserEngine is null', resFallback.jsonBody.data.readerIdentity.parserEngine === null);
+    assertTest('Moderation fallback parserVersion is null', resFallback.jsonBody.data.readerIdentity.parserVersion === null);
+    assertTest('Moderation fallback updatedAt is null', resFallback.jsonBody.data.readerIdentity.updatedAt === null);
 
-    assertTest('Approved endpoint returns 200', resApproved.statusCode === 200);
-    const approvedData = resApproved.jsonBody.data;
-    assertTest('Approved endpoint returns readerIdentity top-level', !!approvedData.readerIdentity);
-    assertTest('Approved endpoint does not duplicate readerIdentity in fullText', !approvedData.fullText.readerIdentity);
-    assertTest('Approved readerIdentity.documentId is correct', approvedData.readerIdentity.documentId === mockDocId.toString());
-    assertTest('Approved readerIdentity.sourceLanguage is normalized', approvedData.readerIdentity.sourceLanguage === 'vi');
-    assertTest('Approved readerIdentity.parserEngine is correct', approvedData.readerIdentity.parserEngine === 'docling');
-    assertTest('Approved readerIdentity.parserVersion is string type', approvedData.readerIdentity.parserVersion === '1');
-    assertTest('Approved sections blockIdentity contains chunkIndex matching chunkOrder', approvedData.sections[0].blockIdentity.chunkIndex === 10);
-    assertTest('Approved sections blockIdentity contains chunkId matching chunk _id', approvedData.sections[0].blockIdentity.chunkId === mockChunks[0]._id.toString());
-    assertTest('Approved sections blockIdentity contains contentHash', !!approvedData.sections[0].blockIdentity.contentHash);
-    assertTest('Approved sections sectionIdentity contains heading', approvedData.sections[0].sectionIdentity.heading === '1. Mở đầu');
-
-    // Test Pagination Hash Equality
-    const reqApprovedPage2 = {
-      params: { id: mockSourceId.toString() },
-      query: { page: '2', limit: '1' }
-    } as any;
-    const resApprovedPage2 = {
-      status(code: number) { this.statusCode = code; return this; },
-      json(body: any) { this.jsonBody = body; return this; },
-      statusCode: 200,
-      jsonBody: null
-    } as any;
-
-    // Simulate paginated response builder chunk query
-    AcademicChunk.find = ((query: any) => {
-      // If it's a paginated find, return single item, if it's the global identity hash query, return all
-      if (query.documentId && query.chunkPurpose && (Object.keys(query).length === 2 || query.hasOwnProperty('$projection'))) {
-        return mockQuery(mockChunks); // global hash query uses all
-      }
-      return mockQuery([mockChunks[1]]); // page 2 query
-    }) as any;
-
-    await getApprovedSourceRead(reqApprovedPage2, resApprovedPage2);
-    assertTest('Page 2 endpoint returns 200', resApprovedPage2.statusCode === 200);
-    assertTest('sourceContentHash is identical across page 1 and page 2', approvedData.readerIdentity.sourceContentHash === resApprovedPage2.jsonBody.data.readerIdentity.sourceContentHash);
-
-    // Test Moderation Preview Endpoint
-    AcademicChunk.find = (() => mockQuery(mockChunks)) as any;
-    const reqModeration = {
-      params: { id: mockContributionId.toString() }
-    } as any;
-    const resModeration = {
-      status(code: number) { this.statusCode = code; return this; },
-      json(body: any) { this.jsonBody = body; return this; },
-      statusCode: 200,
-      jsonBody: null
-    } as any;
-
-    await getSourcePreview(reqModeration, resModeration);
-    if (resModeration.statusCode !== 200) {
-      console.log('resModeration failed status:', resModeration.statusCode, 'body:', resModeration.jsonBody);
-    }
-    assertTest('Moderation endpoint returns 200', resModeration.statusCode === 200);
-    const moderationData = resModeration.jsonBody.data;
-    assertTest('Moderation endpoint returns readerIdentity', !!moderationData.readerIdentity);
-    assertTest('Moderation readerIdentity matches approved readerIdentity', JSON.stringify(moderationData.readerIdentity) === JSON.stringify(approvedData.readerIdentity));
-
-    // Test Moderation Fallback where Document is missing but chunks exist
-    AcademicDocument.findOne = (async () => null) as any;
-    const resModerationFallback = {
-      status(code: number) { this.statusCode = code; return this; },
-      json(body: any) { this.jsonBody = body; return this; },
-      statusCode: 200,
-      jsonBody: null
-    } as any;
-
-    await getSourcePreview(reqModeration, resModerationFallback);
-    assertTest('Moderation fallback returns 200', resModerationFallback.statusCode === 200);
-    const fallbackData = resModerationFallback.jsonBody.data;
-    assertTest('Moderation fallback derives correct documentId from chunks', fallbackData.readerIdentity.documentId === mockDocId.toString());
-    assertTest('Moderation fallback sets parserEngine to null', fallbackData.readerIdentity.parserEngine === null);
-    assertTest('Moderation fallback sets parserVersion to null', fallbackData.readerIdentity.parserVersion === null);
-    assertTest('Moderation fallback sets updatedAt to null', fallbackData.readerIdentity.updatedAt === null);
-
-    // Test Moderation with no chunks returns readerIdentity: null
+    // ── §6e. Moderation — no chunks -> readerIdentity: null ───────────────
+    console.log('\n  §6e. Moderation — no chunks');
+    AcademicDocument.findOne = (() => mockQuery(mockDoc)) as any;
     AcademicChunk.find = (() => mockQuery([])) as any;
-    const resModerationNoChunks = {
-      status(code: number) { this.statusCode = code; return this; },
-      json(body: any) { this.jsonBody = body; return this; },
-      statusCode: 200,
-      jsonBody: null
-    } as any;
+    AcademicSection.find = (() => mockQuery([mockSec])) as any;
 
-    await getSourcePreview(reqModeration, resModerationNoChunks);
-    assertTest('Moderation no chunks returns 200', resModerationNoChunks.statusCode === 200);
-    assertTest('Moderation no chunks sets readerIdentity to null', resModerationNoChunks.jsonBody.data.readerIdentity === null);
+    const resNoChunks = { statusCode: 200, jsonBody: null as any,
+      status(c: number) { this.statusCode = c; return this; },
+      json(b: any) { this.jsonBody = b; return this; }
+    };
+    await getSourcePreview({ params: { id: mockContribId.toString() } } as any, resNoChunks as any);
+    assertTest('No chunks returns 200', resNoChunks.statusCode === 200);
+    assertTest('No chunks sets readerIdentity to null', resNoChunks.jsonBody.data.readerIdentity === null);
 
-    // Test Moderation ambiguous document IDs fails safely
-    const ambiguousChunks = [
-      { _id: new mongoose.Types.ObjectId(), documentId: new mongoose.Types.ObjectId(), chunkOrder: 1, text: 'Text A' },
-      { _id: new mongoose.Types.ObjectId(), documentId: new mongoose.Types.ObjectId(), chunkOrder: 2, text: 'Text B' }
-    ];
-    AcademicChunk.find = (() => mockQuery(ambiguousChunks)) as any;
-    const resModerationAmbiguous = {
-      status(code: number) { this.statusCode = code; return this; },
-      json(body: any) { this.jsonBody = body; return this; },
-      statusCode: 200,
-      jsonBody: null
-    } as any;
+    // ── §6f. Moderation — ambiguous document IDs -> reader_identity_ambiguous ─
+    console.log('\n  §6f. Moderation — ambiguous documentIds');
+    AcademicDocument.findOne = (() => mockQuery(null)) as any;
+    AcademicChunk.find = (() => mockQuery([
+      { _id: new mongoose.Types.ObjectId(), documentId: new mongoose.Types.ObjectId(), chunkOrder: 1, text: 'A', sectionId: mockSecId },
+      { _id: new mongoose.Types.ObjectId(), documentId: new mongoose.Types.ObjectId(), chunkOrder: 2, text: 'B', sectionId: mockSecId }
+    ])) as any;
 
-    await getSourcePreview(reqModeration, resModerationAmbiguous);
-    assertTest('Moderation ambiguous document IDs returns 400', resModerationAmbiguous.statusCode === 400);
-    assertTest('Moderation ambiguous document IDs returns sanitized message', resModerationAmbiguous.jsonBody.message === 'Ambiguous document reference in reader chunks.');
-    assertTest('Moderation ambiguous document IDs does not leak stack traces or internal IDs', !resModerationAmbiguous.jsonBody.error && !JSON.stringify(resModerationAmbiguous.jsonBody).includes('AMBIGUOUS_DOCUMENT_ID'));
+    const resAmbig = { statusCode: 200, jsonBody: null as any,
+      status(c: number) { this.statusCode = c; return this; },
+      json(b: any) { this.jsonBody = b; return this; }
+    };
+    await getSourcePreview({ params: { id: mockContribId.toString() } } as any, resAmbig as any);
+    assertTest('Ambiguous doc IDs returns 400', resAmbig.statusCode === 400);
+    assertTest('Ambiguous doc IDs returns code reader_identity_ambiguous', resAmbig.jsonBody.code === 'reader_identity_ambiguous');
+    assertTest('Ambiguous doc IDs does not leak internal error string', !JSON.stringify(resAmbig.jsonBody).includes('AMBIGUOUS_DOCUMENT_ID'));
+    assertTest('Ambiguous doc IDs does not leak document IDs', !JSON.stringify(resAmbig.jsonBody).includes(mockDocId.toString()));
+
+    // ── §6g. Moderation — missing documentId on a chunk -> reader_identity_unavailable ─
+    console.log('\n  §6g. Moderation — chunk with missing documentId');
+    AcademicDocument.findOne = (() => mockQuery(null)) as any;
+    AcademicChunk.find = (() => mockQuery([
+      { _id: new mongoose.Types.ObjectId(), documentId: mockDocId, chunkOrder: 1, text: 'A', sectionId: mockSecId },
+      { _id: new mongoose.Types.ObjectId(), documentId: null, chunkOrder: 2, text: 'B', sectionId: mockSecId }
+    ])) as any;
+
+    const resUnavailable = { statusCode: 200, jsonBody: null as any,
+      status(c: number) { this.statusCode = c; return this; },
+      json(b: any) { this.jsonBody = b; return this; }
+    };
+    await getSourcePreview({ params: { id: mockContribId.toString() } } as any, resUnavailable as any);
+    assertTest('Missing documentId returns 400', resUnavailable.statusCode === 400);
+    assertTest('Missing documentId returns code reader_identity_unavailable', resUnavailable.jsonBody.code === 'reader_identity_unavailable');
+    assertTest('Missing documentId does not leak internal error string', !JSON.stringify(resUnavailable.jsonBody).includes('DOCUMENT_ID_UNAVAILABLE'));
+
+    // ── §6h. Approved — chunk with invalid canonical identity on current page ─
+    console.log('\n  §6h. Approved — chunk with invalid canonical identity on page 1');
+    AcademicSource.findById = (async (id: any) => id.toString() === mockSourceId.toString() ? mockSource : null) as any;
+    AcademicDocument.findOne = (() => mockQuery(mockDoc)) as any;
+    AcademicChunk.countDocuments = (async () => 1) as any;
+    const invalidChunkApproved = {
+      _id: new mongoose.Types.ObjectId(),
+      documentId: mockDocId,
+      sectionId: null, // missing sectionId makes mapChunkToBlock throw CanonicalBlockIdentityError
+      chunkOrder: 10,
+      text: 'Text with invalid sectionId',
+      blockType: 'paragraph'
+    };
+    AcademicChunk.find = (() => createMockQuery(() => [invalidChunkApproved])) as any;
+
+    const resApprovedInvalid = { statusCode: 200, jsonBody: null as any,
+      status(c: number) { this.statusCode = c; return this; },
+      json(b: any) { this.jsonBody = b; return this; }
+    };
+    await getApprovedSourceRead({ params: { id: mockSourceId.toString() }, query: { page: '1', limit: '1' } } as any, resApprovedInvalid as any);
+
+    assertTest('Approved invalid chunk returns 400', resApprovedInvalid.statusCode === 400);
+    assertTest('Approved invalid chunk returns code reader_block_identity_invalid', resApprovedInvalid.jsonBody.code === 'reader_block_identity_invalid');
+    assertTest('Approved invalid chunk does not leak BLOCK_IDENTITY_INVALID string', !JSON.stringify(resApprovedInvalid.jsonBody).includes('BLOCK_IDENTITY_INVALID'));
+    assertTest('Approved invalid chunk does not leak invalid chunk identity reason', !JSON.stringify(resApprovedInvalid.jsonBody).includes('sectionId is absent'));
+    assertTest('Approved invalid chunk does not expose error or stack field', resApprovedInvalid.jsonBody.error === undefined && resApprovedInvalid.jsonBody.stack === undefined);
+
+    // ── §6i. Approved — page 1 valid but off-page chunk invalid -> reader_block_identity_invalid ─
+    console.log('\n  §6i. Approved — page 1 valid but off-page chunk invalid');
+    AcademicSource.findById = (async (id: any) => id.toString() === mockSourceId.toString() ? mockSource : null) as any;
+    AcademicDocument.findOne = (() => mockQuery(mockDoc)) as any;
+    AcademicChunk.countDocuments = (async () => 2) as any;
+
+    const validPage1Chunk = {
+      _id: new mongoose.Types.ObjectId(),
+      documentId: mockDocId,
+      sectionId: mockSecId,
+      chunkOrder: 10,
+      text: 'Valid page 1 chunk text',
+      blockType: 'paragraph'
+    };
+    const invalidOffPageChunk = {
+      _id: new mongoose.Types.ObjectId(),
+      documentId: mockDocId,
+      sectionId: mockSecId,
+      chunkOrder: 20,
+      text: 12345, // invalid non-string text triggers calculateSourceContentHash validation
+      blockType: 'paragraph'
+    };
+
+    const multiChunksFixture = [validPage1Chunk, invalidOffPageChunk];
+    AcademicChunk.find = (() => createMockQuery(() => multiChunksFixture, 'chunkOrder')) as any;
+
+    const resApprovedOffPageInvalid = { statusCode: 200, jsonBody: null as any,
+      status(c: number) { this.statusCode = c; return this; },
+      json(b: any) { this.jsonBody = b; return this; }
+    };
+    await getApprovedSourceRead({ params: { id: mockSourceId.toString() }, query: { page: '1', limit: '1' } } as any, resApprovedOffPageInvalid as any);
+
+    assertTest('Approved off-page invalid chunk returns 400', resApprovedOffPageInvalid.statusCode === 400);
+    assertTest('Approved off-page invalid chunk returns code reader_block_identity_invalid', resApprovedOffPageInvalid.jsonBody.code === 'reader_block_identity_invalid');
+    assertTest('Approved off-page invalid chunk does not leak BLOCK_IDENTITY_INVALID string', !JSON.stringify(resApprovedOffPageInvalid.jsonBody).includes('BLOCK_IDENTITY_INVALID'));
+    assertTest('Approved off-page invalid chunk does not leak TypeError string', !JSON.stringify(resApprovedOffPageInvalid.jsonBody).includes('TypeError'));
+    assertTest('Approved off-page invalid chunk does not leak internal reason', !JSON.stringify(resApprovedOffPageInvalid.jsonBody).includes('text is not a string'));
+    assertTest('Approved off-page invalid chunk does not expose error or stack field', resApprovedOffPageInvalid.jsonBody.error === undefined && resApprovedOffPageInvalid.jsonBody.stack === undefined);
+    assertTest('Approved off-page invalid chunk does not leak chunk IDs', !JSON.stringify(resApprovedOffPageInvalid.jsonBody).includes(validPage1Chunk._id.toString()));
+    assertTest('Approved off-page invalid chunk does not leak section IDs', !JSON.stringify(resApprovedOffPageInvalid.jsonBody).includes(mockSecId.toString()));
+
+    // ── §6j. TableData Projection — verified projection and hash stability ──────
+    console.log('\n  §6j. TableData Projection — verified projection and hash stability');
+    const tableChunkId = new mongoose.Types.ObjectId();
+    const tableDataRaw = {
+      version: 1,
+      source: 'docling',
+      reconstructionMethod: 'docling_native_v1',
+      rowCount: 2,
+      columnCount: 2,
+      cells: [
+        { row: 0, column: 0, rowSpan: 1, columnSpan: 1, text: 'A', role: 'header' },
+        { row: 0, column: 1, rowSpan: 1, columnSpan: 1, text: 'B', role: 'header' },
+        { row: 1, column: 0, rowSpan: 1, columnSpan: 1, text: 'C', role: 'data' },
+        { row: 1, column: 1, rowSpan: 1, columnSpan: 1, text: 'D', role: 'data' }
+      ],
+      rawCells: [{ some: 'garbage' }],
+      warnings: ['some warning']
+    };
+    const tableChunk = {
+      _id: tableChunkId,
+      documentId: mockDocId,
+      chunkOrder: 1,
+      text: 'Table caption',
+      sectionId: mockSecId,
+      blockType: 'table',
+      tableData: tableDataRaw
+    };
+
+    const sectionMap = new Map();
+    sectionMap.set(mockSecId.toString(), { _id: mockSecId, sectionOrder: 0, heading: 'S1', sectionType: 'body' });
+
+    const mappedTable = mapChunkToBlock(tableChunk, sectionMap, 0, 0);
+    const mappedTableData = mappedTable.tableData;
+    assertTest('Projected tableData matches expected properties', mappedTableData !== null && mappedTableData !== undefined && mappedTableData.version === 1);
+    assertTest('rowCount and columnCount mapped correctly', mappedTableData ? (mappedTableData.rowCount === 2 && mappedTableData.columnCount === 2) : false);
+    assertTest('rawCells and warnings are omitted', mappedTableData ? ((mappedTableData as any).rawCells === undefined && (mappedTableData as any).warnings === undefined) : false);
+    assertTest('Cells projected cleanly with spans', mappedTableData ? (mappedTableData.cells[0].row === 0 && mappedTableData.cells[0].rowSpan === 1) : false);
+    assertTest('TableData inclusion does not affect chunk contentHash', mappedTable.blockIdentity.contentHash === calculateCanonicalChunkContentHash('Table caption'));
 
   } finally {
     restoreAll();
   }
 
-  console.log(`================================================`);
-  console.log(`CANONICAL READER IDENTITY SUITE: ${testAssertions} ASSERTIONS PASSED`);
+  // ── Restoration assertions ───────────────────────────────────────────────
+  assertRestoration('restoreAll was called exactly once (finally block ran)', restoreCallCount === 1);
+
+  for (const [model, backup] of backups) {
+    const modelName = model.modelName || 'Model';
+    for (const m of WRITE_METHODS) {
+      assertRestoration(`${modelName}.${m} is restored to original method`, model[m] === backup.get(m));
+    }
+  }
+  assertRestoration('mongoose.Model.prototype.save is restored to original method', mongoose.Model.prototype.save === originalProtoSave);
+
+  console.log(`\n${'═'.repeat(60)}`);
+  console.log(`CANONICAL READER IDENTITY SUITE — I18N-3B.1.3`);
+  console.log(`Behavioral Assertions Passed:  ${behavioralAssertions}`);
+  console.log(`Restoration Assertions Passed: ${restorationAssertions}`);
+  console.log(`Total Assertions Passed:       ${behavioralAssertions + restorationAssertions}`);
+  console.log(`${'═'.repeat(60)}`);
 }
 
 runTests().catch(err => {
-  console.error('Test suite failed:', err);
+  console.error('\nTest suite FAILED:', err);
   process.exit(1);
 });

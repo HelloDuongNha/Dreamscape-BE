@@ -1,4 +1,4 @@
-import mongoose, { Schema, Document } from 'mongoose';
+import mongoose, { Schema, Document, Types } from 'mongoose';
 import crypto from 'crypto';
 
 export interface IKnowledgeRuleV3 extends Document {
@@ -32,9 +32,39 @@ export interface IKnowledgeRuleV3 extends Document {
   embedding?: number[];
   embeddingModel?: string;
   version: number;
+  isComposite: boolean;
+  compositeComponents: Array<{
+    sourceRuleId: Types.ObjectId;
+    ruleCode: string;
+    statement: string;
+    claimType: IKnowledgeRuleV3['claimType'];
+    effectPolarity: IKnowledgeRuleV3['effectPolarity'];
+    evidenceInterpretation: IKnowledgeRuleV3['evidenceInterpretation'];
+    subject: string;
+    outcome: string;
+    conditions: string[];
+    limitations: string[];
+    dreamFeatureTags: string[];
+  }>;
+  mergedFromRuleIds: Types.ObjectId[];
+  mergedIntoRuleId?: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
+
+const CompositeRuleComponentSchema = new Schema({
+  sourceRuleId: { type: Schema.Types.ObjectId, ref: 'KnowledgeRuleV3', required: true },
+  ruleCode: { type: String, required: true, trim: true },
+  statement: { type: String, required: true, trim: true, maxlength: 1000 },
+  claimType: { type: String, required: true },
+  effectPolarity: { type: String, required: true },
+  evidenceInterpretation: { type: String, required: true },
+  subject: { type: String, required: true, trim: true, maxlength: 200 },
+  outcome: { type: String, required: true, trim: true, maxlength: 200 },
+  conditions: { type: [String], default: [] },
+  limitations: { type: [String], default: [] },
+  dreamFeatureTags: { type: [String], default: [] },
+}, { _id: false });
 
 const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 export function generateRuleCodeV3(): string {
@@ -229,6 +259,30 @@ const KnowledgeRuleV3Schema = new Schema<IKnowledgeRuleV3>(
         message: 'Version phải là số nguyên >= 1.'
       },
       default: 1
+    },
+    isComposite: {
+      type: Boolean,
+      required: true,
+      default: false,
+    },
+    compositeComponents: {
+      type: [CompositeRuleComponentSchema],
+      required: true,
+      default: [],
+      validate: {
+        validator: (items: unknown[]) => items.length <= 12,
+        message: 'Một quy luật tổng hợp chỉ được chứa tối đa 12 mệnh đề nguyên tử.',
+      },
+    },
+    mergedFromRuleIds: {
+      type: [{ type: Schema.Types.ObjectId, ref: 'KnowledgeRuleV3' }],
+      required: true,
+      default: [],
+    },
+    mergedIntoRuleId: {
+      type: Schema.Types.ObjectId,
+      ref: 'KnowledgeRuleV3',
+      required: false,
     }
   },
   {

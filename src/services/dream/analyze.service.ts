@@ -54,6 +54,9 @@ interface IAppliedRule {
   confidenceCap: number;
   claimStrength: string;
   applicationRole?: 'psychological_mechanism' | 'contextual_probe' | 'descriptive_pattern';
+  applicationTier?: 'supported' | 'exploratory';
+  evidenceScore?: number;
+  supportingSourceCount?: number;
   applicationFeedback?: {
     supports: number;
     weakens: number;
@@ -543,7 +546,7 @@ ${truncatedRuleText.split('\n').map(line => `- "${line}"`).join('\n')}
   const compactRulesText = llmUsableRules
     .map(
       (r) =>
-        `- RuleId: "${String(r.ruleId || r._id)}", ApplicationRole: "${r.applicationRole}", RuleCode: "${r.ruleCode}" (Statement: "${r.ruleStatement}", Basis: "${r.scientificBasis}", Classifications: "${r.classifications.join(', ')}", Prior case applicability: ${r.applicationFeedback?.supports || 0} supported / ${r.applicationFeedback?.weakens || 0} weakened)`
+        `- RuleId: "${String(r.ruleId || r._id)}", ApplicationRole: "${r.applicationRole}", ApplicationTier: "${r.applicationTier || 'supported'}", RuleCode: "${r.ruleCode}" (Statement: "${r.ruleStatement}", Basis: "${r.scientificBasis}", Classifications: "${r.classifications.join(', ')}", Prior case applicability: ${r.applicationFeedback?.supports || 0} supported / ${r.applicationFeedback?.weakens || 0} weakened)`
     )
     .join('\n');
 
@@ -667,6 +670,12 @@ The JSON object must match this exact TypeScript interface:
   "practical_reflections": [
     { "suggestion": "A specific, low-risk reflection or action the user can try", "rationale": "Why this suggestion follows from the dream pattern without treating the dream as a diagnosis or prophecy" }
   ],
+  "creative_continuation": {
+    "title": "A short Vietnamese title for an imagined part 2",
+    "continuation": "A coherent 120-220 word fictional continuation in Vietnamese, beginning from the final scene of this dream",
+    "connectionToCurrentDream": "One short Vietnamese explanation of which unresolved scene or emotion was continued",
+    "inspirationIndexes": [1]
+  },
   "confidence": 0.0, // Overall analysis confidence score between 0.0 and 1.0 (Must respect the rule confidenceCap if applied!)
   "core_analysis": "A deep, premium, cohesive psychological and symbolic interpretation of the dream in Vietnamese, blending RAG inputs and context.",
   "disclaimer": "The standard disclaimer that this analysis is for reflective purposes and does not constitute medical/clinical diagnosis, in Vietnamese."
@@ -675,6 +684,7 @@ The JSON object must match this exact TypeScript interface:
 CRITICAL RULES:
 1. All note, hypothesis, summary, analysis, and follow-up text fields MUST be written in Vietnamese (Tiếng Việt).
 2. ApplicationRole is a hard boundary: only psychological_mechanism may appear in scientific_context_notes or explain a waking-life psychological process. contextual_probe may only support a concrete unanswered question. descriptive_pattern may only remain in the audit trail and must not become a psychological explanation, hypothesis, or advice.
+2a. ApplicationTier "exploratory" means the approved rule is still weak or single-source. It may generate concrete case questions and a cautious structural comparison, but must never be written as an established fact, diagnosis, prediction, or proof of creativity. User answers change case applicability only and never raise the academic evidence score.
 2. Translate "Threat Simulation Theory (TST)" into Vietnamese as "Lý thuyết mô phỏng mối đe dọa". Never use "Simulasi Dị Nghi" or similar incorrect terms.
 3. Make all scientific notes cautious using terms like "có thể", "một khung diễn giải", "không phải chẩn đoán", "không khẳng định quan hệ nhân quả chắc chắn".
 4. The overall "confidence" float must respect the "confidenceCap" of any matched rules. If multiple rules are matched, the confidence should not exceed the minimum confidenceCap of those matched rules.
@@ -705,6 +715,8 @@ CRITICAL RULES:
 29. core_analysis must directly answer three questions in plain Vietnamese: why this sequence may have appeared, why the reported feelings fit that sequence, and which unknown real-life trigger still needs confirmation. Attribute each connection to an academic rule, first-person prior confirmation, or an explicitly labeled tentative inference.
 30. practical_reflections must say what to notice today or in a bounded upcoming period and why. Base them on an applied rule, a confirmed recurring personal pattern, or an unanswered hypothesis; never generate life advice from a symbol alone.
 31. Write for the person who reported the dream. Prefer direct, natural Vietnamese ("bạn", "chi tiết này", "chuỗi cảnh") and vary sentence openings. Do not repeatedly begin sections with "Giấc mơ này", "Người mơ", "Nghiên cứu cho thấy", or "Có thể". Avoid restating the summary in core_analysis and interpretive_threads.
+32. creative_continuation is an explicitly fictional writing exercise, never analysis, prophecy, dream prediction, recovered memory, or medical advice. Continue naturally from the last scene in DREAM_NARRATIVE and preserve its people, objects, emotional tension, and point of view.
+33. inspirationIndexes may reference only numbered SIMILAR PRIOR DREAMS. Borrow only an abstract transition, emotional pattern, or motif; never copy a sentence, a unique personal fact, an identity, or more than five consecutive words from another report. Use an empty array when no prior dream genuinely helps.
 `;
 
   // ─── STEP 5: LLM Generation ───
@@ -1009,6 +1021,29 @@ CRITICAL RULES:
       similarity: item.similarity,
       matchedOn: item.matchedOn,
     }));
+    const creative = aiAnalysis.creative_continuation;
+    if (creative
+      && typeof creative.title === 'string'
+      && typeof creative.continuation === 'string'
+      && typeof creative.connectionToCurrentDream === 'string') {
+      const inspirationIndexes: number[] = Array.isArray(creative.inspirationIndexes)
+        ? [...new Set<number>((creative.inspirationIndexes as unknown[])
+          .filter((index): index is number => Number.isInteger(index) && Number(index) >= 1 && Number(index) <= similarDreamResult.matches.length))]
+        : [];
+      creative.inspirations = inspirationIndexes.map(index => {
+        const item = similarDreamResult.matches[index - 1];
+        return {
+          dreamId: item.dreamId,
+          title: item.title,
+          similarity: item.similarity,
+          matchedOn: item.matchedOn,
+        };
+      });
+      creative.inspirationIndexes = inspirationIndexes;
+      creative.disclaimer = 'Đây là một đoạn sáng tác tham khảo dựa trên mô-típ kể chuyện, không phải dự báo về giấc mơ tiếp theo và không phải kết luận tâm lý.';
+    } else {
+      delete aiAnalysis.creative_continuation;
+    }
   }
 
   // ─── STEP 6: Construct Audit Trail ───

@@ -33,6 +33,33 @@ def _clean_table_text(text: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
+def _is_unlabelled_body_heading(text: str) -> bool:
+    clean = (text or "").strip()
+    if not clean or len(clean) > 140 or re.search(r"[.!?]\s*$", clean):
+        return False
+    normalized = re.sub(r"[^a-z0-9]+", " ", clean.lower()).strip()
+    known = re.compile(
+        r"^(?:limitations?|limitations? of (?:the )?model|discussion|conclusions?|"
+        r"results?|methods?|materials and methods|future directions?|summary)$",
+        re.IGNORECASE,
+    )
+    return bool(known.match(normalized))
+
+
+def _is_back_matter_metadata(text: str) -> bool:
+    clean = (text or "").strip()
+    if not clean or re.fullmatch(r"[-–—•]+", clean):
+        return True
+    return bool(re.match(
+        r"^(?:conflict of interest(?: statement)?|received\s*:|accepted\s*:|"
+        r"published online\s*:|citation\s*:|this article was submitted to\b|"
+        r"copyright\b|©|author contributions?\b|funding\b|acknowledg(?:e)?ments?\b|"
+        r"data availability\b|ethics statement\b|reviewed by\b|academic editor\b)",
+        clean,
+        re.IGNORECASE,
+    ))
+
+
 def _serialize_raw_table_cells(tbl) -> list[dict]:
     return [
         {
@@ -508,6 +535,14 @@ def main():
                         fig_type = "embedded"
                 else:
                     fig_type = "region_only"
+
+            if has_seen_references and item_type not in ["heading", "table", "figure", "page_header", "page_footer"]:
+                if _is_back_matter_metadata(text):
+                    item_type = "metadata"
+                    has_seen_references = False
+                elif _is_unlabelled_body_heading(text):
+                    item_type = "heading"
+                    has_seen_references = False
 
             if has_seen_references and item_type not in ["heading", "table", "figure", "page_header", "page_footer"]:
                 item_type = "reference"

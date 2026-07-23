@@ -1,6 +1,7 @@
 import { DoclingExtractionResult, DoclingArtifactDescriptor } from '../../types/docling.types';
 import { CanonicalBlocksOutput, CanonicalBlock, BlockType, SemanticType } from '../../types/canonical.types';
 import { DoclingReaderPolicyService } from './doclingReaderPolicy.service';
+import { DoclingTextRepairService } from './doclingTextRepair.service';
 
 export interface DoclingAdapterOutput {
   canonicalOutput: CanonicalBlocksOutput;
@@ -34,7 +35,7 @@ export class DoclingAdapterService {
     );
 
     normalized = normalized.replace(/([\p{L}])\s+(['’])\s+([\p{L}])/gu, '$1$2$3');
-    return normalized;
+    return DoclingTextRepairService.repairText(normalized);
   }
 
   private static stripPublisherDownloadNotice(text: string): string {
@@ -210,6 +211,18 @@ export class DoclingAdapterService {
       const activeType = policy.blockTypeOverride || item.type;
       const itemText = normalizedItemText;
       const captionText = this.normalizePdfTypography(policy.captionText || item.caption || '');
+      const normalizedTableHtml = activeType === 'table'
+        ? DoclingTextRepairService.repairHtml(item.html || '')
+        : item.html;
+      const normalizedTableData = activeType === 'table' && item.tableData
+        ? {
+            ...item.tableData,
+            cells: item.tableData.cells.map((cell) => ({
+              ...cell,
+              text: DoclingTextRepairService.repairText(cell.text || ''),
+            })),
+          }
+        : item.tableData;
 
       // A renderable scientific figure must have meaningful reader text. The
       // caption is its canonical text; persisting an image-only block with an
@@ -249,7 +262,7 @@ export class DoclingAdapterService {
         case 'table': {
           blockType = 'table';
           semanticType = 'table';
-          tableHtmlContent = item.html || '';
+          tableHtmlContent = normalizedTableHtml || '';
           const captionHtml = captionText
             ? `<p class="caption"><strong>${this.escapeHtml(captionText)}</strong></p>`
             : '';
@@ -294,7 +307,7 @@ export class DoclingAdapterService {
         order: orderCounter++,
         pageNumber: item.pageNumber,
         tableHtmlContent,
-        tableData: activeType === 'table' ? item.tableData : undefined,
+        tableData: activeType === 'table' ? normalizedTableData : undefined,
         marker: activeType === 'figure' ? (item as any).marker || undefined : undefined
       });
     }

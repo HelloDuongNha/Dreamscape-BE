@@ -7,6 +7,7 @@ import notificationRoutes from './notificationRoutes';
 import userRoutes         from './userRoutes';
 import sourceRoutes        from './sourceRoutes';
 import moderationRoutes    from './moderationRoutes';
+import oracleRoutes        from './oracleRoutes';
 
 const router = Router();
 
@@ -57,5 +58,6 @@ router.use('/notifications', notificationRoutes);
 router.use('/users',         userRoutes);
 router.use('/sources',       sourceRoutes);
 router.use('/moderation',    moderationRoutes);
+router.use('/oracle',        oracleRoutes);
 
 export default router;

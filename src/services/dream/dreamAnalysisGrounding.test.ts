@@ -13,6 +13,7 @@ import {
   isGroundedDreamTitle,
   buildGroundedDreamTitle,
   buildRuleGroundedFallbackHypotheses,
+  reconcileAlternateQuestionAfterFeedback,
   ensureSubstantiveCoreAnalysis,
   polishGeneratedDreamProse,
   structureScientificNoteText,
@@ -39,7 +40,24 @@ import {
   deduplicateOverlappingMotifNotes,
   deriveDreamEmotionTone,
   removeInternalAnalysisVocabulary,
+  normalizeGroundingText,
+  resolveQuestionRuleIds,
+  buildExploratoryCaseAssessment,
 } from './dreamAnalysisGrounding.service';
+import { requiresAggregateRuleValidation } from '../rules/ruleV3DreamApplication.service';
+
+assert.equal(requiresAggregateRuleValidation({
+  claimType: 'review_synthesis',
+  statement: 'Dream simulations are often realistic and incorporate themes, characters, concerns, and memories from waking experience.',
+  subject: 'dream simulations',
+  outcome: 'realistic incorporation of waking life elements',
+}), false, '"incorporate" must not be misclassified because it contains the letters "rate"');
+assert.equal(requiresAggregateRuleValidation({
+  claimType: 'null_finding',
+  statement: 'There was no significant difference in illness threats between pandemic and pre-pandemic dreams.',
+  subject: 'illness threats',
+  outcome: 'frequency in pandemic vs. pre-pandemic dreams',
+}), true);
 
 const input = `Đêm qua tôi mơ mình quay lại ngôi trường cấp ba cũ, dù ngày mai tôi phải thuyết trình một dự án rất quan trọng ở công ty. Hành lang trường tối. Tôi cầm một cuốn sổ nhưng các trang đều trắng. Tôi chạy qua một cây cầu gỗ. Ngoài đời, tuần vừa rồi tôi làm việc sát hạn. Gần đây tôi xem lại ảnh căn nhà cũ của bà.`;
 const segments = extractDreamSegments(input);
@@ -202,7 +220,13 @@ const groundedRelative = buildGroundedMotifExplanation({ symbol: 'bà ngoại', 
 assert.match(groundedRelative, /chỉ kiểm tra xem ký ức này có vừa được khơi lại ngoài đời/);
 assert.match(groundedRelative, /Không được suy ra người thân tượng trưng cho sự che chở/);
 const groundedTicket = buildGroundedMotifExplanation({ symbol: 'tấm vé tàu', dreamEvidence: 'Trên bàn giáo viên có một tấm vé tàu ghi ngày hôm qua.', meaning: 'Tấm vé đại diện cho lựa chọn.' }, [{ ruleStatement: 'Autobiographical memory can be incorporated into dreams.' }]);
-assert.match(groundedTicket, /quá khứ.*tương lai/);
+assert.match(groundedTicket, /ngày hôm qua.*dấu mốc quá khứ/);
+const projectTicket = buildGroundedMotifExplanation({ symbol: 'tấm vé tàu', dreamEvidence: 'Cô giáo cũ đưa cho tôi một tấm vé tàu có in tên dự án mà tôi đang thực hiện.' }, [{ ruleStatement: 'Autobiographical memory can be incorporated into dreams.' }]);
+assert.match(projectTicket, /tên dự án.*mối bận tâm hiện tại/);
+assert.doesNotMatch(projectTicket, /ngày hôm qua|hai chuyến/);
+const constructedBridge = buildGroundedMotifExplanation({ symbol: 'cây cầu', dreamEvidence: 'Tôi lấy những mảnh đồ chơi trong căn bếp thời thơ ấu để ghép thành một cây cầu.' }, [{ ruleStatement: 'Weak memory associations may be recombined in dreams.' }]);
+assert.match(constructedBridge, /phương án giải quyết.*các mảnh có sẵn/);
+assert.doesNotMatch(constructedBridge, /khó tiếp cận|bước ngoặt/);
 const groundedWater = buildGroundedMotifExplanation({ symbol: 'mặt nước', dreamEvidence: 'Chuông tàu vang lên và sàn nhà biến thành mặt nước.', meaning: 'Mặt nước đại diện cho cảm xúc.' }, [{ ruleStatement: 'Autobiographical memory can be incorporated into dreams.' }]);
 assert.match(groundedWater, /lấy đi chỗ đứng ổn định/);
 const sanitizedClaims = sanitizeUnsupportedDreamClaims('Bà ngoại đại diện cho sự an ủi và bảo vệ. Cây cầu biểu thị một bước ngoặt trong cuộc sống.');
@@ -253,9 +277,45 @@ assert.equal(stationQuestions.length, 2);
 assert.equal(stationQuestions[0].verificationKey, 'combined-future-rule:multiple_future_horizons');
 assert.match(stationQuestions[0].followUpQuestion, /kế hoạch kéo dài nhiều tháng/);
 assert.equal(stationQuestions[0].answerSemantics.yes, 'supports');
+assert.equal(stationQuestions[0].alternateQuestion.questionDimension, 'priority_pressure');
+assert.match(stationQuestions[0].alternateQuestion.followUpQuestion, /hạn chót cụ thể/);
+assert.doesNotMatch(stationQuestions[0].alternateQuestion.followUpQuestion, /chuẩn bị đồng thời/);
 assert.equal(stationQuestions[1].verificationKey, 'past-future-rule:recent_experience_incorporation');
 assert.match(stationQuestions[1].followUpQuestion, /ba ngày trước/);
 assert.equal(stationQuestions[1].answerSemantics.no, 'weakens');
+assert.equal(stationQuestions[1].alternateQuestion.questionDimension, 'recent_direct_exposure');
+assert.match(stationQuestions[1].alternateQuestion.followUpQuestion, /trực tiếp nhìn thấy|nghe nhắc tới|tiếp xúc/);
+const unsureExpandedQuestions = reconcileAlternateQuestionAfterFeedback(
+  stationQuestions,
+  stationQuestions[0].verificationKey,
+  'unsure',
+);
+assert.equal(unsureExpandedQuestions.length, 2);
+assert.equal(unsureExpandedQuestions[0].userFeedback, 'unsure');
+assert.equal(reconcileAlternateQuestionAfterFeedback(
+  stationQuestions,
+  stationQuestions[0].verificationKey,
+  'yes',
+).length, 2);
+assert.equal(reconcileAlternateQuestionAfterFeedback(
+  unsureExpandedQuestions,
+  stationQuestions[0].verificationKey,
+  null,
+).length, 2);
+const continuityQuestions = buildRuleGroundedFallbackHypotheses([
+  {
+    ruleId: 'continuity-rule',
+    factor: 'daily experiences and activities, especially current concerns',
+    outcome: 'incorporated into dreams',
+    ruleStatement: 'Daily experiences and activities, especially current concerns, are easily incorporated into dreams.',
+    dreamFeatureTags: ['current concerns', 'daily activities'],
+  },
+], 'Tôi mơ thấy mình đến muộn một cuộc họp và không tìm thấy tài liệu cần trình bày.');
+assert.equal(continuityQuestions.length, 1);
+assert.equal(continuityQuestions[0].verificationKey, 'continuity-rule:waking_concern_incorporation');
+assert.match(continuityQuestions[0].followUpQuestion, /trong bảy ngày trước giấc mơ/i);
+assert.match(continuityQuestions[0].followUpQuestion, /cuộc họp/iu);
+assert.equal(continuityQuestions[0].answerSemantics.yes, 'supports');
 const stationSynthesis = buildCaseGroundedSynthesis(stationNarrative, stationQuestions, 'Một câu chung chung.');
 assert.match(stationSynthesis, /phải chọn – thiếu thông tin – không kịp hoàn tất/);
 assert.match(stationSynthesis, /việc gần hạn và một kế hoạch dài hơn/);
@@ -291,7 +351,10 @@ const refreshedStation = enrichScientificNotesForResponse({
     evidenceLinks: stationEvidenceLinks,
   },
 }, `${stationNarrative} Tôi tỉnh dậy cảm thấy gấp gáp, bối rối và tiếc nuối.`);
-assert.equal(refreshedStation.real_life_hypotheses.length, 2);
+assert.equal(refreshedStation.real_life_hypotheses.length, 4);
+assert.deepEqual(refreshedStation.real_life_hypotheses.map((item: any) => item.questionDimension), [
+  'multiple_future_horizons', 'priority_pressure', 'recent_experience_incorporation', 'recent_direct_exposure',
+]);
 assert.equal(refreshedStation.emotional_tone_key, 'urgent_conflicted');
 assert.equal('dreamValenceScore' in refreshedStation, false);
 assert.equal('score_breakdown' in refreshedStation, false);
@@ -339,6 +402,25 @@ const persistedFeedbackByKey = new Map(persistedQuestionTree.real_life_hypothese
 assert.equal(persistedFeedbackByKey.get(stationQuestions[0].verificationKey), 'unsure');
 assert.equal(persistedQuestionTree.real_life_hypotheses.some((item: any) =>
   item.questionDimension === 'external_sound_at_wake'), false);
+const persistedWithAlternate = enrichScientificNotesForResponse({
+  ...persistedQuestionTree,
+  real_life_hypotheses: reconcileAlternateQuestionAfterFeedback(
+    persistedQuestionTree.real_life_hypotheses,
+    stationQuestions[0].verificationKey,
+    'unsure',
+  ),
+}, {
+  componentD: {
+    appliedRules: [
+      { ruleId: 'combined-future-rule', factor: 'dreams', outcome: 'combine future events', ruleStatement: 'Dreams can combine future events.' },
+      { ruleId: 'past-future-rule', factor: 'episodic sources', outcome: 'temporal proximity', ruleStatement: 'Episodic sources close in time to sleep, including recent events, are often incorporated into dreams.' },
+    ],
+    evidenceLinks: stationEvidenceLinks,
+  },
+}, sleepNarrative);
+assert.equal(persistedWithAlternate.real_life_hypotheses.length, 4);
+assert.equal(persistedWithAlternate.real_life_hypotheses[1].questionDimension, 'priority_pressure');
+assert.match(persistedWithAlternate.real_life_hypotheses[1].followUpQuestion, /hạn chót cụ thể/);
 const resolvedQuestionTree = enrichScientificNotesForResponse({
   ...persistedQuestionTree,
   real_life_hypotheses: persistedQuestionTree.real_life_hypotheses.map((item: any) =>
@@ -462,14 +544,35 @@ assert.equal(termiteScientific, null);
 const feedbackChangeSet = buildFeedbackChangeSet({
   core_analysis: 'Câu này được giữ nguyên. Cách hiểu cũ chưa có dữ kiện.',
   interpretive_threads: [{ reasoning: 'Đoạn này không đổi.' }],
+  case_conclusion: {
+    conclusion: 'Đây mới là giả thuyết ban đầu.',
+    recommendedNextStep: 'Trả lời câu hỏi xác nhận.',
+  },
 }, {
   core_analysis: 'Câu này được giữ nguyên. Câu trả lời Có xác nhận một việc gần hạn đang tồn tại.',
   interpretive_threads: [{ reasoning: 'Đoạn này không đổi.' }],
+  case_conclusion: {
+    conclusion: 'Buổi trình bày là bối cảnh thật của giấc mơ.',
+    recommendedNextStep: 'Viết ba ý chính và diễn tập một lần.',
+  },
 });
-assert.deepEqual(feedbackChangeSet.paths, ['core_analysis']);
+assert.deepEqual(feedbackChangeSet.paths, [
+  'core_analysis',
+  'case_conclusion.conclusion',
+  'case_conclusion.recommendedNextStep',
+]);
 assert.deepEqual(feedbackChangeSet.fragments.core_analysis, [
   'Câu trả lời Có xác nhận một việc gần hạn đang tồn tại.',
 ]);
+assert.deepEqual(feedbackChangeSet.fragments['case_conclusion.conclusion'], [
+  'Buổi trình bày là bối cảnh thật của giấc mơ.',
+]);
+const feedbackFactOnlyChange = buildFeedbackChangeSet({
+  feedback_analysis: { confirmedFacts: ['Dữ kiện thứ nhất.'], interpretation: 'Kết luận giữ nguyên.' },
+}, {
+  feedback_analysis: { confirmedFacts: ['Dữ kiện thứ nhất.', 'Dữ kiện thứ hai.'], interpretation: 'Kết luận giữ nguyên.' },
+});
+assert.deepEqual(feedbackFactOnlyChange.paths, ['feedback_analysis.confirmedFacts.1']);
 
 const familyDream = 'Tôi quay lại ngôi trường cũ và cầm một cuốn sổ trắng. Tôi nghe tiếng bước chân rồi chạy vì bị đuổi theo; nếu bị bắt kịp tôi sợ mình sẽ quên điều rất quan trọng. Phía bên kia cầu là nhà cũ của bà ngoại. Tôi muốn hỏi bà nhưng cửa đóng lại. Tôi tỉnh dậy với tim đập nhanh.';
 const familyResponse = enrichScientificNotesForResponse({
@@ -501,6 +604,7 @@ const familyResponse = enrichScientificNotesForResponse({
 }, familyDream);
 assert.deepEqual(familyResponse.real_life_hypotheses.map((item: any) => item.questionDimension), [
   'recent_experience_incorporation',
+  'recent_direct_exposure',
 ]);
 assert.equal(familyResponse.real_life_hypotheses[0].ruleId, 'memory-rule');
 assert.match(familyResponse.real_life_hypotheses[0].followUpQuestion, /bà ngoại/);
@@ -552,7 +656,7 @@ const attachmentBackedResponse = enrichScientificNotesForResponse({
     }],
   },
 }, familyDream);
-assert.equal(attachmentBackedResponse.real_life_hypotheses.length, 1);
+assert.equal(attachmentBackedResponse.real_life_hypotheses.length, 2);
 assert.equal(attachmentBackedResponse.real_life_hypotheses[0].questionDimension, 'attachment_support_under_stress');
 assert.match(attachmentBackedResponse.real_life_hypotheses[0].followUpQuestion, /bà ngoại.*an toàn/);
 assert.equal(attachmentBackedResponse.real_life_hypotheses[0].ruleId, 'attachment-rule');
@@ -626,5 +730,157 @@ assert.doesNotMatch(
   buildGroundedMotifExplanation({ symbol: 'bà ngoại', dreamEvidence: 'Tôi thấy bà ngoại.' }, [{ ruleStatement: 'Memory consolidation affects dream content.' }]),
   /Ý nghĩa cụ thể phải dựa/,
 );
+
+const compositeQuestions = buildRuleGroundedFallbackHypotheses([{
+  ruleId: 'composite-rule',
+  isComposite: true,
+  compositeComponents: [{
+    sourceRuleId: 'future-a', ruleCode: 'KR3_FUTURE_A',
+    statement: 'Dreams can incorporate anticipated future events.', subject: 'anticipated future event', outcome: 'prospective dream content',
+    conditions: [], limitations: [], dreamFeatureTags: ['upcoming events'],
+  }, {
+    sourceRuleId: 'future-b', ruleCode: 'KR3_FUTURE_B',
+    statement: 'Prospective dreams can draw on upcoming events.', subject: 'upcoming event', outcome: 'prospective dream content',
+    conditions: [], limitations: [], dreamFeatureTags: ['upcoming events'],
+  }, {
+    sourceRuleId: 'memory-a', ruleCode: 'KR3_MEMORY_A',
+    statement: 'Recent waking-life experiences can be incorporated into dream content.', subject: 'recent events', outcome: 'dream content',
+    conditions: [], limitations: [], dreamFeatureTags: ['old school'],
+  }],
+}], 'Tôi quay lại trường cũ và cầm một cuốn sổ. Tôi nhớ rằng ngày mai phải trình bày trước nhiều người.');
+assert.equal(compositeQuestions.filter(item => item.questionDimension === 'prospective_demand').length, 1,
+  'equivalent component questions must be deduplicated by verification dimension');
+assert.equal(compositeQuestions.filter(item => item.questionDimension === 'recent_experience_incorporation').length, 1,
+  'a genuinely different component question must remain available');
+assert.ok(compositeQuestions.every(item => item.ruleId === 'composite-rule'),
+  'all component questions must remain attributed to the composite rule');
+
+const sharedQuestionAcrossRules = buildRuleGroundedFallbackHypotheses([{
+  ruleId: 'future-rule-a',
+  factor: 'anticipated future events', outcome: 'prospective dream content',
+  ruleStatement: 'Dreams can incorporate anticipated future events.',
+}, {
+  ruleId: 'future-rule-b',
+  factor: 'upcoming events', outcome: 'prospective dream content',
+  ruleStatement: 'Upcoming events can appear in prospective dreams.',
+}], 'Tôi mơ thấy mình ở trường và chạy đi tìm cuốn sổ vì ngày mai phải thuyết trình trước mọi người.');
+assert.equal(sharedQuestionAcrossRules.length, 1, 'identical questions across rules must be asked once');
+assert.deepEqual(sharedQuestionAcrossRules[0].ruleIds, ['future-rule-a', 'future-rule-b'],
+  'one answer must retain links to every rule tested by the shared question');
+assert.deepEqual(resolveQuestionRuleIds(sharedQuestionAcrossRules[0]), ['future-rule-a', 'future-rule-b'],
+  'feedback persistence must fan one answer out to every linked rule statistic');
+assert.notEqual(
+  normalizeGroundingText(sharedQuestionAcrossRules[0].followUpQuestion),
+  normalizeGroundingText(sharedQuestionAcrossRules[0].alternateQuestion.followUpQuestion),
+  'a preloaded follow-up must collect a genuinely different datum',
+);
+
+const unsureAdjustedCore = buildCaseGroundedSynthesis(
+  'Tôi mơ thấy mình đến muộn một cuộc họp.',
+  [{ ...continuityQuestions[0], userFeedback: 'unsure' }],
+  'Cuộc họp tạo cảm giác gấp gáp.',
+);
+assert.match(unsureAdjustedCore, /Chưa biết|để mở|không được dùng làm kết luận chính/iu,
+  'an unsure answer must still change the rendered analysis while keeping the direction unresolved');
+
+const recombinationDream = 'Tôi mơ mình quay lại lớp học tiểu học cũ, nhưng bảng đen đã biến thành lịch của một cuộc họp sắp tới. Cô giáo cũ đưa cho tôi một tấm vé tàu có in tên dự án mà tôi đang thực hiện. Tôi bước lên một đoàn tàu làm bằng những bàn phím máy tính; nó chạy qua biển rồi đưa tôi tới một văn phòng trên Mặt Trăng. Ở đó tôi phải trình bày trước rất nhiều người, nhưng thay vì sử dụng slide, tôi lấy những mảnh đồ chơi trong căn bếp thời thơ ấu để ghép thành một cây cầu. Khi cây cầu hoàn thành, khán giả biến thành một đàn chim và bay xuyên qua trần nhà.';
+const exploratoryCompositeRule = {
+  ruleId: 'recombination-rule', ruleCode: 'KR3_RECOMBINATION',
+  ruleStatement: 'Weak associations may contribute to flexible thinking in implausible future-related dreams.',
+  factor: 'weak associations', outcome: 'creative and divergent thinking',
+  evidenceScore: 19,
+  applicationTier: 'exploratory', applicationRole: 'contextual_probe', isComposite: true,
+  compositeComponents: [{
+    sourceRuleId: 'weak-component', ruleCode: 'KR3_WEAK',
+    statement: 'The activation of weak associations may be a component of creative, flexible, and divergent thinking.',
+    subject: 'weak associations', outcome: 'creative thinking', conditions: [], limitations: [], dreamFeatureTags: [],
+  }, {
+    sourceRuleId: 'implausible-component', ruleCode: 'KR3_IMPLAUSIBLE',
+    statement: 'Future-related dreams are often highly implausible scenarios.',
+    subject: 'future-related dreams', outcome: 'highly implausible scenarios', conditions: [], limitations: [], dreamFeatureTags: [],
+  }, {
+    sourceRuleId: 'prospective-component', ruleCode: 'KR3_PROSPECTIVE',
+    statement: 'Dreaming is not strictly the same process as waking prospective thought.',
+    subject: 'dreaming', outcome: 'not strictly the same process as waking prospective thought', conditions: [], limitations: [], dreamFeatureTags: [],
+  }],
+};
+const exploratoryContext = {
+  componentD: {
+    appliedRules: [exploratoryCompositeRule],
+    evidenceLinks: [{
+      ruleId: 'recombination-rule', sourceId: 'source-recombination', sourceTitle: 'Constructive episodic simulation in dreams',
+      sourceYear: 2022, doi: '10.1371/journal.pone.0264574', chunkIds: ['chunk-recombination'],
+      chunkPreview: 'The activation of weak associations may be a critical component of creative, flexible, and divergent thinking.',
+    }],
+  },
+};
+const exploratoryResponse = enrichScientificNotesForResponse({
+  title: 'Tấm vé và cây cầu', summary: 'Một chuỗi cảnh phi thực tế.',
+  core_analysis: 'Lớp học cũ nối với dự án hiện tại và một buổi trình bày trong bối cảnh phi thực tế.',
+  real_life_hypotheses: [], scientific_context_notes: [], symbolic_notes: [], interpretive_threads: [],
+}, exploratoryContext, recombinationDream);
+assert.deepEqual(exploratoryResponse.real_life_hypotheses.map((item: any) => item.questionDimension), [
+  'weak_association_recombination', 'creative_problem_preoccupation', 'implausible_future_scenario',
+  'waking_prospective_difference', 'novel_solution_origin',
+]);
+assert.match(exploratoryResponse.real_life_hypotheses[0].followUpQuestion, /ít nhất hai chi tiết/iu);
+assert.match(exploratoryResponse.real_life_hypotheses[1].followUpQuestion, /cách trình bày hoặc giải quyết mới/iu);
+assert.equal(new Set(exploratoryResponse.real_life_hypotheses
+  .map((item: any) => normalizeGroundingText(item.followUpQuestion))).size, 5,
+  'all preloaded exploratory questions must collect distinct data');
+assert.equal(exploratoryResponse.real_life_hypotheses.every((item: any) => item.applicationTier === 'exploratory'), true);
+assert.equal(exploratoryResponse.grounding_summary.exploratoryRuleCount, 1);
+assert.equal(exploratoryResponse.grounding_summary.explanatoryRuleCount, 0);
+assert.match(exploratoryResponse.core_analysis, /Chưa có câu trả lời cho 5 chiều dữ kiện/);
+assert.equal(exploratoryResponse.scientific_context_notes[0]?.applicationTier, 'exploratory');
+assert.match(exploratoryResponse.scientific_context_notes[0]?.note || '', /liên hệ lỏng|mảnh ký ức/iu);
+const exploratoryAnswered = enrichScientificNotesForResponse({
+  ...exploratoryResponse,
+  real_life_hypotheses: exploratoryResponse.real_life_hypotheses.map((item: any, index: number) =>
+    index === 0 ? { ...item, userFeedback: 'yes' } : item),
+}, exploratoryContext, recombinationDream);
+assert.match(exploratoryAnswered.core_analysis, /Đã đối chiếu 1\/5 chiều dữ kiện/);
+assert.match(exploratoryAnswered.scientific_context_notes[0]?.note || '', /Đã đối chiếu 1\/5 chiều dữ kiện/);
+
+const allExploratoryYes = exploratoryResponse.real_life_hypotheses.map((item: any) => ({ ...item, userFeedback: 'yes' }));
+const allYesAssessment = buildExploratoryCaseAssessment(allExploratoryYes, exploratoryCompositeRule);
+assert.equal(allYesAssessment?.status, 'strong_match');
+assert.equal(allYesAssessment?.answeredCount, 5);
+assert.equal(allYesAssessment?.confirmedCount, 5);
+assert.match(allYesAssessment?.conclusion || '', /Đã đối chiếu 5\/5/);
+assert.match(allYesAssessment?.conclusion || '', /biến đổi một phương án có sẵn/,
+  'a prior waking solution must prevent the dream from being credited with inventing a new solution');
+const exploratoryAllAnswered = enrichScientificNotesForResponse({
+  ...exploratoryResponse,
+  real_life_hypotheses: allExploratoryYes,
+}, exploratoryContext, recombinationDream);
+assert.match(exploratoryAllAnswered.core_analysis, /buổi họp hoặc trình bày sắp tới là một sự kiện có thật|buổi trình bày sắp tới thật/);
+assert.match(exploratoryAllAnswered.core_analysis, /biến đổi một phương án có sẵn/);
+assert.doesNotMatch(exploratoryAllAnswered.core_analysis, /Thông tin bạn vừa xác nhận làm rõ trường hợp này: Bạn xác nhận ít nhất hai mảnh/,
+  'exploratory answers must be synthesised instead of appended as raw ifYesMeaning sentences');
+assert.match(exploratoryAllAnswered.case_conclusion?.conclusion || '', /không phải dự báo/);
+assert.match(exploratoryAllAnswered.case_conclusion?.concern?.label || '', /Chưa thấy dấu hiệu đáng lo/);
+assert.match(exploratoryAllAnswered.case_conclusion?.confidenceLabel || '', /Cao về bối cảnh.*thấp về mức chứng minh học thuật/);
+assert.equal(exploratoryAllAnswered.case_conclusion?.confirmedFindings?.length, 3);
+assert.match(exploratoryAllAnswered.case_conclusion?.confirmedFindings?.[0] || '', /Buổi trình bày là một việc có thật/);
+assert.equal(exploratoryAllAnswered.case_conclusion?.ruledOut?.length, 3);
+assert.match(exploratoryAllAnswered.case_conclusion?.ruledOut?.join(' ') || '', /dự báo tương lai.*ý nghĩa biểu tượng cố định/);
+assert.match(exploratoryAllAnswered.case_conclusion?.recommendedNextStep || '', /ba ý chính.*diễn tập/);
+assert.equal(exploratoryAllAnswered.case_conclusion?.evidenceBasis?.some((item: any) => item.kind === 'academic_context'), true);
+assert.equal(exploratoryAllAnswered.interpretive_threads?.length, 3);
+assert.match(exploratoryAllAnswered.interpretive_threads?.[0]?.title || '', /Buổi trình bày thật/);
+assert.match(exploratoryAllAnswered.interpretive_threads?.[2]?.reasoning || '', /không chứng minh giấc mơ tự phát minh/);
+assert.equal(exploratoryAllAnswered.grounding_summary.appliedRuleCount, exploratoryAllAnswered.scientific_context_notes.length,
+  'the audit must count scientific conclusions actually shown, not every retrieved rule');
+assert.equal(exploratoryAllAnswered.scientific_context_notes[0]?.academicEvidenceScore, 19);
+assert.equal(exploratoryAllAnswered.scientific_context_notes[0]?.caseApplicability?.status, 'strong_match');
+assert.equal(exploratoryAllAnswered.scientific_context_notes[0]?.caseApplicability?.confirmedCount, 5);
+assert.match(exploratoryAllAnswered.practical_reflections?.[0]?.suggestion || '', /ba ý chính.*diễn tập/);
+assert.match(exploratoryAllAnswered.practical_reflections?.[2]?.suggestion || '', /Không dùng lớp học.*dự báo/);
+const exploratoryAnswerChanges = buildFeedbackChangeSet(exploratoryResponse, exploratoryAllAnswered);
+assert.equal(exploratoryAnswerChanges.paths.includes('case_conclusion.conclusion'), true);
+assert.equal(exploratoryAnswerChanges.paths.includes('case_conclusion.recommendedNextStep'), true);
+assert.equal(exploratoryAnswerChanges.paths.includes('case_conclusion.confirmedFindings.0'), true);
+assert.equal(exploratoryAnswerChanges.paths.some(path => path.startsWith('practical_reflections.')), true);
 
 console.log('DREAM ANALYSIS GROUNDING: ALL ASSERTIONS PASSED');

@@ -21,6 +21,24 @@ export interface CanonicalReaderSectionIdentity {
   sectionType: string | null;
 }
 
+export interface TableCellData {
+  row: number;
+  column: number;
+  rowSpan: number;
+  columnSpan: number;
+  text: string;
+  role: 'header' | 'data';
+}
+
+export interface StructuredTableData {
+  version: number;
+  source: string;
+  reconstructionMethod: string;
+  rowCount: number;
+  columnCount: number;
+  cells: TableCellData[];
+}
+
 export interface ApiResponseSection {
   sectionIndex: number;
   sectionType: string;
@@ -31,4 +49,5 @@ export interface ApiResponseSection {
   pageEnd: number;
   blockIdentity: CanonicalReaderBlockIdentity;
   sectionIdentity: CanonicalReaderSectionIdentity | null;
+  tableData?: StructuredTableData | null;
 }

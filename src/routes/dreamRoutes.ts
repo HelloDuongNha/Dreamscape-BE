@@ -4,6 +4,7 @@ import {
   getPublicFeed,
   getUserDreams,
   updateDream,
+  appendDreamAddition,
   deleteDream,
   updatePrivacy,
   toggleLike,
@@ -312,6 +313,7 @@ router.get('/user/:userId', getUserDreams);
  *         description: Unauthorized
  */
 router.put('/:id', authMiddleware, updateDream);
+router.post('/:id/additions', authMiddleware, appendDreamAddition);
 
 // ─── DELETE /api/dreams/:id ───────────────────────────────────────────────────
 

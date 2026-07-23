@@ -13,6 +13,7 @@ export interface SimilarDreamMatch {
   sameAuthor: boolean;
   similarity: number;
   matchedOn: string[];
+  duplicateCount?: number;
   priorAnalysisSummary?: string;
   confirmedContext?: Array<{
     question: string;
@@ -95,6 +96,11 @@ function compact(value: string, max = 260): string {
   return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
 }
 
+function isSameAuthor(row: any, userId: string): boolean {
+  const author = row?.userId;
+  return String(author?._id || author) === userId;
+}
+
 export async function retrieveSimilarDreams(
   userId: string,
   dreamText: string,
@@ -117,12 +123,30 @@ export async function retrieveSimilarDreams(
   const queryNormalized = normalize(dreamText);
   const queryTokens = tokens(dreamText);
   const queryFeatures = extractDreamSimilarityFeatures(dreamText);
-  const prelim = rows.map(row => {
+  const rankedPrelim = rows.map(row => {
     const exact = normalize(row.content) === queryNormalized;
     const lexical = overlap(queryTokens, tokens(row.content));
     const motifs = featureOverlap(queryFeatures, extractDreamSimilarityFeatures(row.content));
     return { row, exact, lexical, motifs, preliminary: exact ? 1 : motifs * 0.7 + lexical * 0.3 };
-  }).sort((a, b) => b.preliminary - a.preliminary).slice(0, 16);
+  }).sort((a, b) => b.preliminary - a.preliminary);
+
+  // Repeated imports or test posts can contain the exact same narrative.
+  // Collapse them before ranking so duplicates neither monopolize the candidate
+  // window nor appear as several independent personal-history sources.
+  const groupedPrelim = new Map<string, (typeof rankedPrelim)[number] & { duplicateCount: number }>();
+  for (const item of rankedPrelim) {
+    // Keep own and public histories as separate privacy/provenance groups.
+    // Oracle can then prefer the user's own record when both contain the same
+    // narrative without counting either group several times.
+    const narrativeKey = `${isSameAuthor(item.row, userId) ? 'own' : 'public'}:${normalize(item.row.content)}`;
+    const existing = groupedPrelim.get(narrativeKey);
+    if (existing) {
+      existing.duplicateCount += 1;
+      continue;
+    }
+    groupedPrelim.set(narrativeKey, { ...item, duplicateCount: 1 });
+  }
+  const prelim = [...groupedPrelim.values()].slice(0, 16);
 
   // Lazy migration: only embed the strongest old candidates. Future analyses
   // reuse these vectors, so semantic matching does not repeatedly grow slower.
@@ -152,7 +176,8 @@ export async function retrieveSimilarDreams(
     if (item.lexical >= 0.35) matchedOn.push('Nhiều chi tiết tương đồng');
     return { ...item, semantic, score, matchedOn };
   }).filter(item => item.exact || (item.score >= 0.4 && (item.motifs >= 0.25 || item.lexical >= 0.18)))
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => b.score - a.score
+      || Number(isSameAuthor(b.row, userId)) - Number(isSameAuthor(a.row, userId)))
     .slice(0, limit);
 
   const selectedDreamIds = selected.map(item => item.row._id);
@@ -188,9 +213,10 @@ export async function retrieveSimilarDreams(
         excerpt: compact(item.row.content),
         createdAt: new Date(item.row.created_at).toISOString(),
         authorDisplayName: author?.display_name || author?.username || 'Người dùng DreamScape',
-        sameAuthor: String(author?._id || author) === userId,
+        sameAuthor: isSameAuthor(item.row, userId),
         similarity: Math.round(Math.min(1, item.score) * 100),
         matchedOn: item.matchedOn,
+        duplicateCount: item.duplicateCount,
         priorAnalysisSummary: compact(item.row.ai_result?.summary || '', 320) || undefined,
         ...(confirmedContext.length ? { confirmedContext } : {}),
         ...(ownerContextComments.length ? { ownerContextComments } : {}),

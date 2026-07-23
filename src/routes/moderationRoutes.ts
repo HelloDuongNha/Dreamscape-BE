@@ -13,8 +13,10 @@ import {
   getContributionPdfInline,
   cacheContributionPdf,
   deleteContributionPdf,
-  processUploadedPdfForContribution
+  processUploadedPdfForContribution,
+  getSourcePreviewTranslation
 } from '../controllers/moderationController';
+
 import {
   previewRuleV3Plan,
   dryRunRuleV3Extraction,
@@ -23,10 +25,12 @@ import {
   getRuleV3SourceAnalysisSummary,
   getRuleV3Candidates,
   getRuleV3CandidateDetail,
+  mergeRuleV3CandidateGroup,
   approveRuleV3Candidate,
   rejectRuleV3Candidate,
   bulkRuleV3Action
 } from '../controllers/ruleV3ModerationController';
+import { listOracleEvidenceGaps } from '../controllers/oracleEvidenceGapController';
 
 const router = Router();
 
@@ -67,6 +71,7 @@ const router = Router();
  *         description: Forbidden (requires moderator role)
  */
 router.get('/sources', authMiddleware, isModerator, getPendingSources);
+router.get('/oracle-evidence-gaps', authMiddleware, isModerator, listOracleEvidenceGaps);
 
 /**
  * @swagger
@@ -114,6 +119,8 @@ router.get('/sources', authMiddleware, isModerator, getPendingSources);
  */
 router.patch('/sources/:id/status', authMiddleware, isModerator, reviewSource);
 router.get('/sources/:id/preview', authMiddleware, isModerator, getSourcePreview);
+router.post('/sources/:id/preview/translate', authMiddleware, isModerator, getSourcePreviewTranslation);
+
 router.get('/sources/:id/pdf-inline', authMiddleware, isModerator, getContributionPdfInline);
 router.post('/sources/:id/cache-original-pdf', authMiddleware, isModerator, cacheContributionPdf);
 router.post('/sources/:id/process-uploaded-pdf', authMiddleware, isModerator, processUploadedPdfForContribution);
@@ -128,6 +135,7 @@ router.get('/sources/:id/rules-v3/summary', authMiddleware, isModerator, getRule
 router.get('/rules-v3/runs/:runId', authMiddleware, isModerator, getFullRuleV3ExtractionProgress);
 router.get('/rules-v3/candidates', authMiddleware, isModerator, getRuleV3Candidates);
 router.get('/rules-v3/candidates/:id', authMiddleware, isModerator, getRuleV3CandidateDetail);
+router.post('/rules-v3/candidates/:id/merge', authMiddleware, isModerator, mergeRuleV3CandidateGroup);
 router.post('/rules-v3/candidates/:id/approve', authMiddleware, isModerator, approveRuleV3Candidate);
 router.post('/rules-v3/candidates/:id/reject', authMiddleware, isModerator, rejectRuleV3Candidate);
 router.post('/rules-v3/bulk-action', authMiddleware, isModerator, bulkRuleV3Action);

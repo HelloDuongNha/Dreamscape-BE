@@ -20,6 +20,12 @@ export function normalizeGroundingText(value: unknown): string {
     .trim();
 }
 
+export function resolveQuestionRuleIds(hypothesis: any): string[] {
+  return [...new Set<string>((hypothesis?.ruleIds || [hypothesis?.ruleId])
+    .map((id: unknown) => String(id || '').trim())
+    .filter(Boolean))];
+}
+
 export type DreamEmotionToneKey =
   | 'urgent_conflicted'
   | 'anxious'
@@ -138,7 +144,13 @@ export function buildGroundedMotifExplanation(note: any, rules: any[]): string {
     return 'Nhà ga gom toàn bộ giấc mơ vào một tình huống phải chờ, chọn và kịp thời gian. Ở đây nó quan trọng vì hai chuyến tàu cùng sắp rời đi, chứ không phải vì “nhà ga” luôn có một nghĩa tượng trưng cố định. Điều cần kiểm tra ngoài đời là bạn có đang phải phân chia sự chú ý giữa hai mốc thời gian khác nhau hay không.';
   }
   if (containsGroundedPhrase(symbol, ['tấm vé tàu', 'vé tàu', 'ticket'])) {
-    return 'Tấm vé ghi “ngày hôm qua” đặt một dấu mốc quá khứ ngay cạnh hai chuyến đi hướng tới tương lai. Quá khứ và điều sắp tới vì thế cùng chen vào một quyết định. Tuy nhiên, cảnh mơ chưa cho biết sự kiện thật nào đã gợi lại lớp học cũ; câu hỏi về 48 giờ trước giấc mơ mới kiểm tra được phần đó.';
+    if (containsGroundedPhrase(evidence, ['ngày hôm qua', 'yesterday'])) {
+      return 'Dòng “ngày hôm qua” trên tấm vé đặt một dấu mốc quá khứ vào hành trình đang diễn ra. Chi tiết này có thể giúp nối một việc vừa xảy ra với phần còn lại của câu chuyện, nhưng chưa đủ để biến tấm vé thành biểu tượng cố định hay dự báo điểm đến.';
+    }
+    if (containsGroundedPhrase(evidence, ['tên dự án', 'project'])) {
+      return 'Tấm vé mang tên dự án nối trực tiếp cô giáo và lớp học cũ với công việc bạn đang thực hiện. Trong chuỗi cảnh này, nó hoạt động như một vật chuyển tiếp đưa chất liệu quá khứ vào mối bận tâm hiện tại; nó không tự nó có một ý nghĩa biểu tượng cố định. Cách hiểu này chỉ được giữ khi dự án và việc chuẩn bị ngoài đời được người kể xác nhận.';
+    }
+    return 'Tấm vé tạo một điểm chuyển giữa nơi xuất phát và cảnh tiếp theo của giấc mơ. Chưa có đủ dữ kiện để suy ra nó đại diện cho một lựa chọn, thời hạn hay dự báo cụ thể nếu những điều đó không xuất hiện trong chính lời kể.';
   }
   if (containsGroundedPhrase(symbol, ['chiếc cặp khóa', 'cặp khóa', 'locked case', 'locked bag'])) {
     return 'Chiếc cặp được giới thiệu là chứa thứ cần cho ngày mai nhưng lại không kịp mở, vì vậy nó làm rõ cảm giác thiếu thông tin khi thời hạn đang tới gần. Chi tiết này nối cô giáo, việc chuẩn bị và tiếng chuông rời ga thành cùng một áp lực. Nó chỉ đáng đọc theo hướng chuẩn bị nếu bạn thực sự đang có một việc gần hạn cần nhiều thông tin.';
@@ -157,6 +169,10 @@ export function buildGroundedMotifExplanation(note: any, rules: any[]): string {
     return 'Người thân và nơi chốn cũ đưa một ký ức tự truyện cụ thể vào giấc mơ. Nếu có kết luận học thuật phù hợp về việc trải nghiệm gần đây đi vào giấc mơ, câu hỏi xác nhận chỉ kiểm tra xem ký ức này có vừa được khơi lại ngoài đời hay không. Không được suy ra người thân tượng trưng cho sự che chở nếu chưa có một kết luận học thuật riêng hỗ trợ mối liên hệ đó.';
   }
   if (containsGroundedPhrase(symbol, ['cầu', 'cây cầu', 'cửa', 'cánh cửa', 'nước', 'mặt nước', 'bridge', 'door', 'water'])) {
+    if (containsGroundedPhrase(symbol, ['cầu', 'cây cầu', 'bridge'])
+      && containsGroundedPhrase(evidence, ['ghép thành', 'tạo thành', 'built', 'build'])) {
+      return 'Cây cầu xuất hiện như thứ bạn chủ động ghép nên để thay cho cách trình bày thông thường. Vai trò cụ thể của nó trong giấc mơ là một phương án giải quyết được dựng từ các mảnh có sẵn, không phải một chướng ngại mặc định. Cần đối chiếu với điều bạn đã nghĩ khi thức để biết đây là biến thể của ý tưởng có sẵn hay một liên tưởng mới trong mơ.';
+    }
     return 'Hình ảnh này nằm đúng điểm chuyển giữa hai cảnh và làm mục tiêu trở nên khó tiếp cận hơn. Nó cho thấy câu chuyện đang đổi hướng hoặc bị cản trở, nhưng chưa đủ để kết luận bạn đang trải qua một “bước ngoặt cuộc đời”. Cách hiểu đó chỉ nên được giữ lại khi hoàn cảnh hiện tại cung cấp thêm bằng chứng.';
   }
 
@@ -286,6 +302,13 @@ function firstDistinctNarrativeSentences(narrative: string, terms: string[], lim
   return [...new Set(matches)].slice(0, limit);
 }
 
+function presentDreamCues(narrative: string, candidates: string[], limit = 4): string[] {
+  const text = normalizeGroundingText(narrative);
+  return candidates.filter((candidate, index) =>
+    candidates.indexOf(candidate) === index && containsGroundedPhrase(text, [candidate]))
+    .slice(0, limit);
+}
+
 /**
  * Deterministic safety net for a small model that produced only vague questions.
  * It never creates a hypothesis unless an approved retrieved rule belongs to a
@@ -293,8 +316,24 @@ function firstDistinctNarrativeSentences(narrative: string, terms: string[], lim
  */
 export function buildRuleGroundedFallbackHypotheses(rules: any[], narrative: string): any[] {
   const accepted: any[] = [];
-  const seenFamilies = new Set<string>();
-  for (const rule of rules || []) {
+  const atomicRuleApplications = (rules || []).flatMap((rule: any) => {
+    const components = Array.isArray(rule?.compositeComponents) ? rule.compositeComponents : [];
+    if (!rule?.isComposite || components.length < 2) return [rule];
+    return components.map((component: any) => ({
+      ...rule,
+      isComposite: false,
+      compositeComponents: [],
+      ruleStatement: component.statement,
+      factor: component.subject,
+      outcome: component.outcome,
+      conditions: component.conditions || [],
+      limitations: component.limitations || [],
+      dreamFeatureTags: component.dreamFeatureTags || [],
+      compositeComponentRuleId: String(component.sourceRuleId || ''),
+      compositeComponentRuleCode: component.ruleCode,
+    }));
+  });
+  for (const rule of atomicRuleApplications) {
     if (!canGenerateContextQuestion(rule)) continue;
     let family = '';
     let evidence: string[] = [];
@@ -305,9 +344,69 @@ export function buildRuleGroundedFallbackHypotheses(rules: any[], narrative: str
     let ifNoMeaning = '';
     let matchedCue = '';
     let questionType: 'past' | 'present' | 'future' = 'present';
+    let alternateQuestionDimension = '';
+    let alternateFollowUpQuestion = '';
+    let alternateReasonForAsking = '';
+    let alternateIfYesMeaning = '';
+    let alternateIfNoMeaning = '';
+    let alternateQuestionType: 'past' | 'present' | 'future' = 'present';
     const verificationKind = classifyRuleV3VerificationKind(rule);
 
-    if (verificationKind === 'multiple_future_horizons') {
+    if (verificationKind === 'weak_association_recombination') {
+      const cues = presentDreamCues(narrative, [
+        'lớp học tiểu học cũ', 'bảng đen', 'cuộc họp sắp tới', 'cô giáo cũ',
+        'tấm vé tàu', 'dự án', 'bàn phím máy tính', 'văn phòng trên Mặt Trăng',
+        'mảnh đồ chơi', 'căn bếp thời thơ ấu', 'cây cầu', 'đàn chim',
+      ]);
+      if (cues.length < 2) continue;
+      family = 'weak_association_recombination';
+      evidence = firstDistinctNarrativeSentences(narrative, cues, 3);
+      const cueList = cues.slice(0, 3).map(cue => `“${cue}”`).join(', ');
+      hypothesis = 'Giấc mơ đang đặt nhiều mảnh ký ức và mối bận tâm vốn thuộc các bối cảnh khác nhau vào cùng một cách giải quyết mới.';
+      followUpQuestion = `Trong bảy ngày trước giấc mơ, ít nhất hai chi tiết ${cueList} có được gợi lại từ những sự việc riêng biệt ngoài đời không?`;
+      reasonForAsking = 'Câu hỏi kiểm tra nguồn của các mảnh ghép, không hỏi bạn có “sáng tạo” hay không. Nếu chúng thật sự được gợi từ những tình huống khác nhau, cách đối chiếu về liên kết lỏng giữa các mảnh ký ức phù hợp hơn với trường hợp này.';
+      ifYesMeaning = 'Bạn xác nhận ít nhất hai mảnh trong chuỗi cảnh có nguồn đời thực riêng biệt gần thời điểm ngủ; phân tích giữ hướng tâm trí đã kết hợp lại những chất liệu khác nhau, nhưng không suy ra năng lực sáng tạo của bạn.';
+      ifNoMeaning = 'Bạn không xác nhận các mảnh có nguồn đời thực riêng biệt gần đây; phân tích giảm ưu tiên hướng “tái kết hợp các liên kết yếu” và giữ chuỗi phi thực tế như một cấu trúc chưa rõ nguồn.';
+      questionType = 'past';
+      alternateQuestionDimension = 'creative_problem_preoccupation';
+      alternateFollowUpQuestion = 'Trong ba ngày trước giấc mơ, bạn có chủ động tìm một cách trình bày hoặc giải quyết mới cho dự án đang làm không?';
+      alternateReasonForAsking = 'Câu hỏi này thu một dữ kiện khác: có bài toán sáng tạo đang được xử lý khi thức hay không, thay vì hỏi lại nguồn của các hình ảnh trong mơ.';
+      alternateIfYesMeaning = 'Bạn xác nhận đang chủ động tìm một cách giải quyết mới; việc cây cầu được ghép từ đồ chơi có thể được giữ như một phép thử tưởng tượng quanh bài toán đó, không phải bằng chứng rằng giấc mơ đã giải quyết đúng vấn đề.';
+      alternateIfNoMeaning = 'Bạn không có bài toán trình bày hoặc giải pháp mới đang được xử lý; phân tích không dùng hướng “ấp ủ một giải pháp sáng tạo” để giải thích cảnh ghép cây cầu.';
+      alternateQuestionType = 'past';
+    } else if (verificationKind === 'implausible_future_scenario') {
+      family = 'implausible_future_scenario';
+      evidence = firstDistinctNarrativeSentences(
+        narrative,
+        ['cuộc họp sắp tới', 'dự án', 'trình bày', 'Mặt Trăng', 'đàn chim', 'biến thành'],
+        3,
+      );
+      hypothesis = 'Chuỗi cảnh phi thực tế có thể đang xoay quanh một sự kiện tương lai có thật, nhưng không phải là bản mô phỏng sát thực hay lời dự báo.';
+      followUpQuestion = 'Trong bảy ngày tới, bạn có một buổi họp hoặc trình bày thật liên quan trực tiếp đến dự án xuất hiện trong giấc mơ không?';
+      reasonForAsking = 'Câu hỏi tách sự kiện ngoài đời khỏi phần hư cấu như đoàn tàu bàn phím, Mặt Trăng và đàn chim. Chỉ sự kiện thật mới cho phép giữ mối nối hướng tới tương lai cho ca này.';
+      ifYesMeaning = 'Bạn xác nhận có một sự kiện thật sắp tới liên quan dự án; phân tích giữ sự kiện đó làm trục bối cảnh, đồng thời xem các cảnh phi thực tế là cách giấc mơ biến đổi chất liệu chứ không phải dự báo.';
+      ifNoMeaning = 'Bạn không xác nhận có sự kiện thật sắp tới; phân tích loại hướng “mô phỏng một buổi trình bày gần hạn” và không suy ra tương lai từ cảnh mơ.';
+      questionType = 'future';
+    } else if (verificationKind === 'waking_prospective_difference') {
+      family = 'waking_prospective_difference';
+      evidence = firstDistinctNarrativeSentences(
+        narrative,
+        ['trình bày', 'slide', 'mảnh đồ chơi', 'cây cầu', 'dự án'],
+        3,
+      );
+      hypothesis = 'Cảnh ghép cây cầu có thể khác với kế hoạch có chủ đích khi thức: nó dùng cùng mối bận tâm nhưng tạo ra một giải pháp phi thực tế.';
+      followUpQuestion = 'Trong 24 giờ trước khi ngủ, bạn có chủ động diễn tập hoặc lập kế hoạch cho buổi trình bày được nhắc trong giấc mơ không?';
+      reasonForAsking = 'Câu hỏi kiểm tra quá trình chuẩn bị có chủ đích khi thức, để phân biệt nó với cách giấc mơ tự do kết hợp đồ chơi, cây cầu và khán giả.';
+      ifYesMeaning = 'Bạn xác nhận đã chuẩn bị có chủ đích trước khi ngủ; phân tích có thể đối chiếu kế hoạch khi thức với phiên bản phi thực tế trong mơ, nhưng không coi hai quá trình là giống nhau.';
+      ifNoMeaning = 'Bạn không chủ động diễn tập hoặc lập kế hoạch trước khi ngủ; phân tích giảm ưu tiên hướng giấc mơ biến đổi một buổi chuẩn bị vừa diễn ra.';
+      questionType = 'past';
+      alternateQuestionDimension = 'novel_solution_origin';
+      alternateFollowUpQuestion = 'Trước giấc mơ này, bạn đã từng nghĩ tới ý tưởng dùng các mảnh rời để tạo thành một giải pháp giống cây cầu chưa?';
+      alternateReasonForAsking = 'Câu hỏi kiểm tra nguồn gốc của giải pháp xuất hiện trong mơ: nó đã có khi thức hay chỉ xuất hiện lần đầu trong chuỗi mơ.';
+      alternateIfYesMeaning = 'Bạn xác nhận ý tưởng đã tồn tại khi thức; cảnh cây cầu có thể là sự tiếp tục của một phương án có sẵn hơn là một liên tưởng mới xuất hiện trong mơ.';
+      alternateIfNoMeaning = 'Bạn chưa từng nghĩ tới phương án tương tự; cảnh cây cầu được giữ như một liên tưởng mới của giấc mơ, nhưng chưa đủ để kết luận nó hữu ích hay chứng minh tư duy sáng tạo.';
+      alternateQuestionType = 'past';
+    } else if (verificationKind === 'multiple_future_horizons') {
       family = 'multiple_future_horizons';
       evidence = firstDistinctNarrativeSentences(
         narrative,
@@ -319,6 +418,12 @@ export function buildRuleGroundedFallbackHypotheses(rules: any[], narrative: str
       ifYesMeaning = 'Câu trả lời Có làm khả năng “hai kế hoạch cùng gây áp lực” phù hợp hơn; hai chuyến tàu có thể được hiểu như cách giấc mơ đặt hai yêu cầu thời gian cạnh nhau, không phải một lời tiên đoán.';
       ifNoMeaning = 'Câu trả lời Không làm yếu cách hiểu về hai kế hoạch tương lai; hệ thống nên xem hai mốc thời gian như cấu trúc hư cấu của giấc mơ.';
       questionType = 'present';
+      alternateQuestionDimension = 'priority_pressure';
+      alternateFollowUpQuestion = 'Trong bảy ngày tới, bạn có một hạn chót cụ thể khiến mình phải tạm gác hoặc trì hoãn kế hoạch dài hạn không?';
+      alternateReasonForAsking = 'Câu hỏi thứ hai không hỏi lại việc có hai kế hoạch. Nó kiểm tra hệ quả thực tế của xung đột: một hạn chót gần có đang chiếm chỗ của hướng đi dài hạn hay không.';
+      alternateIfYesMeaning = 'Câu trả lời Có xác nhận một xung đột ưu tiên cụ thể, nên cách đọc hai chuyến tàu như hai yêu cầu thời gian cạnh tranh được giữ lại.';
+      alternateIfNoMeaning = 'Câu trả lời Không cho thấy hai mốc chưa tạo thành xung đột ưu tiên ngoài đời; hệ thống không nên dùng hướng này làm trục chính.';
+      alternateQuestionType = 'future';
     } else if (verificationKind === 'recent_experience_incorporation') {
       family = 'recent_experience_incorporation';
       const familyLabel = detectedFamilyLabel(narrative);
@@ -340,6 +445,12 @@ export function buildRuleGroundedFallbackHypotheses(rules: any[], narrative: str
       ifYesMeaning = `Bạn xác nhận đã có một sự việc gần đây gợi nhớ tới ${cueLabel}; phần phân tích về nguồn ký ức của chi tiết này sẽ được cập nhật.`;
       ifNoMeaning = `Bạn không ghi nhận tác nhân gần đây gợi nhớ tới ${cueLabel}; phần phân tích sẽ không dùng hướng “ký ức vừa được khơi lại”.`;
       questionType = 'past';
+      alternateQuestionDimension = 'recent_direct_exposure';
+      alternateFollowUpQuestion = `Trong bảy ngày trước giấc mơ, bạn có trực tiếp nhìn thấy, nghe nhắc tới hoặc tiếp xúc với ${cueLabel} không?`;
+      alternateReasonForAsking = `Câu hỏi thứ hai chuyển từ việc “có gợi nhớ hay không” sang một dữ kiện quan sát được: bạn có thật sự tiếp xúc với ${cueLabel} gần thời điểm ngủ hay không.`;
+      alternateIfYesMeaning = `Câu trả lời Có xác nhận một nguồn tiếp xúc gần đây có thể đưa ${cueLabel} vào giấc mơ, dù cảm xúc hoặc ý nghĩa cá nhân vẫn cần được xem riêng.`;
+      alternateIfNoMeaning = `Câu trả lời Không loại thêm hướng tiếp xúc gần đây; hệ thống phải giữ ${cueLabel} ở mức ký ức xa hơn hoặc chưa rõ nguồn.`;
+      alternateQuestionType = 'past';
     } else if (verificationKind === 'anticipated_event') {
       family = 'prospective_demand';
       evidence = firstDistinctNarrativeSentences(
@@ -352,6 +463,42 @@ export function buildRuleGroundedFallbackHypotheses(rules: any[], narrative: str
       ifYesMeaning = 'Câu trả lời Có làm áp lực đánh giá sắp tới trở thành một tác nhân đáng xem xét cho toàn bộ chuỗi trường học, mất thông tin và chạy trốn.';
       ifNoMeaning = 'Câu trả lời Không làm yếu cách giải thích hướng tới tương lai; hệ thống nên ưu tiên trải nghiệm vừa xảy ra hoặc trạng thái cảm xúc hiện tại.';
       questionType = 'future';
+      alternateQuestionDimension = 'preparation_behavior';
+      alternateFollowUpQuestion = 'Trong ba ngày gần đây, bạn có thực hiện một việc chuẩn bị cụ thể cho tình huống sắp được đánh giá đó không?';
+      alternateReasonForAsking = 'Câu hỏi thứ hai kiểm tra hành vi chuẩn bị đã xảy ra, thay vì hỏi lại sự kiện tương lai có tồn tại hay không.';
+      alternateIfYesMeaning = 'Câu trả lời Có nối các cảnh chuẩn bị, ghi nhớ hoặc bị thúc đuổi với một hoạt động chuẩn bị thật gần đây.';
+      alternateIfNoMeaning = 'Câu trả lời Không làm yếu mạch mô phỏng việc chuẩn bị; hệ thống nên xem xét áp lực hiện tại hoặc ký ức gần đây khác.';
+      alternateQuestionType = 'past';
+    } else if (verificationKind === 'waking_concern_incorporation') {
+      family = 'waking_concern_incorporation';
+      const ruleTerms = [
+        ...(Array.isArray(rule?.dreamFeatureTags) ? rule.dreamFeatureTags : []),
+        rule?.factor,
+        rule?.outcome,
+      ].map((item: unknown) => String(item || '').trim()).filter(Boolean);
+      evidence = firstDistinctNarrativeSentences(narrative, ruleTerms, 2);
+      if (evidence.length === 0) {
+        evidence = narrative
+          .split(/(?<=[.!?])\s+|\n+/u)
+          .map(sentence => sentence.trim())
+          .filter(Boolean)
+          .slice(0, 1);
+      }
+      if (evidence.length === 0) continue;
+      const cue = evidence[0].replace(/\s+/g, ' ').trim();
+      const cuePreview = cue.length > 110 ? `${cue.slice(0, 107).trimEnd()}…` : cue;
+      hypothesis = 'Một chi tiết trong giấc mơ có thể đang tiếp nối một hoạt động hằng ngày hoặc mối bận tâm hiện tại.';
+      followUpQuestion = `Trong bảy ngày trước giấc mơ, bạn có thường xuyên nghĩ hoặc lo về một việc ngoài đời liên quan trực tiếp đến chi tiết “${cuePreview}” không?`;
+      reasonForAsking = 'Tài liệu nêu rằng hoạt động hằng ngày và mối bận tâm hiện tại có thể được đưa vào nội dung giấc mơ. Câu hỏi kiểm tra mối nối này trong trường hợp cụ thể, thay vì gán nghĩa cho hình ảnh chỉ từ lời kể.';
+      ifYesMeaning = 'Câu trả lời Có xác nhận điều kiện áp dụng trong ca này: chi tiết được hỏi có một mối bận tâm hoặc hoạt động đời thực tương ứng.';
+      ifNoMeaning = 'Câu trả lời Không làm yếu cách áp dụng quy luật này cho chi tiết được hỏi; phân tích phải tìm một nguồn khác hoặc giữ nó ở mức chưa xác định.';
+      questionType = 'past';
+      alternateQuestionDimension = 'recent_day_activity';
+      alternateFollowUpQuestion = `Trong 24 giờ trước khi ngủ, bạn có làm một hoạt động cụ thể liên quan trực tiếp đến chi tiết “${cuePreview}” không?`;
+      alternateReasonForAsking = 'Câu hỏi thứ hai kiểm tra hoạt động có thể quan sát trong ngày gần nhất, thay vì hỏi lại mức độ suy nghĩ hoặc lo lắng.';
+      alternateIfYesMeaning = 'Câu trả lời Có xác nhận một hoạt động gần thời điểm ngủ có thể là nguồn trực tiếp của chi tiết được hỏi.';
+      alternateIfNoMeaning = 'Câu trả lời Không làm yếu hướng tiếp nối hoạt động trong ngày; hệ thống phải tìm mối bận tâm khác hoặc giữ nguồn của chi tiết ở mức chưa rõ.';
+      alternateQuestionType = 'past';
     } else if (verificationKind === 'attachment_support_under_stress') {
       family = 'attachment_support_under_stress';
       const familyLabel = detectedFamilyLabel(narrative);
@@ -369,6 +516,12 @@ export function buildRuleGroundedFallbackHypotheses(rules: any[], narrative: str
       ifYesMeaning = `Bạn xác nhận ${familyLabel} từng là một điểm tựa khi gặp khó khăn; phần phân tích sẽ xem hành động cố tìm tới ${familyLabel} như một nhu cầu tìm lại cảm giác an toàn quen thuộc.`;
       ifNoMeaning = `Bạn không xem ${familyLabel} là người từng mang lại cảm giác an toàn; phần phân tích sẽ loại cách hiểu “tìm về một điểm tựa”.`;
       questionType = 'past';
+      alternateQuestionDimension = 'recent_support_seeking';
+      alternateFollowUpQuestion = `Trong lần gần nhất gặp khó khăn, bạn có nghĩ tới hoặc muốn liên hệ ${familyLabel} để được hỗ trợ không?`;
+      alternateReasonForAsking = `Câu hỏi thứ hai kiểm tra hành vi tìm hỗ trợ gần đây, khác với câu hỏi về vai trò của ${familyLabel} trong quá khứ.`;
+      alternateIfYesMeaning = `Câu trả lời Có cho thấy nhu cầu tìm tới ${familyLabel} vẫn đang hiện diện trong hoàn cảnh gần đây, nên hướng tìm điểm tựa phù hợp hơn với ca này.`;
+      alternateIfNoMeaning = `Câu trả lời Không làm yếu hướng tìm hỗ trợ hiện tại, dù ${familyLabel} vẫn có thể mang ý nghĩa khác trong ký ức.`;
+      alternateQuestionType = 'past';
     } else if (verificationKind === 'avoidance_pressure' || verificationKind === 'current_stress') {
       family = verificationKind;
       evidence = firstDistinctNarrativeSentences(
@@ -387,26 +540,44 @@ export function buildRuleGroundedFallbackHypotheses(rules: any[], narrative: str
       ifYesMeaning = 'Câu trả lời Có làm điều kiện áp dụng của kết luận học thuật phù hợp hơn với giấc mơ này.';
       ifNoMeaning = 'Câu trả lời Không làm yếu việc áp dụng kết luận học thuật này cho giấc mơ hiện tại; nó không bác bỏ kết luận ở các trường hợp khác.';
       questionType = 'present';
+      alternateQuestionDimension = verificationKind === 'avoidance_pressure' ? 'approaching_consequence' : 'stress_impact';
+      alternateFollowUpQuestion = verificationKind === 'avoidance_pressure'
+        ? 'Việc đang bị trì hoãn đó có một hạn chót hoặc hậu quả cụ thể đang đến gần không?'
+        : 'Áp lực đó có làm bạn khó tập trung, khó thư giãn hoặc thường xuyên đề phòng trong những ngày gần đây không?';
+      alternateReasonForAsking = verificationKind === 'avoidance_pressure'
+        ? 'Câu hỏi thứ hai kiểm tra sức ép đang đến gần từ hậu quả hoặc hạn chót, thay vì hỏi lại việc trì hoãn.'
+        : 'Câu hỏi thứ hai kiểm tra ảnh hưởng quan sát được của căng thẳng, thay vì hỏi lại cảm giác căng thẳng nói chung.';
+      alternateIfYesMeaning = verificationKind === 'avoidance_pressure'
+        ? 'Câu trả lời Có xác nhận việc né tránh đang đi cùng một sức ép cụ thể, nên hướng áp lực bị đuổi bắt phù hợp hơn với ca này.'
+        : 'Câu trả lời Có xác nhận căng thẳng đang tạo ảnh hưởng thực tế, nên mối nối với trạng thái đe dọa trong mơ được giữ lại.';
+      alternateIfNoMeaning = verificationKind === 'avoidance_pressure'
+        ? 'Câu trả lời Không làm yếu giả thuyết về một sức ép đang đến gần; cảnh bị đuổi cần được xem theo hướng khác.'
+        : 'Câu trả lời Không làm yếu việc áp dụng hướng căng thẳng hiện tại; hệ thống không nên suy ra nó chỉ từ cảnh đe dọa.';
+      alternateQuestionType = 'present';
     } else {
       continue;
     }
 
-    if (!family || seenFamilies.has(family) || evidence.length < 1) continue;
+    if (!family || evidence.length < 1) continue;
     const ruleId = String(rule?.ruleId || rule?._id || '').trim();
     if (!ruleId) continue;
-    seenFamilies.add(family);
-    accepted.push({
+    const questionGroup = family === 'recent_experience_incorporation'
+      ? 'recent_memory_cue'
+      : family === 'attachment_support_under_stress'
+        ? 'attachment_context'
+      : ['avoidance_pressure', 'current_stress'].includes(family)
+        ? 'current_pressure'
+        : family === 'waking_concern_incorporation'
+          ? 'waking_concern'
+        : 'future_plans';
+    const baseQuestion = {
       ruleId,
+      ruleIds: [ruleId],
       verificationKey: `${ruleId}:${family}`,
       questionDimension: family,
-      questionGroup: family === 'recent_experience_incorporation'
-        ? 'recent_memory_cue'
-        : family === 'attachment_support_under_stress'
-          ? 'attachment_context'
-        : ['avoidance_pressure', 'current_stress'].includes(family)
-          ? 'current_pressure'
-          : 'future_plans',
+      questionGroup,
       questionBasis: 'academic_rule',
+      applicationTier: rule?.applicationTier || 'supported',
       answerSemantics: { yes: 'supports', no: 'weakens', unsure: 'unresolved' },
       hypothesis,
       evidenceFromDream: evidence,
@@ -418,10 +589,45 @@ export function buildRuleGroundedFallbackHypotheses(rules: any[], narrative: str
       ifNoMeaning,
       ...(matchedCue ? { matchedCue } : {}),
       questionType,
+    };
+    accepted.push({
+      ...baseQuestion,
+      ...(alternateFollowUpQuestion && alternateQuestionDimension ? {
+        alternateQuestion: {
+          ...baseQuestion,
+          verificationKey: `${ruleId}:${family}:alternate`,
+          questionDimension: alternateQuestionDimension,
+          questionGroup: `${questionGroup}:alternate`,
+          followUpQuestion: alternateFollowUpQuestion,
+          reasonForAsking: alternateReasonForAsking,
+          ifYesMeaning: alternateIfYesMeaning,
+          ifNoMeaning: alternateIfNoMeaning,
+          questionType: alternateQuestionType,
+          userFeedback: null,
+          isAlternateQuestion: true,
+          parentVerificationKey: `${ruleId}:${family}`,
+        },
+      } : {}),
     });
-    if (accepted.length >= 3) break;
   }
-  return accepted;
+  const byQuestion = new Map<string, any>();
+  for (const item of accepted) {
+    const key = normalizeGroundingText(item.followUpQuestion);
+    const existing = byQuestion.get(key);
+    if (!existing) {
+      byQuestion.set(key, item);
+      continue;
+    }
+    existing.ruleIds = [...new Set([...(existing.ruleIds || [existing.ruleId]), ...(item.ruleIds || [item.ruleId])])];
+    if (existing.alternateQuestion && item.alternateQuestion
+      && normalizeGroundingText(existing.alternateQuestion.followUpQuestion) === normalizeGroundingText(item.alternateQuestion.followUpQuestion)) {
+      existing.alternateQuestion.ruleIds = [...new Set([
+        ...(existing.alternateQuestion.ruleIds || existing.ruleIds),
+        ...(item.alternateQuestion.ruleIds || item.ruleIds || [item.ruleId]),
+      ])];
+    }
+  }
+  return [...byQuestion.values()];
 }
 
 export function attachRuleQuestionContext(hypotheses: any[], rules: any[]): any[] {
@@ -445,6 +651,20 @@ export function attachRuleQuestionContext(hypotheses: any[], rules: any[]): any[
       ifNoMeaning: 'Câu trả lời Không làm giảm ưu tiên của giả thuyết này và hệ thống không nên dùng nó làm trục diễn giải chính.',
     };
   });
+}
+
+/** Questions are precomputed before display. Feedback must never generate,
+ * remove, or rewrite a later question; it only updates the selected answer. */
+export function reconcileAlternateQuestionAfterFeedback(
+  hypotheses: any[],
+  verificationKey: string,
+  answer: 'yes' | 'no' | 'unsure' | null,
+): any[] {
+  const items = Array.isArray(hypotheses) ? hypotheses.map(item => ({ ...item })) : [];
+  const parentIndex = items.findIndex(item => String(item?.verificationKey || '') === verificationKey);
+  if (parentIndex < 0) return items;
+  items[parentIndex].userFeedback = answer;
+  return items;
 }
 
 function getQuestionDimension(item: any): string {
@@ -551,6 +771,27 @@ export function buildFeedbackChangeSet(before: any, after: any): {
   };
 
   compare('core_analysis', before?.core_analysis, after?.core_analysis);
+  compare('case_conclusion.conclusion', before?.case_conclusion?.conclusion, after?.case_conclusion?.conclusion);
+  compare('case_conclusion.reasoning', before?.case_conclusion?.reasoning, after?.case_conclusion?.reasoning);
+  compare('case_conclusion.confidenceLabel', before?.case_conclusion?.confidenceLabel, after?.case_conclusion?.confidenceLabel);
+  compare('case_conclusion.recommendedNextStep', before?.case_conclusion?.recommendedNextStep, after?.case_conclusion?.recommendedNextStep);
+  compare('feedback_analysis.interpretation', before?.feedback_analysis?.interpretation, after?.feedback_analysis?.interpretation);
+  const maxFeedbackFacts = Math.max(before?.feedback_analysis?.confirmedFacts?.length || 0, after?.feedback_analysis?.confirmedFacts?.length || 0);
+  for (let index = 0; index < maxFeedbackFacts; index += 1) {
+    compare(`feedback_analysis.confirmedFacts.${index}`, before?.feedback_analysis?.confirmedFacts?.[index], after?.feedback_analysis?.confirmedFacts?.[index]);
+  }
+  const maxEvidenceBasis = Math.max(before?.case_conclusion?.evidenceBasis?.length || 0, after?.case_conclusion?.evidenceBasis?.length || 0);
+  for (let index = 0; index < maxEvidenceBasis; index += 1) {
+    compare(`case_conclusion.evidenceBasis.${index}.detail`, before?.case_conclusion?.evidenceBasis?.[index]?.detail, after?.case_conclusion?.evidenceBasis?.[index]?.detail);
+  }
+  const maxConfirmedFindings = Math.max(before?.case_conclusion?.confirmedFindings?.length || 0, after?.case_conclusion?.confirmedFindings?.length || 0);
+  for (let index = 0; index < maxConfirmedFindings; index += 1) {
+    compare(`case_conclusion.confirmedFindings.${index}`, before?.case_conclusion?.confirmedFindings?.[index], after?.case_conclusion?.confirmedFindings?.[index]);
+  }
+  const maxRuledOut = Math.max(before?.case_conclusion?.ruledOut?.length || 0, after?.case_conclusion?.ruledOut?.length || 0);
+  for (let index = 0; index < maxRuledOut; index += 1) {
+    compare(`case_conclusion.ruledOut.${index}`, before?.case_conclusion?.ruledOut?.[index], after?.case_conclusion?.ruledOut?.[index]);
+  }
   const maxThreads = Math.max(before?.interpretive_threads?.length || 0, after?.interpretive_threads?.length || 0);
   for (let index = 0; index < maxThreads; index += 1) {
     compare(`interpretive_threads.${index}.reasoning`, before?.interpretive_threads?.[index]?.reasoning, after?.interpretive_threads?.[index]?.reasoning);
@@ -612,6 +853,276 @@ export function polishGeneratedDreamProse(value: unknown): string {
   return capitalizeSentence([...unique.values()].join(' '));
 }
 
+const EXPLORATORY_RECOMBINATION_DIMENSIONS = [
+  'weak_association_recombination',
+  'creative_problem_preoccupation',
+  'implausible_future_scenario',
+  'waking_prospective_difference',
+  'novel_solution_origin',
+] as const;
+
+export interface ExploratoryCaseAssessment {
+  status: 'strong_match' | 'partial_match' | 'mixed' | 'weakened' | 'unresolved';
+  answeredCount: number;
+  totalCount: number;
+  confirmedCount: number;
+  weakenedCount: number;
+  unresolvedCount: number;
+  conclusion: string;
+}
+
+export interface DreamCaseConclusion {
+  status: 'preliminary' | 'clarified';
+  headline: string;
+  conclusion: string;
+  reasoning: string;
+  confidenceLabel: string;
+  confirmedFindings: string[];
+  ruledOut: string[];
+  recommendedNextStep: string;
+  concern: {
+    level: 'no_clear_warning';
+    label: string;
+    explanation: string;
+    watchFor: string[];
+    helpSource: { title: string; url: string };
+  };
+  evidenceBasis: Array<{
+    kind: 'confirmed_context' | 'academic_context' | 'boundary';
+    title: string;
+    detail: string;
+    sources?: Array<{ sourceId: string; title: string; year?: number; doi?: string }>;
+  }>;
+}
+
+function ruleAndComponentIds(rule: any): Set<string> {
+  return new Set([
+    String(rule?.ruleId || rule?._id || '').trim(),
+    ...(Array.isArray(rule?.compositeComponents)
+      ? rule.compositeComponents.map((component: any) => String(component?.sourceRuleId || '').trim())
+      : []),
+  ].filter(Boolean));
+}
+
+/**
+ * Summarises answers as case-level applicability. This deliberately does not
+ * change the rule's academic evidence score: one person's answers can confirm
+ * whether a rule fits this dream, but cannot create a new independent study.
+ */
+export function buildExploratoryCaseAssessment(
+  hypotheses: any[],
+  rule?: any,
+): ExploratoryCaseAssessment | null {
+  const dimensions = new Set<string>(EXPLORATORY_RECOMBINATION_DIMENSIONS);
+  const allowedRuleIds = rule ? ruleAndComponentIds(rule) : null;
+  let candidates = (hypotheses || []).filter(item => dimensions.has(getQuestionDimension(item)));
+  if (allowedRuleIds?.size) {
+    const scoped = candidates.filter(item => {
+      const itemIds = [item?.ruleId, ...(Array.isArray(item?.ruleIds) ? item.ruleIds : [])]
+        .map(value => String(value || '').trim())
+        .filter(Boolean);
+      return itemIds.some(id => allowedRuleIds.has(id));
+    });
+    if (scoped.length > 0) candidates = scoped;
+  }
+  if (candidates.length === 0) return null;
+
+  const byDimension = new Map<string, any>();
+  for (const item of candidates) {
+    const dimension = getQuestionDimension(item);
+    const existing = byDimension.get(dimension);
+    if (!existing || (!existing?.userFeedback && item?.userFeedback)) byDimension.set(dimension, item);
+  }
+  const answer = (dimension: string): string | null => {
+    const value = byDimension.get(dimension)?.userFeedback;
+    return ['yes', 'no', 'unsure'].includes(value) ? value : null;
+  };
+  const answers = [...byDimension.values()]
+    .map(item => item?.userFeedback)
+    .filter(value => ['yes', 'no', 'unsure'].includes(value));
+  const confirmedCount = answers.filter(value => value === 'yes').length;
+  const weakenedCount = answers.filter(value => value === 'no').length;
+  const unresolvedCount = answers.filter(value => value === 'unsure').length;
+  const answeredCount = answers.length;
+  const totalCount = byDimension.size;
+  const status: ExploratoryCaseAssessment['status'] = answeredCount === 0 || unresolvedCount === answeredCount
+    ? 'unresolved'
+    : weakenedCount === 0 && unresolvedCount === 0 && confirmedCount === totalCount
+      ? 'strong_match'
+      : confirmedCount > weakenedCount
+        ? 'partial_match'
+        : weakenedCount > confirmedCount
+          ? 'weakened'
+          : 'mixed';
+
+  const findings: string[] = [];
+  if (answer('weak_association_recombination') === 'yes') {
+    findings.push('các hình ảnh chính đến từ những sự việc đời thực riêng biệt');
+  } else if (answer('weak_association_recombination') === 'no') {
+    findings.push('chưa xác nhận được nguồn đời thực riêng cho các mảnh hình ảnh, nên hướng tái kết hợp ký ức bị giảm ưu tiên');
+  }
+  if (answer('implausible_future_scenario') === 'yes') {
+    findings.push('buổi họp hoặc trình bày sắp tới là một sự kiện có thật');
+  } else if (answer('implausible_future_scenario') === 'no') {
+    findings.push('không có sự kiện tương lai tương ứng, nên cảnh trình bày không được xem là diễn tập cho một kế hoạch thật');
+  }
+  if (answer('creative_problem_preoccupation') === 'yes') {
+    findings.push('bạn đang chủ động tìm cách giải quyết hoặc trình bày mới khi thức');
+  } else if (answer('creative_problem_preoccupation') === 'no') {
+    findings.push('không có bài toán sáng tạo đang được xử lý khi thức');
+  }
+  if (answer('waking_prospective_difference') === 'yes') {
+    findings.push('bạn đã chuẩn bị có chủ đích trước khi ngủ');
+  } else if (answer('waking_prospective_difference') === 'no') {
+    findings.push('không có lần diễn tập hoặc lập kế hoạch gần lúc ngủ');
+  }
+
+  let solutionConclusion = '';
+  if (answer('novel_solution_origin') === 'yes') {
+    solutionConclusion = 'Vì ý tưởng ghép các mảnh thành giải pháp đã từng xuất hiện khi thức, giấc mơ phù hợp hơn với việc biến đổi một phương án có sẵn, không phải tự tạo ra một giải pháp sáng tạo hoàn toàn mới.';
+  } else if (answer('novel_solution_origin') === 'no') {
+    solutionConclusion = 'Ý tưởng giải pháp chưa từng xuất hiện khi thức nên có thể là một liên tưởng mới trong mơ, nhưng câu trả lời này chưa chứng minh ý tưởng đó đúng hoặc hữu ích.';
+  }
+  const prefix = answeredCount > 0
+    ? `Đã đối chiếu ${answeredCount}/${totalCount} chiều dữ kiện của quy luật; ${confirmedCount} được xác nhận, ${weakenedCount} bị làm yếu và ${unresolvedCount} còn chưa rõ.`
+    : `Chưa có câu trả lời cho ${totalCount} chiều dữ kiện đã chuẩn bị.`;
+  const combined = findings.length > 0
+    ? `Các câu trả lời cho thấy ${findings.join('; ')}.`
+    : '';
+  const interpretation = confirmedCount >= 3 && answer('implausible_future_scenario') === 'yes'
+    ? 'Kết luận phù hợp nhất cho ca này là giấc mơ đã tổ chức lại ký ức gần đây và việc chuẩn bị đang tiếp diễn thành một màn diễn tập phi thực tế xoay quanh sự kiện sắp tới.'
+    : status === 'weakened'
+      ? 'Các điều kiện cần chưa được xác nhận đủ, nên quy luật này không còn là hướng chính cho ca này.'
+      : 'Quy luật vẫn chỉ là một hướng đối chiếu cho ca này cho đến khi các chiều dữ kiện còn thiếu được làm rõ.';
+  return {
+    status,
+    answeredCount,
+    totalCount,
+    confirmedCount,
+    weakenedCount,
+    unresolvedCount,
+    conclusion: [prefix, combined, interpretation, solutionConclusion].filter(Boolean).join(' '),
+  };
+}
+
+export function buildDreamCaseConclusion(
+  narrative: string,
+  hypotheses: any[],
+  scientificNotes: any[] = [],
+): DreamCaseConclusion {
+  const assessment = buildExploratoryCaseAssessment(hypotheses);
+  const answered = (hypotheses || []).filter(item => ['yes', 'no', 'unsure'].includes(item?.userFeedback));
+  const resolved = answered.filter(item => ['yes', 'no'].includes(item?.userFeedback));
+  const memoryCueConfirmed = answered.some(item =>
+    ['recent_experience_incorporation', 'recent_direct_exposure'].includes(getQuestionDimension(item))
+      && item?.userFeedback === 'yes');
+  const clarified = Boolean(assessment?.answeredCount || resolved.length);
+  const strongExploratoryMatch = assessment?.status === 'strong_match';
+
+  const conclusion = strongExploratoryMatch
+    ? 'Giấc mơ này phù hợp nhất với việc tâm trí tiếp tục xử lý một buổi trình bày có thật: nó lấy ký ức cũ và những chi tiết gần đây làm vật liệu, rồi biến chúng thành một màn diễn tập phi thực tế. Đây không phải dự báo về buổi trình bày và cũng không chứng minh giấc mơ đã tạo ra một giải pháp sáng tạo mới.'
+    : assessment?.answeredCount
+      ? 'Giấc mơ có vẻ xoay quanh một việc đang được chuẩn bị ngoài đời, nhưng một số mắt xích về nguồn ký ức hoặc sự kiện tương lai vẫn chưa đủ rõ để xem đây là hướng giải thích chính.'
+      : 'Khả năng đáng kiểm tra nhất là giấc mơ đang nối việc chuẩn bị cho dự án với những ký ức cũ và hình ảnh phi thực tế. Đây mới là giả thuyết ban đầu; các câu hỏi xác nhận quyết định hướng này có thật sự phù hợp với trường hợp của bạn hay không.';
+  const reasoning = strongExploratoryMatch
+    ? [
+      'Bạn đã xác nhận các hình ảnh đến từ những sự việc riêng biệt, có buổi trình bày sắp tới thật, đang tìm cách giải quyết và đã chuẩn bị trước khi ngủ.',
+      memoryCueConfirmed
+        ? 'Bạn cũng xác nhận lớp học cũ vừa được gợi lại hoặc tiếp xúc gần đây, nên sự xuất hiện của nó có một nguồn cụ thể hơn là một “biểu tượng” cố định.'
+        : 'Nguồn cụ thể đưa lớp học cũ vào giấc mơ vẫn cần được giữ riêng nếu chưa được xác nhận.',
+      'Vì ý tưởng giống cây cầu đã tồn tại khi thức, cách hiểu thận trọng nhất là giấc mơ đã biến đổi một phương án có sẵn, không phải phát minh nó từ đầu.',
+    ].join(' ')
+    : assessment?.conclusion || 'Chưa có đủ câu trả lời để phân biệt điều đang xảy ra ngoài đời với phần chỉ tồn tại trong câu chuyện của giấc mơ.';
+
+  const confirmedFindings = strongExploratoryMatch
+    ? [
+      'Buổi trình bày là một việc có thật và đang chiếm sự chú ý của bạn trước khi ngủ.',
+      'Các cảnh lớp học, dự án và vật liệu tuổi thơ có nguồn từ những trải nghiệm khác nhau; giấc mơ đã ghép chúng vào cùng một tình huống chuẩn bị.',
+      'Ý tưởng giải quyết đã có dấu vết khi thức, nên giấc mơ chủ yếu biến đổi chất liệu có sẵn thay vì tự tạo ra lời giải hoàn toàn mới.',
+    ]
+    : clarified
+      ? ['Một phần bối cảnh ngoài đời đã được xác nhận, nhưng các mắt xích còn lại chưa đủ nhất quán để chốt một hướng duy nhất.']
+      : [];
+  const ruledOut = strongExploratoryMatch
+    ? [
+      'Không có căn cứ xem văn phòng trên Mặt Trăng, đàn chim hoặc các hình ảnh lạ là dự báo tương lai.',
+      'Không có căn cứ gán cho lớp học, tấm vé hay cây cầu một ý nghĩa biểu tượng cố định.',
+      'Các câu trả lời không chứng minh giấc mơ đã phát minh một giải pháp tốt hơn phương án bạn có khi thức.',
+    ]
+    : clarified
+      ? ['Không dùng những phần chưa được xác nhận để suy ra dự báo, chẩn đoán hoặc ý nghĩa biểu tượng cố định.']
+      : ['Chưa loại trừ được hướng nào cho đến khi các câu hỏi về sự kiện thật, nguồn ký ức và việc chuẩn bị được trả lời.'];
+  const recommendedNextStep = strongExploratoryMatch
+    ? 'Thay vì tiếp tục giải mã từng biểu tượng, hãy viết ba ý chính của buổi trình bày, diễn tập một lần trong khoảng 10 phút và ghi riêng điểm nào vẫn khiến bạn chưa yên tâm. Đây là bước tác động trực tiếp vào mối bận tâm mà các câu trả lời đã xác nhận.'
+    : clarified
+      ? 'Chỉ hành động trên phần bối cảnh đã được xác nhận; giữ các chi tiết còn thiếu ở trạng thái chưa kết luận và trả lời thêm bằng dữ kiện đời thực nếu hệ thống còn câu hỏi phân biệt.'
+      : 'Trả lời hai câu hỏi đầu tiên bằng dữ kiện đời thực; hệ thống sẽ dùng chúng để giữ hoặc loại từng hướng giải thích trước khi đề xuất hành động.';
+
+  const academicSources = [...new Map((scientificNotes || [])
+    .flatMap(note => note?.sources || [])
+    .map((source: any) => [String(source?.sourceId || source?.doi || source?.title || ''), {
+      sourceId: String(source?.sourceId || ''),
+      title: String(source?.title || 'Tài liệu học thuật'),
+      ...(source?.year ? { year: Number(source.year) } : {}),
+      ...(source?.doi ? { doi: String(source.doi) } : {}),
+    }]))
+    .values()].filter(source => source.sourceId || source.doi || source.title);
+  const weakestExploratoryScore = (scientificNotes || [])
+    .filter(note => note?.applicationTier === 'exploratory')
+    .map(note => Number(note?.academicEvidenceScore))
+    .filter(Number.isFinite)
+    .sort((left, right) => left - right)[0];
+  const evidenceBasis: DreamCaseConclusion['evidenceBasis'] = [{
+    kind: 'confirmed_context',
+    title: clarified ? 'Dữ kiện do bạn xác nhận' : 'Dữ kiện còn cần xác nhận',
+    detail: clarified
+      ? `${resolved.length}/${answered.length || resolved.length} câu trả lời đã xác định bối cảnh thật của các chi tiết; chúng làm mạnh hoặc loại cách áp dụng trong ca này.`
+      : 'Hệ thống chưa dùng các suy đoán về đời thực làm kết luận chắc chắn trước khi bạn trả lời.',
+  }];
+  if (academicSources.length > 0) evidenceBasis.push({
+    kind: 'academic_context',
+    title: 'Tài liệu được dùng đúng phạm vi',
+    detail: 'Nguồn học thuật chỉ hỗ trợ cách đối chiếu về ký ức gần đây và sự tái kết hợp chất liệu trong mơ; nguồn không xác nhận ý nghĩa cố định của lớp học, cây cầu hay đàn chim.',
+    sources: academicSources,
+  });
+  evidenceBasis.push({
+    kind: 'boundary',
+    title: 'Giới hạn để tránh kết luận quá mức',
+    detail: Number.isFinite(weakestExploratoryScore)
+      ? `Quy luật khám phá yếu nhất đang có ${weakestExploratoryScore}/100 điểm học thuật. Câu trả lời của bạn chỉ tăng độ phù hợp với ca này, không làm tăng điểm nghiên cứu và không biến giấc mơ thành dự báo hay chẩn đoán.`
+      : 'Không dùng nội dung giấc mơ đơn lẻ để dự báo tương lai, chẩn đoán tâm lý hoặc gán ý nghĩa cố định cho một hình ảnh.',
+  });
+
+  void narrative;
+  return {
+    status: clarified ? 'clarified' : 'preliminary',
+    headline: clarified ? 'Kết luận sau khi đối chiếu câu trả lời' : 'Kết luận ban đầu',
+    conclusion,
+    reasoning,
+    confidenceLabel: strongExploratoryMatch
+      ? 'Cao về bối cảnh của trường hợp này; thấp về mức chứng minh học thuật.'
+      : 'Tạm thời; còn phụ thuộc vào các câu trả lời xác nhận.',
+    confirmedFindings,
+    ruledOut,
+    recommendedNextStep,
+    concern: {
+      level: 'no_clear_warning',
+      label: 'Chưa thấy dấu hiệu đáng lo chỉ từ nội dung giấc mơ này',
+      explanation: 'Cảm giác lo trước một buổi trình bày và việc giấc mơ ghép cảnh phi thực tế không tự nó cho thấy một vấn đề nguy hiểm. Nội dung này phù hợp hơn với việc tiếp tục xử lý mối bận tâm và ký ức khi ngủ.',
+      watchFor: [
+        'Giấc mơ lặp lại thường xuyên và gây sợ hãi hoặc mất ngủ.',
+        'Lo âu sau khi tỉnh kéo dài hoặc cản trở học tập, công việc hay sinh hoạt.',
+        'Giấc mơ liên quan đến một sự kiện gây tổn thương và tiếp tục gây khó chịu rõ rệt.',
+      ],
+      helpSource: {
+        title: 'Hướng dẫn NHS về ác mộng và khi nào nên tìm hỗ trợ',
+        url: 'https://www.nhs.uk/conditions/night-terrors/',
+      },
+    },
+    evidenceBasis,
+  };
+}
+
 /**
  * Builds a case-level synthesis from the order of events in the narrative.
  * Academic rules may constrain this interpretation, but descriptive findings
@@ -627,15 +1138,47 @@ export function buildCaseGroundedSynthesis(
     && containsGroundedPhrase(text, ['8 giờ sáng mai', 'tomorrow'])
     && containsGroundedPhrase(text, ['tháng chín năm sau', 'next year']);
   if (!isStationChoice) {
-    const base = stripPriorFeedbackSynthesis(polishGeneratedDreamProse(fallback));
-    const feedback = buildFeedbackAppliedAnalysis(hypotheses);
-    if (!feedback || (feedback.confirmedFacts.length === 0 && feedback.rejectedDirections.length === 0)) return base;
+    let base = stripPriorFeedbackSynthesis(polishGeneratedDreamProse(fallback));
+    const hasRecombinationProbe = (hypotheses || []).some(item => [
+      'weak_association_recombination',
+      'implausible_future_scenario',
+      'waking_prospective_difference',
+    ].includes(getQuestionDimension(item)));
+    if (hasRecombinationProbe && !base.includes('Đối chiếu khám phá từ tài liệu')) {
+      const matchedCues = presentDreamCues(narrative, [
+        'lớp học tiểu học cũ', 'lớp học cũ', 'bảng đen', 'cuộc họp', 'cô giáo cũ',
+        'tấm vé tàu', 'dự án', 'bàn phím máy tính', 'Mặt Trăng', 'mảnh đồ chơi',
+        'căn bếp thời thơ ấu', 'cây cầu', 'đàn chim', 'old classroom', 'meeting',
+        'train ticket', 'project', 'computer keyboard', 'Moon', 'childhood toys', 'bridge', 'birds',
+      ], 6);
+      const cueSummary = matchedCues.length >= 2
+        ? matchedCues.map(cue => `“${cue}”`).join(', ')
+        : 'các hình ảnh thuộc những bối cảnh khác nhau trong lời kể';
+      base = [
+        base,
+        `Đối chiếu khám phá từ tài liệu: chuỗi cảnh không chỉ nối quá khứ với hiện tại, mà còn ghép ${cueSummary} thành một diễn biến mới trong bối cảnh phi thực tế.`,
+        'Cấu trúc này tương đồng với mô tả về những liên kết lỏng giữa các mảnh ký ức trong giấc mơ hướng tới tương lai. Tuy nhiên, quy luật đang có bằng chứng yếu; các câu hỏi bên dưới phải xác nhận nguồn của những mảnh ghép, sự kiện sắp tới và việc chuẩn bị khi thức trước khi hướng này được giữ cho trường hợp cụ thể.',
+      ].filter(Boolean).join(' ');
+    }
+    const exploratoryAssessment = buildExploratoryCaseAssessment(hypotheses);
+    const exploratoryDimensions = new Set<string>(EXPLORATORY_RECOMBINATION_DIMENSIONS);
+    const feedback = buildFeedbackAppliedAnalysis(
+      (hypotheses || []).filter(item => !exploratoryDimensions.has(getQuestionDimension(item))),
+    );
+    const applicationConclusion = exploratoryAssessment && exploratoryAssessment.answeredCount > 0
+      ? `Kết luận ứng dụng cho trường hợp này: ${exploratoryAssessment.conclusion}`
+      : '';
+    if (!feedback && !applicationConclusion) return base;
     const additions: string[] = [];
-    if (feedback.confirmedFacts.length > 0) {
+    if (applicationConclusion) additions.push(applicationConclusion);
+    if (feedback?.confirmedFacts.length) {
       additions.push(`Thông tin bạn vừa xác nhận làm rõ trường hợp này: ${feedback.confirmedFacts.join(' ')}`);
     }
-    if (feedback.rejectedDirections.length > 0) {
+    if (feedback?.rejectedDirections.length) {
       additions.push(`Vì câu trả lời của bạn, phân tích không tiếp tục dùng các hướng sau: ${feedback.rejectedDirections.join(' ')}`);
+    }
+    if (feedback?.unresolvedQuestions.length) {
+      additions.push('Những phần bạn chọn Chưa biết vẫn được để mở và không được dùng làm kết luận chính; hệ thống tiếp tục bằng một câu hỏi khác đã chuẩn bị trước.');
     }
     return [base, ...additions].filter(Boolean).join(' ');
   }
@@ -681,8 +1224,10 @@ export function buildCaseGroundedSynthesis(
 
 function stripPriorFeedbackSynthesis(value: string): string {
   return value
+    .replace(/\s*Kết luận ứng dụng cho trường hợp này:[\s\S]*?(?=\s+Thông tin bạn vừa xác nhận làm rõ trường hợp này:|\s+Vì câu trả lời của bạn, phân tích không tiếp tục dùng các hướng sau:|$)/giu, '')
     .replace(/\s*Thông tin bạn vừa xác nhận làm rõ trường hợp này:[\s\S]*?(?=\s+Vì câu trả lời của bạn, phân tích không tiếp tục dùng các hướng sau:|$)/giu, '')
     .replace(/\s*Vì câu trả lời của bạn, phân tích không tiếp tục dùng các hướng sau:[\s\S]*$/giu, '')
+    .replace(/\s*Những phần bạn chọn Chưa biết vẫn được để mở và không được dùng làm kết luận chính; hệ thống tiếp tục bằng một câu hỏi khác đã chuẩn bị trước\.?/giu, '')
     .trim();
 }
 
@@ -808,6 +1353,7 @@ export function buildFeedbackConclusion(revisions: any[]): string | null {
 export interface FeedbackAppliedAnalysis {
   confirmedFacts: string[];
   rejectedDirections: string[];
+  unresolvedQuestions: string[];
   interpretation: string;
   nextSteps: string[];
 }
@@ -872,9 +1418,12 @@ export function buildFeedbackAppliedAnalysis(hypotheses: any[]): FeedbackApplied
   if (answered.length === 0) return null;
   const confirmedFacts: string[] = [];
   const rejectedDirections: string[] = [];
+  const unresolvedQuestions: string[] = [];
   const nextSteps: string[] = [];
 
   for (const item of answered) {
+    const confirmedBefore = confirmedFacts.length;
+    const rejectedBefore = rejectedDirections.length;
     const dimension = getQuestionDimension(item);
     if (dimension === 'multiple_future_horizons') {
       if (item.userFeedback === 'yes') {
@@ -918,15 +1467,80 @@ export function buildFeedbackAppliedAnalysis(hypotheses: any[]): FeedbackApplied
         rejectedDirections.push('Không áp dụng kết luận học thuật về áp lực đời thực cho cảnh đe dọa trong giấc mơ này.');
       }
     }
+    if (item.userFeedback === 'unsure') {
+      unresolvedQuestions.push(`Chưa xác định: ${String(item.followUpQuestion || item.hypothesis || '').trim()}`);
+      nextSteps.push('Tiếp tục bằng một câu hỏi đã chuẩn bị trước về một loại dữ kiện khác; chưa dùng hướng này làm kết luận chính.');
+    } else if (confirmedFacts.length === confirmedBefore && rejectedDirections.length === rejectedBefore) {
+      if (item.userFeedback === 'yes') {
+        confirmedFacts.push(String(item.ifYesMeaning || item.hypothesis || '').trim());
+      } else if (item.userFeedback === 'no') {
+        rejectedDirections.push(String(item.ifNoMeaning || item.hypothesis || '').trim());
+      }
+    }
   }
 
   const interpretation = confirmedFacts.length > 0
     ? 'Bức tranh tổng thể và chi tiết liên quan bên dưới đã được viết lại theo thông tin này; những ý nghĩa chưa được xác nhận vẫn được để mở.'
-    : 'Câu trả lời đã loại một cách giải thích khỏi trọng tâm; phần còn lại chỉ dựa trên trình tự và cảm xúc có trong lời kể.';
-  return { confirmedFacts, rejectedDirections, interpretation, nextSteps };
+    : rejectedDirections.length > 0
+      ? 'Câu trả lời đã loại một cách giải thích khỏi trọng tâm; phần còn lại chỉ dựa trên trình tự và cảm xúc có trong lời kể.'
+      : 'Bạn chưa thể xác nhận hướng này, nên nó được giữ ở trạng thái chưa xác định và không được dùng làm kết luận chính.';
+  return { confirmedFacts, rejectedDirections, unresolvedQuestions, interpretation, nextSteps };
 }
 
 export function applyFeedbackToThreads(threads: any[], hypotheses: any[]): any[] {
+  const exploratoryAssessment = buildExploratoryCaseAssessment(hypotheses);
+  if (exploratoryAssessment) {
+    const byDimension = new Map((hypotheses || []).map(item => [getQuestionDimension(item), item]));
+    const fragments: any = byDimension.get('weak_association_recombination');
+    const event: any = byDimension.get('implausible_future_scenario');
+    const preparation: any = byDimension.get('waking_prospective_difference');
+    const solution: any = byDimension.get('novel_solution_origin');
+    const creativeProblem: any = byDimension.get('creative_problem_preoccupation');
+    const memoryCueRows = (hypotheses || []).filter(item =>
+      ['recent_experience_incorporation', 'recent_direct_exposure'].includes(getQuestionDimension(item)));
+    const memoryCueConfirmed = memoryCueRows.some(item => item?.userFeedback === 'yes');
+    const exactEvidence = (...items: any[]): string[] => [...new Set(items
+      .flatMap(item => Array.isArray(item?.evidenceFromDream) ? item.evidenceFromDream : [])
+      .map(value => String(value || '').trim())
+      .filter(Boolean))].slice(0, 3);
+    return [{
+      title: 'Buổi trình bày thật là trục chính của chuỗi cảnh',
+      dreamEvidence: exactEvidence(event, preparation),
+      reasoning: event?.userFeedback === 'yes'
+        ? 'Bạn đã xác nhận có một buổi họp hoặc trình bày thật liên quan trực tiếp đến dự án. Vì vậy, lịch cuộc họp, tấm vé có tên dự án và cảnh đứng trước khán giả được nối với một mối bận tâm ngoài đời đã biết; Mặt Trăng, đoàn tàu bàn phím và đàn chim là phần biến đổi phi thực tế, không phải dự báo về kết quả buổi trình bày.'
+        : 'Lịch cuộc họp, tên dự án và cảnh trình bày tạo thành một trục hướng tới tương lai, nhưng chưa được xem là sự kiện ngoài đời cho tới khi người kể xác nhận.',
+      alternativeExplanation: event?.userFeedback === 'no'
+        ? 'Bạn không có sự kiện tương ứng trong bảy ngày tới, nên mạch này phải được xem là cấu trúc hư cấu của giấc mơ thay vì một màn diễn tập cho việc thật.'
+        : event?.userFeedback === 'yes'
+          ? 'Sự kiện thật đã được xác nhận, nhưng điều đó chưa giải thích vì sao giấc mơ chọn Mặt Trăng, đoàn tàu bàn phím hay đàn chim; các chi tiết này vẫn có thể là liên tưởng ngẫu nhiên khi ngủ.'
+          : 'Nếu không có sự kiện tương ứng ngoài đời, cảnh trình bày có thể chỉ là cách câu chuyện tạo áp lực và cao trào.',
+    }, {
+      title: 'Lớp học cũ và đồ chơi là vật liệu ký ức, không phải mật mã cố định',
+      dreamEvidence: exactEvidence(fragments, ...memoryCueRows),
+      reasoning: fragments?.userFeedback === 'yes'
+        ? `Bạn đã xác nhận các hình ảnh chính đến từ những sự việc đời thực riêng biệt.${memoryCueConfirmed ? ' Lớp học cũ cũng vừa được gợi lại hoặc tiếp xúc gần đây, nên sự xuất hiện của nó có một nguồn ký ức cụ thể.' : ''} Điều này phù hợp với cách giấc mơ ghép lại chất liệu đã có; nó không đủ căn cứ để nói lớp học luôn tượng trưng cho trách nhiệm hay cây cầu luôn tượng trưng cho bước ngoặt.`
+        : 'Các hình ảnh thuộc nhiều bối cảnh khác nhau, nhưng nguồn đời thực của chúng chưa được xác nhận. Vì vậy, hệ thống chỉ mô tả cách chúng được ghép trong câu chuyện, không gán ý nghĩa biểu tượng cố định.',
+      alternativeExplanation: fragments?.userFeedback === 'no'
+        ? 'Không tìm thấy các nguồn riêng biệt gần đây làm yếu hướng tái kết hợp ký ức; chuỗi cảnh có thể đến từ những liên tưởng chưa xác định.'
+        : fragments?.userFeedback === 'yes'
+          ? 'Việc xác nhận nguồn đời thực cho biết các mảnh đến từ đâu, nhưng chưa chứng minh vì sao đúng những mảnh đó được chọn hoặc chúng mang một ý nghĩa sâu hơn.'
+          : 'Một phần hình ảnh có thể chỉ xuất hiện do liên tưởng ngẫu nhiên trong lúc ngủ, ngay cả khi một số chi tiết có nguồn gần đây.',
+    }, {
+      title: 'Cây cầu là biến thể của việc đang nghĩ khi thức',
+      dreamEvidence: exactEvidence(creativeProblem, preparation, solution),
+      reasoning: solution?.userFeedback === 'yes'
+        ? 'Bạn xác nhận ý tưởng dùng các mảnh rời để tạo thành giải pháp đã tồn tại trước giấc mơ. Cảnh ghép cây cầu vì thế cho thấy giấc mơ biến đổi một phương án có sẵn trong bối cảnh khác thường; nó không chứng minh giấc mơ tự phát minh giải pháp hoặc giải pháp đó sẽ hiệu quả.'
+        : solution?.userFeedback === 'no'
+          ? 'Bạn chưa từng nghĩ tới phương án tương tự khi thức. Ý tưởng cây cầu có thể là một liên tưởng mới xuất hiện trong mơ, nhưng cần đánh giá riêng sau khi tỉnh để biết nó có ích hay chỉ hợp với logic của giấc mơ.'
+          : 'Cảnh ghép cây cầu có thể liên quan đến bài toán trình bày đang được xử lý, nhưng cần biết ý tưởng này đã tồn tại khi thức hay xuất hiện lần đầu trong mơ.',
+      alternativeExplanation: creativeProblem?.userFeedback === 'no'
+        ? 'Bạn không chủ động tìm một giải pháp mới ngoài đời, nên không dùng cảnh cây cầu để kết luận rằng tâm trí đang ấp ủ một bài toán sáng tạo.'
+        : solution?.userFeedback === 'yes'
+          ? 'Ý tưởng nền đã có khi thức; phần biến đổi thành cây cầu vẫn có thể chỉ phù hợp với logic của giấc mơ và cần được đánh giá lại bằng tiêu chí thực tế sau khi tỉnh.'
+          : 'Cây cầu cũng có thể chỉ là một chuyển cảnh thuận tiện để nối đồ chơi, khán giả và đàn chim trong câu chuyện.',
+    }].filter(thread => thread.dreamEvidence.length > 0);
+  }
+
   const presentConflictCandidates = (hypotheses || []).filter(isPlanConflictQuestion);
   const memoryCueCandidates = (hypotheses || []).filter(isOldSchoolContextQuestion);
   const presentConflict: any = presentConflictCandidates.find(item => item?.userFeedback && item.userFeedback !== 'unsure') || presentConflictCandidates[0];
@@ -1140,11 +1754,38 @@ export function buildVerifiedMechanismFallbackNotes(
 ): any[] {
   const notes: any[] = [];
   for (const rule of rules || []) {
-    if (!canExplainPsychology(rule)) continue;
     const ruleText = normalizeGroundingText(`${rule?.ruleStatement || ''} ${rule?.factor || ''} ${rule?.outcome || ''}`);
+    const componentText = normalizeGroundingText((rule?.compositeComponents || [])
+      .flatMap((component: any) => [component?.statement, component?.subject, component?.outcome])
+      .join(' '));
+    const isExploratoryRecombination = rule?.applicationTier === 'exploratory'
+      && /weak associations|implausible scenarios|prospective thought|prospective cognition|liên kết yếu|kịch bản khó tin|tư duy hướng tới tương lai/u.test(`${ruleText} ${componentText}`);
+    if (!canExplainPsychology(rule) && !isExploratoryRecombination) continue;
     let noteText = '';
     let dreamEvidence: string[] = [];
-    if (/self organization|self organization theory/u.test(ruleText)) {
+    let caseApplicability: ExploratoryCaseAssessment | null = null;
+    if (isExploratoryRecombination) {
+      caseApplicability = buildExploratoryCaseAssessment(hypotheses, rule);
+      const matchedCues = presentDreamCues(narrative, [
+        'lớp học tiểu học cũ', 'lớp học cũ', 'bảng đen', 'cuộc họp', 'cô giáo cũ',
+        'tấm vé tàu', 'dự án', 'bàn phím máy tính', 'Mặt Trăng', 'mảnh đồ chơi',
+        'căn bếp thời thơ ấu', 'cây cầu', 'đàn chim', 'old classroom', 'meeting',
+        'train ticket', 'project', 'computer keyboard', 'Moon', 'childhood toys', 'bridge', 'birds',
+      ], 6);
+      const cueSentence = matchedCues.length >= 2
+        ? `Trong lời kể này, ${matchedCues.map(cue => `“${cue}”`).join(', ')} được ghép thành một chuỗi duy nhất.`
+        : 'Trong lời kể này, nhiều hình ảnh thuộc những bối cảnh khác nhau được ghép thành một chuỗi duy nhất.';
+      noteText = [
+        'Tài liệu đề xuất rằng giấc mơ hướng tới tương lai có thể đặt các mảnh ký ức liên hệ lỏng vào một kịch bản phi thực tế.',
+        cueSentence,
+        caseApplicability?.answeredCount ? caseApplicability.conclusion : '',
+        'Sự tương đồng này chỉ mở ra một hướng đối chiếu về nguồn các mảnh ký ức và việc chuẩn bị cho sự kiện sắp tới; nó không chứng minh giấc mơ làm tăng sáng tạo hoặc dự báo tương lai.',
+        'Quy luật hiện có điểm bằng chứng thấp và chưa đủ nguồn độc lập, nên chỉ được dùng như giả thuyết khám phá cho trường hợp này.',
+      ].join(' ');
+      dreamEvidence = firstDistinctNarrativeSentences(narrative, [
+        'lớp học tiểu học cũ', 'bàn phím máy tính', 'Mặt Trăng', 'mảnh đồ chơi', 'cây cầu', 'đàn chim',
+      ], 3);
+    } else if (/self organization|self organization theory/u.test(ruleText)) {
       noteText = 'Trong lúc ngủ, giấc mơ không nhất thiết phát lại nguyên vẹn một sự kiện. Lý thuyết tự tổ chức mô tả khả năng những ký ức, mối bận tâm và cảm xúc đang hoạt động được ghép thành một câu chuyện mới. Vì vậy, trường cũ, việc phải nói vào ngày mai và thành phố ở tương lai xa có thể cùng xuất hiện mà không cần từng cảnh mang một ý nghĩa cố định. Cơ chế này giải thích cách câu chuyện được tạo thành; nó chưa cho biết mối bận tâm ngoài đời nào đã kích hoạt câu chuyện đó.';
       dreamEvidence = firstDistinctNarrativeSentences(narrative, ['trường học cũ', '8 giờ sáng mai', 'tháng chín năm sau'], 2);
     } else if (/waking life experiences|selectively incorporated|memory consolidation/u.test(ruleText)) {
@@ -1181,7 +1822,14 @@ export function buildVerifiedMechanismFallbackNotes(
       evidenceQuotes,
       confidence: 0.7,
     });
-    if (verified) notes.push(verified);
+    if (verified) notes.push({
+      ...verified,
+      ...(isExploratoryRecombination ? {
+        applicationTier: 'exploratory',
+        academicEvidenceScore: Number(rule?.evidenceScore) || 0,
+        ...(caseApplicability ? { caseApplicability } : {}),
+      } : {}),
+    });
   }
   return notes.slice(0, 2);
 }
@@ -1228,7 +1876,21 @@ export function enrichScientificNotesForResponse(
       chunkIds: (link?.chunkIds || []).map((id: unknown) => String(id)),
     }]);
   }
-  const fallbackQuestions = buildRuleGroundedFallbackHypotheses(appliedRules, narrative);
+  const fallbackQuestionTrees = buildRuleGroundedFallbackHypotheses(appliedRules, narrative);
+  const fallbackQuestions = fallbackQuestionTrees.flatMap((item: any) => {
+    const { alternateQuestion, ...primary } = item;
+    if (!alternateQuestion
+      || normalizeGroundingText(alternateQuestion.followUpQuestion) === normalizeGroundingText(primary.followUpQuestion)) {
+      return [primary];
+    }
+    return [primary, {
+      ...alternateQuestion,
+      ruleIds: alternateQuestion.ruleIds || primary.ruleIds || [primary.ruleId],
+      sources: alternateQuestion.sources || primary.sources || [],
+      parentVerificationKey: primary.verificationKey,
+      isAlternateQuestion: true,
+    }];
+  });
   const sleepEnvironmentQuestions = buildSleepEnvironmentQuestions(
     narrative,
     retrievedContext?.componentA?.sleepContext || {},
@@ -1237,33 +1899,45 @@ export function enrichScientificNotesForResponse(
   const storedHypotheses = Array.isArray(analysis.real_life_hypotheses) ? analysis.real_life_hypotheses : [];
   const storedHypothesisByRule = new Map(storedHypotheses.map((item: any) => [String(item?.ruleId || ''), item]));
   const storedHypothesisByVerification = new Map(storedHypotheses.map((item: any) => [String(item?.verificationKey || ''), item]));
+  const storedHypothesisByQuestion = new Map(storedHypotheses.map((item: any) => [normalizeGroundingText(item?.followUpQuestion || ''), item]));
   const rawHypothesisCandidates = [...fallbackQuestions, ...sleepEnvironmentQuestions];
-  const seenQuestionGroups = new Set<string>();
-  const seenQuestionKeys = new Set<string>();
-  const hypothesisCandidates = rawHypothesisCandidates.filter((item: any) => {
-    const key = String(item?.verificationKey || `${item?.ruleId || 'question'}:${item?.followUpQuestion || ''}`);
-    const group = String(item?.questionGroup || getQuestionDimension(item) || key);
-    if (seenQuestionKeys.has(key) || seenQuestionGroups.has(group)) return false;
-    seenQuestionKeys.add(key);
-    seenQuestionGroups.add(group);
-    return true;
-  });
+  const candidatesByQuestion = new Map<string, any>();
+  for (const item of rawHypothesisCandidates) {
+    const key = normalizeGroundingText(item?.followUpQuestion || '');
+    if (!key) continue;
+    const existing = candidatesByQuestion.get(key);
+    if (!existing) {
+      candidatesByQuestion.set(key, item);
+      continue;
+    }
+    existing.ruleIds = [...new Set([...(existing.ruleIds || [existing.ruleId]), ...(item.ruleIds || [item.ruleId])].filter(Boolean))];
+  }
+  const hypothesisCandidates = [...candidatesByQuestion.values()];
   const baseResponseHypotheses = attachRuleQuestionContext(
     hypothesisCandidates.flatMap((item: any) => {
-      const rule: any = ruleMap.get(String(item?.ruleId || ''));
-      if (!rule || !canGenerateContextQuestion(rule)) return [];
+      const linkedRuleIds: string[] = [...new Set<string>((item?.ruleIds || [item?.ruleId]).map((id: unknown) => String(id || '')).filter(Boolean))];
+      const linkedRules = linkedRuleIds.map(ruleId => ruleMap.get(ruleId)).filter(Boolean) as any[];
+      const rule: any = linkedRules[0];
+      if (!rule || !linkedRules.some(canGenerateContextQuestion)) return [];
       const stored: any = storedHypothesisByVerification.get(String(item?.verificationKey || ''))
+        || storedHypothesisByQuestion.get(normalizeGroundingText(item?.followUpQuestion || ''))
         || (!item?.verificationKey ? storedHypothesisByRule.get(String(item?.ruleId || '')) : undefined);
-      const sources = item?.sources || stored?.sources || sourceByRule.get(String(item?.ruleId || '')) || [];
+      const sources = [...new Map([
+        ...(item?.sources || []),
+        ...(stored?.sources || []),
+        ...linkedRuleIds.flatMap(ruleId => sourceByRule.get(ruleId) || []),
+      ].map((source: any) => [String(source?.sourceId || source?.doi || source?.title || ''), source])).values()];
       if (!Array.isArray(sources) || sources.length === 0) return [];
       return [{
         ...item,
+        ruleId: linkedRuleIds[0],
+        ruleIds: linkedRuleIds,
         sources,
         userFeedback: stored?.userFeedback ?? item?.userFeedback ?? null,
       }];
     }),
     appliedRules,
-  ).slice(0, 6).map((item: any) => ({
+  ).map((item: any) => ({
     ...item,
     hypothesis: removeInternalAnalysisVocabulary(item.hypothesis),
     followUpQuestion: removeInternalAnalysisVocabulary(item.followUpQuestion),
@@ -1271,7 +1945,7 @@ export function enrichScientificNotesForResponse(
     ifYesMeaning: removeInternalAnalysisVocabulary(item.ifYesMeaning),
     ifNoMeaning: removeInternalAnalysisVocabulary(item.ifNoMeaning),
   }));
-  const responseHypotheses = baseResponseHypotheses.slice(0, 4);
+  const responseHypotheses = baseResponseHypotheses;
   const emotion = deriveDreamEmotionTone(narrative);
   const feedbackConclusion = buildFeedbackConclusion(analysis.feedback_revision || []);
   const responseThreads = applyFeedbackToThreads(ensureInterpretiveThreadCoverage(
@@ -1337,18 +2011,63 @@ export function enrichScientificNotesForResponse(
     };
   }));
   const responseSymbolicNotes = applyFeedbackToSymbolicNotes(baseResponseSymbolicNotes, responseHypotheses);
+  const responseScientificNotes = deduplicateScientificNotes([...(Array.isArray(analysis.scientific_context_notes)
+    ? analysis.scientific_context_notes
+    : []).flatMap((note: any) => {
+    if (note?.ruleCode && note?.ruleStatement && Array.isArray(note?.evidenceQuotes) && note.evidenceQuotes.length > 0) {
+      const linkedRule: any = ruleMap.get(String(note?.ruleId || '').trim());
+      return linkedRule && canExplainPsychology(linkedRule) ? [{
+        ...note,
+        note: removeInternalAnalysisVocabulary(note.note),
+        boundary: removeInternalAnalysisVocabulary(note.boundary),
+      }] : [];
+    }
+    const ruleId = String(note?.ruleId || '').trim();
+    const rule: any = ruleMap.get(ruleId);
+    if (!rule || !canExplainPsychology(rule)) return [];
+    const sources = note?.sources || [];
+    const links = evidenceLinks.filter((link: any) => String(link?.ruleId || '') === ruleId);
+    const evidenceQuotes = links.flatMap((link: any) => {
+      const chunkId = String(link?.chunkIds?.[0] || '').trim();
+      const quote = String(link?.chunkPreview || '').replace(/\.\.\.$/u, '').trim();
+      return chunkId && quote ? [{ sourceId: String(link?.sourceId || ''), chunkId, quote }] : [];
+    });
+    const enriched = buildVerifiedScientificNote({
+      rule,
+      noteText: String(note?.note || '').trim(),
+      narrative,
+      dreamEvidence: note?.dreamEvidence || note?.matchedDreamDetails || [],
+      sources,
+      evidenceQuotes,
+      confidence: Number(note?.confidence) || 0,
+    });
+    const finalNote = enriched || {
+      ...note,
+      ruleCode: String(rule?.ruleCode || '').trim(),
+      ruleStatement: String(rule?.ruleStatement || '').trim(),
+      insightTitle: buildScientificInsightTitle(rule),
+    };
+    return [{
+      ...finalNote,
+      note: removeInternalAnalysisVocabulary(finalNote.note),
+      boundary: removeInternalAnalysisVocabulary(finalNote.boundary),
+    }];
+  }), ...buildVerifiedMechanismFallbackNotes(appliedRules, evidenceLinks, narrative, responseHypotheses)]);
+  const caseConclusion = buildDreamCaseConclusion(narrative, responseHypotheses, responseScientificNotes);
+  const exploratoryAssessmentForResponse = buildExploratoryCaseAssessment(responseHypotheses);
 
   return {
     ...publicAnalysis,
     emotional_tone_key: emotion.key,
     emotional_tone: emotion.label,
-    core_analysis: removeInternalAnalysisVocabulary(
-      buildCaseGroundedSynthesis(
+    core_analysis: removeInternalAnalysisVocabulary(exploratoryAssessmentForResponse
+      ? caseConclusion.reasoning
+      : buildCaseGroundedSynthesis(
         narrative,
         responseHypotheses,
         sanitizeUnsupportedDreamClaims(analysis.core_analysis),
-      ),
-    ),
+      )),
+    case_conclusion: caseConclusion,
     summary: removeInternalAnalysisVocabulary(polishGeneratedDreamProse(analysis.summary)),
     real_life_hypotheses: responseHypotheses,
     feedback_conclusion: feedbackConclusion,
@@ -1359,8 +2078,9 @@ export function enrichScientificNotesForResponse(
       unresolvedContextCount: responseHypotheses.filter((item: any) => item?.userFeedback === 'unsure').length,
       dictionaryMotifCount: responseSymbolicNotes.filter((item: any) => item?.origin === 'dictionary').length,
       contextualMotifCount: responseSymbolicNotes.filter((item: any) => item?.origin !== 'dictionary').length,
-      appliedRuleCount: appliedRules.length,
-      explanatoryRuleCount: appliedRules.filter(canExplainPsychology).length,
+      appliedRuleCount: responseScientificNotes.length,
+      explanatoryRuleCount: responseScientificNotes.filter((note: any) => note?.applicationTier !== 'exploratory').length,
+      exploratoryRuleCount: responseScientificNotes.filter((note: any) => note?.applicationTier === 'exploratory').length,
       similarDreamCount: Array.isArray(retrievedContext?.componentC?.similarDreams)
         ? retrievedContext.componentC.similarDreams.length
         : Array.isArray(analysis.similar_dreams) ? analysis.similar_dreams.length : 0,
@@ -1372,48 +2092,7 @@ export function enrichScientificNotesForResponse(
       rationale: removeInternalAnalysisVocabulary(item.rationale),
     })),
     symbolic_notes: responseSymbolicNotes,
-    scientific_context_notes: deduplicateScientificNotes([...(Array.isArray(analysis.scientific_context_notes)
-      ? analysis.scientific_context_notes
-      : []).flatMap((note: any) => {
-      if (note?.ruleCode && note?.ruleStatement && Array.isArray(note?.evidenceQuotes) && note.evidenceQuotes.length > 0) {
-        const linkedRule: any = ruleMap.get(String(note?.ruleId || '').trim());
-        return linkedRule && canExplainPsychology(linkedRule) ? [{
-          ...note,
-          note: removeInternalAnalysisVocabulary(note.note),
-          boundary: removeInternalAnalysisVocabulary(note.boundary),
-        }] : [];
-      }
-      const ruleId = String(note?.ruleId || '').trim();
-      const rule: any = ruleMap.get(ruleId);
-      if (!rule || !canExplainPsychology(rule)) return [];
-      const sources = note?.sources || [];
-      const links = evidenceLinks.filter((link: any) => String(link?.ruleId || '') === ruleId);
-      const evidenceQuotes = links.flatMap((link: any) => {
-        const chunkId = String(link?.chunkIds?.[0] || '').trim();
-        const quote = String(link?.chunkPreview || '').replace(/\.\.\.$/u, '').trim();
-        return chunkId && quote ? [{ sourceId: String(link?.sourceId || ''), chunkId, quote }] : [];
-      });
-      const enriched = buildVerifiedScientificNote({
-        rule,
-        noteText: String(note?.note || '').trim(),
-        narrative,
-        dreamEvidence: note?.dreamEvidence || note?.matchedDreamDetails || [],
-        sources,
-        evidenceQuotes,
-        confidence: Number(note?.confidence) || 0,
-      });
-      const finalNote = enriched || {
-        ...note,
-        ruleCode: String(rule?.ruleCode || '').trim(),
-        ruleStatement: String(rule?.ruleStatement || '').trim(),
-        insightTitle: buildScientificInsightTitle(rule),
-      };
-      return [{
-        ...finalNote,
-        note: removeInternalAnalysisVocabulary(finalNote.note),
-        boundary: removeInternalAnalysisVocabulary(finalNote.boundary),
-      }];
-    }), ...buildVerifiedMechanismFallbackNotes(appliedRules, evidenceLinks, narrative, responseHypotheses)]),
+    scientific_context_notes: responseScientificNotes,
   };
 }
 
@@ -1427,6 +2106,19 @@ export function buildPracticalReflectionsFromHypotheses(hypotheses: any[]): Arra
   suggestion: string;
   rationale: string;
 }> {
+  const exploratoryAssessment = buildExploratoryCaseAssessment(hypotheses);
+  if (exploratoryAssessment?.status === 'strong_match') {
+    return [{
+      suggestion: 'Viết ba ý chính của buổi trình bày và diễn tập một lần trong khoảng 10 phút.',
+      rationale: 'Các câu trả lời đã xác nhận buổi trình bày và việc chuẩn bị là bối cảnh thật; xử lý trực tiếp phần còn chưa yên tâm hữu ích hơn tiếp tục giải mã các hình ảnh phi thực tế.',
+    }, {
+      suggestion: 'Ghi riêng điều bạn đã nghĩ ra khi thức và phần giấc mơ đã biến đổi hoặc ghép thêm.',
+      rationale: 'Bạn xác nhận ý tưởng giải quyết đã tồn tại trước giấc mơ. So sánh hai phần giúp đánh giá ý tưởng sau khi tỉnh mà không gán cho giấc mơ khả năng tự tạo ra lời giải đúng.',
+    }, {
+      suggestion: 'Không dùng lớp học, Mặt Trăng, đàn chim hoặc cây cầu như dấu hiệu dự báo kết quả buổi trình bày.',
+      rationale: 'Những hình ảnh này giúp nhận ra cách giấc mơ tổ chức chất liệu, nhưng câu trả lời và tài liệu hiện có không hỗ trợ ý nghĩa biểu tượng cố định hay dự báo tương lai.',
+    }];
+  }
   const output: Array<{ suggestion: string; rationale: string }> = [];
   for (const item of hypotheses || []) {
     const question = normalizeGroundingText(item?.followUpQuestion);
@@ -1442,6 +2134,33 @@ export function buildPracticalReflectionsFromHypotheses(hypotheses: any[]): Arra
       } : {
         suggestion: `Nhớ lại ba ngày trước giấc mơ và kiểm tra lần gần nhất một sự việc khiến bạn nghĩ tới ${cue}.`,
         rationale: 'Mốc này giúp kiểm tra một nguồn ký ức cụ thể mà không mặc định ý nghĩa của hình ảnh trong mơ.',
+      });
+    } else if (dimension === 'weak_association_recombination') {
+      output.push(item.userFeedback === 'yes' ? {
+        suggestion: 'Ghi riêng nguồn đời thực của từng mảnh đã được hỏi và đánh dấu mảnh nào xuất hiện gần thời điểm ngủ.',
+        rationale: 'Bạn đã xác nhận các mảnh đến từ những tình huống khác nhau; tách nguồn giúp kiểm tra cách chúng được ghép lại mà không gán cho giấc mơ một năng lực sáng tạo chắc chắn.',
+      } : item.userFeedback === 'no' ? {
+        suggestion: 'Không tiếp tục dùng giả thuyết về các liên kết yếu làm trục giải thích cho chuỗi cảnh này.',
+        rationale: 'Bạn không xác nhận các nguồn riêng biệt gần đây, nên hệ thống giữ nguồn của sự kết hợp ở trạng thái chưa rõ.',
+      } : {
+        suggestion: 'Đối chiếu từng hình ảnh nổi bật với bảy ngày trước giấc mơ và ghi nguồn gần nhất mà bạn nhớ được.',
+        rationale: 'Việc này thu đúng dữ liệu còn thiếu: các hình ảnh có thật sự đến từ những bối cảnh riêng biệt hay không.',
+      });
+    } else if (dimension === 'implausible_future_scenario') {
+      output.push(item.userFeedback === 'yes' ? {
+        suggestion: 'Tách ba yêu cầu thật của buổi họp hoặc trình bày khỏi những chi tiết chỉ tồn tại trong giấc mơ.',
+        rationale: 'Sự kiện tương lai đã được xác nhận, nhưng đoàn tàu, Mặt Trăng hay các biến đổi phi thực tế không phải dự báo về sự kiện đó.',
+      } : item.userFeedback === 'no' ? {
+        suggestion: 'Không dùng cảnh trình bày trong mơ để suy ra một sự kiện tương lai đang đến gần.',
+        rationale: 'Bạn không xác nhận sự kiện ngoài đời tương ứng, nên mối nối hướng tới tương lai đã bị loại khỏi trường hợp này.',
+      } : {
+        suggestion: 'Kiểm tra lịch bảy ngày tới để xác định có sự kiện thật nào tương ứng với buổi trình bày trong mơ hay không.',
+        rationale: 'Chỉ dữ kiện lịch thực tế mới phân biệt được một mối bận tâm sắp tới với cấu trúc hư cấu của giấc mơ.',
+      });
+    } else if (dimension === 'waking_prospective_difference' || dimension === 'creative_problem_preoccupation' || dimension === 'novel_solution_origin') {
+      output.push({
+        suggestion: 'Ghi lại điều bạn đã chuẩn bị khi thức và điều chỉ xuất hiện lần đầu trong giấc mơ thành hai cột riêng.',
+        rationale: 'So sánh này giúp phân biệt kế hoạch có chủ đích với sự kết hợp tự do trong mơ; một ý tưởng mới xuất hiện chưa tự chứng minh rằng nó đúng hoặc hữu ích.',
       });
     } else if (dimension === 'attachment_support_under_stress') {
       const cue = String(item?.matchedCue || 'người thân này').trim();

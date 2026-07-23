@@ -15,6 +15,8 @@ import {
   buildFeedbackConclusion,
   buildFeedbackRevision,
   enrichScientificNotesForResponse,
+  reconcileAlternateQuestionAfterFeedback,
+  resolveQuestionRuleIds,
 } from '../services/dream/dreamAnalysisGrounding.service';
 import { materializeDreamSymbolObservations } from '../services/dream/symbolObservation.service';
 
@@ -52,12 +54,32 @@ function parsePaginationParams(query: Request['query']): {
 function mapDreamResponse(dream: any): any {
   if (!dream) return dream;
   const obj = typeof dream.toObject === 'function' ? dream.toObject() : { ...dream };
+  const completeNarrative = composeDreamNarrative(obj.content || obj.dreamText || '', obj.additions || []);
   if (obj.ai_result) {
-    obj.ai_result = enrichScientificNotesForResponse(obj.ai_result, obj.retrievedContext, obj.content || obj.dreamText || '');
+    obj.ai_result = enrichScientificNotesForResponse(obj.ai_result, obj.retrievedContext, completeNarrative);
     obj.aiAnalysis = obj.ai_result;
     obj.mood_tag = obj.ai_result.emotional_tone || obj.mood_tag || '';
   }
   return obj;
+}
+
+export function composeDreamNarrative(
+  originalContent: string,
+  additions: Array<{ sequence?: number; content?: string }> = [],
+): string {
+  const original = String(originalContent || '').trim();
+  const validAdditions = additions
+    .map((item, index) => ({
+      sequence: Number.isInteger(item?.sequence) && Number(item.sequence) > 0 ? Number(item.sequence) : index + 1,
+      content: String(item?.content || '').trim(),
+    }))
+    .filter(item => item.content)
+    .sort((left, right) => left.sequence - right.sequence);
+  if (validAdditions.length === 0) return original;
+  const blocks = validAdditions.map((item, index) => validAdditions.length === 1
+    ? `Bổ sung:\n${item.content}`
+    : `${index + 1}. Bổ sung:\n${item.content}`);
+  return [original, ...blocks].filter(Boolean).join('\n\n');
 }
 
 function normalizedDreamContent(value: string): string {
@@ -279,6 +301,86 @@ export const updateDream = async (req: Request, res: Response): Promise<void> =>
     res.status(200).json({ success: true, message: 'Dream updated.', data: mapDreamResponse(dream) });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Failed to update dream.', error: err });
+  }
+};
+
+// ─── POST /api/dreams/:id/additions ─────────────────────────────────────────
+
+/**
+ * Append remembered details without rewriting the original report. The full
+ * versioned narrative is then re-analysed and old answers are invalidated.
+ */
+export const appendDreamAddition = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const dreamId = String(req.params.id);
+    const userId = req.user!._id as Types.ObjectId;
+    if (!Types.ObjectId.isValid(dreamId)) {
+      res.status(400).json({ success: false, message: 'ID giấc mơ không hợp lệ.' });
+      return;
+    }
+    const addition = normalizedDreamContent(String(req.body?.content || ''));
+    if (!addition) {
+      res.status(400).json({ success: false, message: 'Nội dung bổ sung là bắt buộc.' });
+      return;
+    }
+    if (addition.length > 2000) {
+      res.status(413).json({ success: false, message: 'Mỗi phần bổ sung không được vượt quá 2.000 ký tự.' });
+      return;
+    }
+    const dream = await Dream.findOne({ _id: new Types.ObjectId(dreamId), userId });
+    if (!dream) {
+      res.status(403).json({ success: false, message: 'Không tìm thấy giấc mơ hoặc bạn không có quyền bổ sung.' });
+      return;
+    }
+    if (dream.ai_status === 'pending') {
+      res.status(409).json({ success: false, message: 'Hãy chờ lần phân tích hiện tại hoàn tất trước khi bổ sung.' });
+      return;
+    }
+    const additions = Array.isArray(dream.additions) ? dream.additions : [];
+    if (additions.length >= 10) {
+      res.status(409).json({ success: false, message: 'Giấc mơ đã đạt giới hạn 10 phần bổ sung.' });
+      return;
+    }
+    const nextAddition = { sequence: additions.length + 1, content: addition, addedAt: new Date() };
+    const completeNarrative = composeDreamNarrative(dream.content, [...additions, nextAddition]);
+    if (completeNarrative.length > 12000) {
+      res.status(413).json({ success: false, message: 'Tổng lời kể sau khi bổ sung không được vượt quá 12.000 ký tự.' });
+      return;
+    }
+
+    dream.additions.push(nextAddition);
+    dream.contentHash = dreamContentHash(completeNarrative);
+    dream.ai_status = 'pending';
+    dream.ai_result = null;
+    dream.analysisEmbedding = undefined;
+    dream.retrievedContext = null;
+    dream.realLifeHypothesesFeedback = [];
+    const analysisStartedAt = new Date();
+    dream.analysisMetadata = {
+      currentStage: 'preparing',
+      progress: 8,
+      statusMessage: 'Đang phân tích lại lời kể cùng phần bổ sung...',
+      currentMiniStep: 'Đang ghép nội dung gốc và các phần bổ sung theo đúng thứ tự.',
+      stageResults: {},
+      startedAt: analysisStartedAt,
+      lastProgressAt: analysisStartedAt,
+      trigger: 'dream_addition',
+      additionCount: dream.additions.length,
+    };
+    dream.markModified('analysisMetadata');
+    await dream.save();
+
+    setImmediate(() => {
+      runBackgroundAnalysis(dream._id, String(userId), completeNarrative, dream.sleepContext || {});
+    });
+
+    res.status(202).json({
+      success: true,
+      message: 'Đã thêm chi tiết và bắt đầu phân tích lại.',
+      data: mapDreamResponse(dream),
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: 'Không thể bổ sung nội dung giấc mơ.', error: err.message });
   }
 };
 
@@ -957,8 +1059,9 @@ export const analyzeDreamById = async (req: Request, res: Response): Promise<voi
     await dream.save();
 
     // Start background analysis once
+    const completeNarrative = composeDreamNarrative(dream.content, dream.additions || []);
     setImmediate(() => {
-      runBackgroundAnalysis(dream._id, String(req.user!._id), dream.content, dream.sleepContext || {});
+      runBackgroundAnalysis(dream._id, String(req.user!._id), completeNarrative, dream.sleepContext || {});
     });
 
     res.status(200).json({
@@ -1017,10 +1120,11 @@ export const saveHypothesisFeedback = async (req: Request, res: Response): Promi
 
     // 2. Validate index against stored hypotheses in ai_result / aiAnalysis
     const activeAnalysis = dream.ai_result || (dream as any).aiAnalysis || {};
+    const completeNarrative = composeDreamNarrative(dream.content || '', dream.additions || []);
     const renderedAnalysis = enrichScientificNotesForResponse(
       activeAnalysis,
       dream.retrievedContext,
-      dream.content || '',
+      completeNarrative,
     );
     const hypotheses = (renderedAnalysis as any).real_life_hypotheses;
     const matchedIndex = Array.isArray(hypotheses)
@@ -1041,7 +1145,8 @@ export const saveHypothesisFeedback = async (req: Request, res: Response): Promi
 
     // Get questionText from DB, do not trust frontend payload blindly
     const questionText = matchedHypothesis.followUpQuestion;
-    const ruleId = matchedHypothesis.ruleId ? String(matchedHypothesis.ruleId) : undefined;
+    const linkedRuleIds = resolveQuestionRuleIds(matchedHypothesis);
+    const ruleId = linkedRuleIds[0];
     if (!ruleId) {
       res.status(400).json({
         success: false,
@@ -1062,29 +1167,33 @@ export const saveHypothesisFeedback = async (req: Request, res: Response): Promi
       dream.realLifeHypothesesFeedback = [];
     }
 
-    const existingIndex = dream.realLifeHypothesesFeedback.findIndex(
-      (f: any) => verificationKey
-        ? f.verificationKey === verificationKey
-        : f.hypothesisIndex === hypothesisIndex
-    );
-
-    const feedbackEntry = {
-      hypothesisIndex: matchedIndex,
-      ruleId,
-      ...(verificationKey ? { verificationKey } : {}),
-      answer: answer as 'yes' | 'no' | 'unsure',
-      effect,
-      questionText,
-      userId: new Types.ObjectId(userId),
-      updatedAt: new Date()
-    };
-
-    if (isClearingAnswer && existingIndex !== -1) {
-      dream.realLifeHypothesesFeedback.splice(existingIndex, 1);
-    } else if (!isClearingAnswer && existingIndex !== -1) {
-      dream.realLifeHypothesesFeedback[existingIndex] = feedbackEntry;
-    } else if (!isClearingAnswer) {
-      dream.realLifeHypothesesFeedback.push(feedbackEntry);
+    // One precomputed question may represent the same requested datum for
+    // several rules. Persist one feedback row per linked rule so each rule's
+    // moderation statistics are updated without asking the user twice.
+    for (const linkedRuleId of linkedRuleIds) {
+      const existingIndex = dream.realLifeHypothesesFeedback.findIndex(
+        (f: any) => (verificationKey
+          ? f.verificationKey === verificationKey
+          : f.hypothesisIndex === hypothesisIndex)
+          && String(f.ruleId || '') === linkedRuleId
+      );
+      const feedbackEntry = {
+        hypothesisIndex: matchedIndex,
+        ruleId: linkedRuleId,
+        ...(verificationKey ? { verificationKey } : {}),
+        answer: answer as 'yes' | 'no' | 'unsure',
+        effect,
+        questionText,
+        userId: new Types.ObjectId(userId),
+        updatedAt: new Date()
+      };
+      if (isClearingAnswer && existingIndex !== -1) {
+        dream.realLifeHypothesesFeedback.splice(existingIndex, 1);
+      } else if (!isClearingAnswer && existingIndex !== -1) {
+        dream.realLifeHypothesesFeedback[existingIndex] = feedbackEntry;
+      } else if (!isClearingAnswer) {
+        dream.realLifeHypothesesFeedback.push(feedbackEntry);
+      }
     }
 
     if (String(matchedHypothesis?.questionDimension || '') === 'external_sound_at_wake') {
@@ -1103,8 +1212,10 @@ export const saveHypothesisFeedback = async (req: Request, res: Response): Promi
     // 4. Re-materialize the complete analysis from the new answer. Feedback is
     // not a counter: it changes the synthesis, retained interpretation threads,
     // contextual details and practical next steps returned to the reader.
-    const activeHypotheses = hypotheses;
-    activeHypotheses[matchedIndex].userFeedback = isClearingAnswer ? null : answer;
+    hypotheses[matchedIndex].userFeedback = isClearingAnswer ? null : answer;
+    const activeHypotheses = verificationKey
+      ? reconcileAlternateQuestionAfterFeedback(hypotheses, verificationKey, answer)
+      : hypotheses;
     const feedbackRevision = buildFeedbackRevision(
       activeHypotheses,
       dream.realLifeHypothesesFeedback || [],
@@ -1118,7 +1229,7 @@ export const saveHypothesisFeedback = async (req: Request, res: Response): Promi
     const refreshedAnalysis = enrichScientificNotesForResponse(
       analysisWithFeedback,
       dream.retrievedContext,
-      dream.content || '',
+      completeNarrative,
     );
     const feedbackChanges = buildFeedbackChangeSet(renderedAnalysis, refreshedAnalysis);
     refreshedAnalysis.feedback_changed_paths = feedbackChanges.paths;

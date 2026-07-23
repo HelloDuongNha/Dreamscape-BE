@@ -52,13 +52,114 @@ export class DoclingReaderPolicyService {
     return /^(?:[a-z0-9,*†‡§]+\s+)?(?:department|division|faculty|school|institute|institution|university|college|hospital|laboratory|research (?:institute|center|centre)|khoa|trường|viện|đại học|bệnh viện)\b/iu.test(clean);
   }
 
+  private static isReferencesHeading(text: string): boolean {
+    const normalized = text.trim().toLowerCase().replace(/[^a-z0-9\p{L}]+/gu, ' ').trim();
+    return ['references', 'bibliography', 'literature cited', 'works cited', 'tài liệu tham khảo'].includes(normalized);
+  }
+
+  private static isUnlabelledBodyHeading(text: string): boolean {
+    const clean = text.trim();
+    if (!clean || clean.length > 140 || /[.!?]\s*$/u.test(clean)) return false;
+    const normalized = clean.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    if (/^(?:limitations?|limitations? of (?:the )?model|discussion|conclusions?|results?|methods?|materials and methods|future directions?|summary)$/i.test(normalized)) {
+      return true;
+    }
+    return false;
+  }
+
+  private static isBackMatterMetadata(text: string): boolean {
+    const clean = text.trim();
+    if (!clean || /^[-–—•'’"`]+$/u.test(clean)) return true;
+    return /^(?:conflict of interest(?: statement)?|received\s*:|accepted\s*:|published online\s*:|citation\s*:|this article was submitted to\b|copyright\b|©|author contributions?\b|funding\b|acknowledg(?:e)?ments?\b|data availability\b|ethics statement\b|reviewed by\b|academic editor\b)/iu.test(clean);
+  }
+
+  private static isReferenceSeparator(text: string): boolean {
+    return !text.trim() || /^[-–—•'’"`]+$/u.test(text.trim());
+  }
+
+  private static isLikelyBodyProseMislabelledAsReference(text: string): boolean {
+    const clean = text.trim();
+    if (clean.length < 55 || !/^\p{Ll}/u.test(clean) || !/[.!?]$/u.test(clean)) return false;
+    return !/(?:\b(?:19|20)\d{2}\b|\bdoi\s*:|https?:\/\/|\bet\s+al\.|^[\p{Lu}][\p{L}'’.-]+\s*,)/iu.test(clean);
+  }
+
+  private static normalizeReferenceBoundaries(items: DoclingItem[]): void {
+    let inReferences = false;
+    for (const item of items) {
+      if (item.type === 'heading') {
+        inReferences = this.isReferencesHeading(item.text);
+        continue;
+      }
+      if (item.type !== 'reference') continue;
+
+      if (this.isBackMatterMetadata(item.text)) {
+        item.type = 'metadata';
+        // A decorative separator is not a semantic section boundary. Closing
+        // reference mode here turns the real citation immediately after it
+        // into body prose (as happened to the Yates citation).
+        if (!this.isReferenceSeparator(item.text)) inReferences = false;
+        continue;
+      }
+      if (this.isUnlabelledBodyHeading(item.text)) {
+        item.type = 'heading';
+        inReferences = false;
+        continue;
+      }
+      if (inReferences && this.isLikelyBodyProseMislabelledAsReference(item.text)) {
+        item.type = 'paragraph';
+        continue;
+      }
+      // Docling's Python parser may have carried reference state past an
+      // unlabelled section boundary. Once the state is closed, recover later
+      // prose as body content instead of silently dropping it as bibliography.
+      if (!inReferences) item.type = 'paragraph';
+    }
+  }
+
+  private static mergeFragmentedReferences(items: DoclingItem[]): DoclingItem[] {
+    const merged: DoclingItem[] = [];
+    for (const item of items) {
+      const previous = merged[merged.length - 1];
+      const clean = item.text.trim();
+      if (item.type === 'metadata' && this.isReferenceSeparator(clean)) {
+        continue;
+      }
+      if (item.type !== 'reference' || previous?.type !== 'reference') {
+        merged.push(item);
+        continue;
+      }
+
+      const startsWithPunctuation = /^[,.;:)]/u.test(clean);
+      const isPageNumberFragment = /^\d{1,4}$/u.test(clean);
+      const isLowercaseContinuation = /^\p{Ll}/u.test(clean) && !/[.!?]\s*$/u.test(previous.text.trim());
+      if (!startsWithPunctuation && !isPageNumberFragment && !isLowercaseContinuation) {
+        merged.push(item);
+        continue;
+      }
+
+      if (isPageNumberFragment) {
+        const pageStart = previous.text.match(/,\s*(\d{1,4})\s*$/u);
+        previous.text = pageStart
+          ? `${previous.text.slice(0, pageStart.index)}, ${pageStart[1]}–${clean}`
+          : `${previous.text.trimEnd()} ${clean}`;
+      } else if (startsWithPunctuation) {
+        previous.text = `${previous.text.trimEnd()}${clean}`;
+      } else {
+        previous.text = `${previous.text.trimEnd()} ${clean}`;
+      }
+    }
+    return merged;
+  }
+
   /**
    * Docling can emit the left-column Introduction before the right-column
    * Abstract on page one. Move only the page-one Abstract group ahead of the
    * Introduction group; preserve every other item in its original relative order.
    */
   public static orderItemsForReader(items: DoclingItem[]): DoclingItem[] {
-    const ordered = [...items];
+    let ordered = [...items];
+    this.normalizeReferenceBoundaries(ordered);
+    ordered = this.mergeFragmentedReferences(ordered);
 
     // Some publisher PDFs cause Docling to label the author line as `title`
     // while the real article title is the nearest preceding heading. Detect

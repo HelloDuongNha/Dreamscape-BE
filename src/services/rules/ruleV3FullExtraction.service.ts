@@ -11,6 +11,7 @@ import { logger } from '../infrastructure/logger';
 import { RULE_V3_SCORING_VERSION, scoreRuleV3 } from './ruleV3Scoring.service';
 import { classifyRuleV3Relationship } from './ruleV3Relationship.service';
 import { removeRuleV3SourceData, resolveRuleV3SourceAliases } from './ruleV3Lifecycle.service';
+import { linkOracleEvidenceGapCandidatesForRules } from '../oracle/oracleEvidenceGap.service';
 
 const ENGINE_VERSION = 'rule-v3-full-2';
 const PROMPT_VERSION = 'rule-v3-evidence-ref-1';
@@ -455,6 +456,17 @@ async function executeRuleV3FullExtraction(
         sourceId: { $in: sourceAliases }
       })
       : [];
+    if (finalRuleIds.length > 0) {
+      const extractedRules = await KnowledgeRuleV3.find({ _id: { $in: finalRuleIds } })
+        .select('_id statement subject outcome status evidenceScore supportingSourceCount')
+        .lean();
+      await linkOracleEvidenceGapCandidatesForRules(extractedRules).catch((error) => {
+        logger.warn('Could not link newly extracted Rule V3 candidates to Oracle evidence gaps.', {
+          runId,
+          errorName: error instanceof Error ? error.name : 'Error',
+        });
+      });
+    }
     await AcademicRuleExtractionRunV3.findByIdAndUpdate(runId, {
       status: replacementFailed ? 'failed' : 'success',
       currentStage: replacementFailed ? 'failed' : 'completed',

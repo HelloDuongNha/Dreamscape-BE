@@ -5,8 +5,16 @@ import AcademicSource from '../models/AcademicSource';
 import AcademicDocument from '../models/AcademicDocument';
 import AcademicSection from '../models/AcademicSection';
 import AcademicChunk from '../models/AcademicChunk';
-import { buildReaderResponse } from '../services/academic/reader/readerResponseBuilder.service';
-import { calculateSourceContentHash, normalizeLanguageCode } from '../services/academic/reader/canonicalReaderIdentity.service';
+import { buildReaderResponse, ApiResponseSection } from '../services/academic/reader/readerResponseBuilder.service';
+import { calculateSourceContentHash, CanonicalBlockIdentityError } from '../services/academic/reader/canonicalReaderIdentity.service';
+import { CanonicalReaderIdentity } from '../services/academic/reader/canonicalReaderIdentity.types';
+import { validateRequestShape, checkHttpBodyLimit } from '../services/academic/reader/readerTranslationValidator.service';
+import { translateReaderTargets } from '../services/academic/reader/canonicalReaderTranslation.service';
+import { resolveTranslationProvider, TranslationProviderUnavailableError } from '../services/academic/reader/readerTranslationProvider.registry';
+import { resolveApprovedSourceContext, loadTranslationChunks } from '../services/academic/reader/readerTranslationContext.service';
+import type { TranslationServiceDeps } from '../services/academic/reader/readerTranslation.types';
+import { getTranslationDeadlineMs } from '../config/translationConfig';
+import { resolveReaderLanguage } from '../services/academic/reader/readerLanguage.service';
 import { normalizeDoi, fetchUnpaywallMetadata } from '../services/source/openAccess.service';
 import { incrementSubmitted } from '../services/contribution/contributionStats.service';
 import { resolveSourceImport } from '../services/source/sourceImportResolver.service';
@@ -706,33 +714,52 @@ export const getApprovedSourceRead = async (req: Request, res: Response): Promis
 
     const skip = (page - 1) * limit;
 
-    const { sections: apiSections, total } = await buildReaderResponse(fullText, skip, limit);
-    const pages = Math.ceil(total / limit);
+    let apiSections: ApiResponseSection[];
+    let total: number;
+    let readerIdentity: CanonicalReaderIdentity;
 
-    if (total === 0) {
-      res.status(409).json({
-        success: false,
-        message: 'Tài liệu này không chứa dữ liệu văn bản.',
-      });
-      return;
+    try {
+      const readerData = await buildReaderResponse(fullText, skip, limit);
+      apiSections = readerData.sections;
+      total = readerData.total;
+
+      if (total === 0) {
+        res.status(409).json({
+          success: false,
+          message: 'Tài liệu này không chứa dữ liệu văn bản.',
+        });
+        return;
+      }
+
+      // Query all chunks to calculate the global sourceContentHash
+      const allChunks = await AcademicChunk.find(
+        { documentId: fullText._id, chunkPurpose: 'reader' },
+        { _id: 1, text: 1, chunkOrder: 1 }
+      ).sort({ chunkOrder: 1 }).lean();
+
+      const sourceContentHash = calculateSourceContentHash(allChunks);
+
+      readerIdentity = {
+        documentId: fullText._id.toString(),
+        sourceLanguage: resolveReaderLanguage(source.detectedLanguage, allChunks),
+        sourceContentHash,
+        parserEngine: fullText.parserEngine || null,
+        parserVersion: fullText.parserVersion != null ? String(fullText.parserVersion) : null,
+        updatedAt: fullText.updatedAt ? fullText.updatedAt.toISOString() : null
+      };
+    } catch (err: any) {
+      if (err instanceof CanonicalBlockIdentityError) {
+        res.status(400).json({
+          success: false,
+          code: 'reader_block_identity_invalid',
+          message: 'Dữ liệu đoạn văn bản không hợp lệ.'
+        });
+        return;
+      }
+      throw err;
     }
 
-    // Query all chunks to calculate the global sourceContentHash
-    const allChunks = await AcademicChunk.find(
-      { documentId: fullText._id, chunkPurpose: 'reader' },
-      { _id: 1, text: 1, chunkOrder: 1 }
-    ).sort({ chunkOrder: 1 }).lean();
-
-    const sourceContentHash = calculateSourceContentHash(allChunks);
-
-    const readerIdentity = {
-      documentId: fullText._id.toString(),
-      sourceLanguage: normalizeLanguageCode(source.detectedLanguage),
-      sourceContentHash,
-      parserEngine: fullText.parserEngine || null,
-      parserVersion: fullText.parserVersion != null ? String(fullText.parserVersion) : null,
-      updatedAt: fullText.updatedAt ? fullText.updatedAt.toISOString() : null
-    };
+    const pages = Math.ceil(total / limit);
 
     const ftAny = fullText as any;
     res.status(200).json({
@@ -1608,5 +1635,93 @@ export const processUploadedPdfForApprovedSource = async (req: Request, res: Res
       success: false,
       message: err.message || 'Lỗi xử lý tệp PDF nguồn.'
     });
+  }
+};
+
+/**
+ * POST /api/sources/approved/:id/read/translate
+ * Translates a set of Smart Reader targets for an approved source.
+ * Access: Authenticated users only (same as getApprovedSourceRead).
+ *
+ * Uses a display-overlay translation provider. Canonical source data is unchanged.
+ */
+export const getApprovedSourceTranslation = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const id = req.params.id as string;
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      res.status(404).json({ success: false, code: 'reader_translation_document_unavailable', message: 'Source not found.' });
+      return;
+    }
+
+    // Check HTTP body limit before DB reads using exact captured raw body length
+    const rawBodyBytes = req.rawBodyLength ?? 0;
+    const bodyLimitError = checkHttpBodyLimit(rawBodyBytes);
+    if (bodyLimitError) {
+      res.status(413).json({ success: false, code: bodyLimitError.code, message: 'Request too large.' });
+      return;
+    }
+
+    // Validate request shape
+    const parseResult = validateRequestShape(req.body);
+    if (!parseResult.valid) {
+      res.status(parseResult.error.httpStatus).json({ success: false, code: parseResult.error.code, message: 'Invalid translation request.' });
+      return;
+    }
+
+    // Wire client disconnect cancellation
+    const clientAbort = new AbortController();
+    const onReqAborted = () => {
+      clientAbort.abort();
+    };
+    const onResClose = () => {
+      if (!res.writableEnded) {
+        clientAbort.abort();
+      }
+    };
+    req.on('aborted', onReqAborted);
+    res.on('close', onResClose);
+
+    const deps: TranslationServiceDeps = {
+      resolveCanonicalContext: resolveApprovedSourceContext,
+      loadChunks: loadTranslationChunks,
+      resolveProvider: resolveTranslationProvider,
+      now: () => Date.now(),
+      deadlineMs: getTranslationDeadlineMs(),
+      createAbortController: () => new AbortController(),
+      setTimer: (cb, ms) => setTimeout(cb, ms),
+      clearTimer: (h) => clearTimeout(h),
+    };
+
+    let result;
+    try {
+      result = await translateReaderTargets(
+        { routeId: id, path: 'approved', request: parseResult.request, clientSignal: clientAbort.signal },
+        deps
+      );
+    } finally {
+      req.removeListener('aborted', onReqAborted);
+      res.removeListener('close', onResClose);
+    }
+
+    if (!result.success) {
+      const { code, httpStatus } = result.error;
+      const message = code === 'reader_translation_identity_stale'
+        ? 'The source content has changed. Please refresh and retry.'
+        : code === 'reader_translation_provider_unavailable'
+        ? 'Translation provider is not available.'
+        : code === 'reader_translation_limit_exceeded'
+        ? 'Request exceeds size limit.'
+        : code === 'reader_translation_forbidden'
+        ? 'Access denied.'
+        : code === 'reader_translation_document_unavailable'
+        ? 'Source not found.'
+        : 'Invalid translation request.';
+      res.status(httpStatus).json({ success: false, code, message });
+      return;
+    }
+
+    res.status(200).json({ success: true, data: result.response });
+  } catch (err: any) {
+    res.status(500).json({ success: false, code: 'reader_translation_internal_error', message: 'An internal error occurred.' });
   }
 };

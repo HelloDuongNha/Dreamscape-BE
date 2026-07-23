@@ -13,7 +13,10 @@ import {
   RuleV3CandidateRejectionCode,
   RuleV3ProviderInput
 } from './ruleV3GenerationProvider.types';
-import { assessRuleV3CandidateQuality } from './ruleV3CandidateQuality.service';
+import {
+  assessRuleV3CandidateQuality,
+  pruneUnsupportedSupportingEvidence,
+} from './ruleV3CandidateQuality.service';
 import {
   buildRuleV3EvidenceAnchors,
   verifyRuleV3EvidenceAnchor,
@@ -397,7 +400,8 @@ export async function extractRuleV3Candidates(
       continue;
     }
 
-    const quality = assessRuleV3CandidateQuality(candidate, verifiedEvidenceList, {
+    const semanticallyGroundedEvidence = pruneUnsupportedSupportingEvidence(candidate, verifiedEvidenceList);
+    const quality = assessRuleV3CandidateQuality(candidate, semanticallyGroundedEvidence, {
       documentType: profile.documentType,
     });
     if (!quality.accepted) {
@@ -423,7 +427,7 @@ export async function extractRuleV3Candidates(
       citationVerification: 'passed',
       semanticVerification: 'passed',
       warnings,
-      evidence: verifiedEvidenceList
+      evidence: semanticallyGroundedEvidence
     });
   }
 

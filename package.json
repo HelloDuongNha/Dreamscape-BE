@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
+    "test:oracle-persistence": "tsx src/services/oracle/oraclePersistence.test.ts",
     "eval:rag": "tsx scripts/evaluateRagQuality.ts --offline",
     "eval:rag:online": "tsx scripts/evaluateRagQuality.ts --online",
     "repair:uploaded-pdf-sources": "ts-node scripts/repair_approved_pdf_sources.ts"
