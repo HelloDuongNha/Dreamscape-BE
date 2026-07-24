@@ -113,7 +113,16 @@ export class DoclingAdapterService {
       if (current.blockType !== 'paragraph') continue;
 
       const next = blocks[i + 1];
-      if (next?.blockType === 'paragraph' && this.isSentenceContinuation(current.text, next.text)) {
+      const samePage = next?.pageNumber === current.pageNumber;
+      const looksLikeHardWrappedFragment =
+        /[-\u00ad]\s*$/u.test(current.text) ||
+        (current.text.trim().length < 180 && (next?.text.trim().length || 0) < 260);
+      if (
+        next?.blockType === 'paragraph' &&
+        samePage &&
+        looksLikeHardWrappedFragment &&
+        this.isSentenceContinuation(current.text, next.text)
+      ) {
         current.text = this.joinContinuation(current.text, next.text);
         current.html = `<p>${this.escapeHtml(current.text)}</p>`;
         blocks.splice(i + 1, 1);
@@ -141,6 +150,7 @@ export class DoclingAdapterService {
       if (
         sawTable &&
         continuation?.blockType === 'paragraph' &&
+        continuation.pageNumber === current.pageNumber &&
         this.isSentenceContinuation(current.text, continuation.text)
       ) {
         current.text = this.joinContinuation(current.text, continuation.text);
@@ -209,7 +219,7 @@ export class DoclingAdapterService {
       }
 
       const activeType = policy.blockTypeOverride || item.type;
-      const itemText = normalizedItemText;
+      const itemText = policy.textOverride || normalizedItemText;
       const captionText = this.normalizePdfTypography(policy.captionText || item.caption || '');
       const normalizedTableHtml = activeType === 'table'
         ? DoclingTextRepairService.repairHtml(item.html || '')

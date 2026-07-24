@@ -7,10 +7,12 @@ import {
   createOracleThread,
   deleteOracleThread,
   getOracleThread,
+  getOracleCitationDetails,
   getOracleRunStatus,
   listOracleThreads,
   postOracleTurn,
   streamOracleRunEvents,
+  submitOracleCitationFeedback,
   updateOracleThread,
 } from '../controllers/oracleController';
 import {
@@ -54,6 +56,8 @@ router.patch('/threads/:id', updateOracleThread);
 router.delete('/threads/:id', deleteOracleThread);
 router.post('/threads/:id/turns', postOracleTurn);
 router.post('/threads/:id/turns/:turnId/branch', branchOracleTurn);
+router.get('/turns/:turnId/citations/:index', getOracleCitationDetails);
+router.post('/turns/:turnId/citations/:index/feedback', submitOracleCitationFeedback);
 router.get('/runs/:runId', getOracleRunStatus);
 router.get('/runs/:runId/events', streamOracleRunEvents);
 router.post('/runs/:runId/cancel', cancelOracleRun);

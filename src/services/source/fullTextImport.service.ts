@@ -17,13 +17,14 @@ export interface ImportResult {
 export async function importFullTextForSource(
   source: any,
   moderatorId: mongoose.Types.ObjectId,
-  isReimportOverride?: boolean
+  isReimportOverride?: boolean,
+  replacement?: { replacementRunId?: string; abortSignal?: AbortSignal },
 ): Promise<ImportResult> {
   const isReimport = isReimportOverride !== undefined 
     ? isReimportOverride 
     : (source.readableInApp || source.fullTextStatus === 'imported');
 
-  const res = await importSmartReaderForSource(source, moderatorId, isReimport);
+  const res = await importSmartReaderForSource(source, moderatorId, isReimport, replacement);
 
   return {
     success: res.success,

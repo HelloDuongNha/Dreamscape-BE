@@ -7,6 +7,10 @@ import { parseSourceFile } from './smartReaderParser.service';
 import { normalizeDocument } from './documentNormalizer.service';
 import { validateQuality } from './qualityValidator';
 import { buildAndSaveSmartReaderData } from '../../reader/persistence/readerChunkBuilder.service';
+import {
+  assertReaderReplacementActive,
+  recordReaderReplacementAssets,
+} from '../../reader/persistence/readerReplacement.service';
 import { fetchUrlWithSafeRedirects } from '../../../infrastructure/security/ssrfGuard';
 import { downloadOriginalPdfAsset } from '../../../storage/originalPdfStorage.service';
 import { deleteAsset } from '../../../storage/cloudinaryStorage.service';
@@ -784,8 +788,10 @@ async function deleteReaderImageAssets(publicIds: string[]): Promise<void> {
 export async function importSmartReaderForSource(
   source: any,
   moderatorId: mongoose.Types.ObjectId,
-  isReimport = false
+  isReimport = false,
+  replacement?: { replacementRunId?: string; abortSignal?: AbortSignal },
 ): Promise<ImportResult> {
+  await assertReaderReplacementActive(replacement?.replacementRunId, replacement?.abortSignal);
   let resolvedPmcidForImport: string | undefined = source.pmcid;
   if (!source.pmcid && source.doi) {
     try {
@@ -806,9 +812,6 @@ export async function importSmartReaderForSource(
           if (!duplicate) {
             source.pmcid = record.pmcid;
             source.normalizedPmcid = normalizedPmcid;
-            if (source.save && typeof source.save === 'function') {
-              await source.save();
-            }
           } else {
             console.warn('[PMC Resolver] Resolved PMCID belongs to another source; using it transiently without persisting it.');
           }
@@ -1507,7 +1510,11 @@ export async function importSmartReaderForSource(
     // ── End Structured Figure Ownership Pass ──────────────────────────────────
 
     console.log(`[Reconciliation] Figure materialization complete. Performing transactional save...`);
+    await assertReaderReplacementActive(replacement?.replacementRunId, replacement?.abortSignal);
     const previousReaderImageIds = await getPersistedReaderImageAssetIds(source, isContribution);
+    await recordReaderReplacementAssets(replacement?.replacementRunId, {
+      newAssetIds: pmcArchivePublicIds,
+    });
     try {
     const chunkMetrics = await buildAndSaveSmartReaderData(
       source,
@@ -1515,7 +1522,8 @@ export async function importSmartReaderForSource(
       reconciledBlocks,
       parserEngineUsed,
       selectedSourceType,
-      isContribution
+      isContribution,
+      { runId: replacement?.replacementRunId, abortSignal: replacement?.abortSignal },
     );
 
     source.fullTextStatus = 'imported';
@@ -1549,6 +1557,7 @@ export async function importSmartReaderForSource(
       updatedAt: new Date()
     };
 
+    await assertReaderReplacementActive(replacement?.replacementRunId, replacement?.abortSignal);
     await source.save();
     } catch (error) {
       await deleteReaderImageAssets(pmcArchivePublicIds);
@@ -1561,8 +1570,14 @@ export async function importSmartReaderForSource(
         return [...matches].map((match) => match[1]);
       })
     );
+    await recordReaderReplacementAssets(replacement?.replacementRunId, {
+      oldAssetIds: previousReaderImageIds.filter(id => !usedArchiveIds.has(id)),
+    });
+    await assertReaderReplacementActive(replacement?.replacementRunId, replacement?.abortSignal);
     await deleteReaderImageAssets([
-      ...previousReaderImageIds.filter((id) => !usedArchiveIds.has(id)),
+      ...(replacement?.replacementRunId
+        ? []
+        : previousReaderImageIds.filter((id) => !usedArchiveIds.has(id))),
       ...pmcArchivePublicIds.filter((id) => !usedArchiveIds.has(id)),
     ]);
 

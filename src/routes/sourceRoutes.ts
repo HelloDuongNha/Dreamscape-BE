@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import authMiddleware, { isModerator } from '../middleware/authMiddleware';
-import { contributeSource, previewSource, getApprovedSources, getApprovedSourceById, getApprovedSourceRead, getApprovedSourceOriginalDocument, getApprovedSourcePdfInline, contributePdfSource, cacheOriginalPdf, uploadOriginalPdf, deleteOriginalPdf, processUploadedPdfForApprovedSource, getApprovedSourceTranslation } from '../controllers/sourceController';
+import { contributeSource, previewSource, getApprovedSources, getApprovedSourceById, getApprovedSourceRead, getApprovedSourceOriginalDocument, getApprovedSourcePdfInline, contributePdfSource, cacheOriginalPdf, uploadOriginalPdf, deleteOriginalPdf, processUploadedPdfForApprovedSource, getUploadedPdfImportProgressForApprovedSource, cancelUploadedPdfImportForApprovedSource, getApprovedSourceTranslation } from '../controllers/sourceController';
 import { uploadPdfMiddleware } from '../controllers/moderationController';
 
 
@@ -84,6 +84,8 @@ router.get('/approved/:id/pdf-inline', authMiddleware, getApprovedSourcePdfInlin
 router.post('/approved/:id/cache-original-pdf', authMiddleware, isModerator, cacheOriginalPdf);
 router.post('/approved/:id/upload-pdf', authMiddleware, isModerator, uploadPdfMiddleware, uploadOriginalPdf);
 router.post('/approved/:id/process-uploaded-pdf', authMiddleware, isModerator, processUploadedPdfForApprovedSource);
+router.get('/approved/:id/pdf-import-progress', authMiddleware, isModerator, getUploadedPdfImportProgressForApprovedSource);
+router.post('/approved/:id/pdf-import-cancel', authMiddleware, isModerator, cancelUploadedPdfImportForApprovedSource);
 router.delete('/approved/:id/original-pdf', authMiddleware, isModerator, deleteOriginalPdf);
 
 export default router;

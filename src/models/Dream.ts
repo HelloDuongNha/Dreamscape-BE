@@ -9,6 +9,9 @@ export interface IDreamAddition {
   sequence: number;
   content: string;
   addedAt: Date;
+  analysisState?: 'pending' | 'analyzed' | 'unanalyzed';
+  analysisRunId?: string;
+  analyzedAt?: Date;
 }
 
 export interface IDream extends Document {
@@ -23,13 +26,26 @@ export interface IDream extends Document {
   likes_count: number;
   comments_count: number;
   created_at: Date;
-  ai_status: 'pending' | 'sensing' | 'completed' | 'failed';
+  ai_status: 'pending' | 'sensing' | 'completed' | 'failed' | 'cancelled';
   ai_result: Record<string, unknown> | null;
   edit_history: IEditHistoryEntry[];
   additions: IDreamAddition[];
   sleepContext?: Record<string, any>;
   retrievedContext?: Record<string, any> | null;
   analysisMetadata?: Record<string, any> | null;
+  analysisRun?: {
+    runId: string;
+    trigger: 'initial' | 'retry' | 'dream_addition' | 'addition_retry';
+    startedAt: Date;
+    previousStatus?: IDream['ai_status'] | null;
+    targetAdditionSequences?: number[];
+  } | null;
+  analysisRollback?: {
+    runId: string;
+    previousStatus?: IDream['ai_status'] | null;
+    hadPreviousResult: boolean;
+    previousAnalysisMetadata?: Record<string, any> | null;
+  } | null;
   realLifeHypothesesFeedback?: Array<{
     hypothesisIndex: number;
     ruleId?: string;
@@ -55,6 +71,13 @@ const DreamAdditionSchema = new Schema<IDreamAddition>(
     sequence: { type: Number, required: true, min: 1 },
     content: { type: String, required: true, trim: true },
     addedAt: { type: Date, default: Date.now },
+    analysisState: {
+      type: String,
+      enum: ['pending', 'analyzed', 'unanalyzed'],
+      default: 'analyzed',
+    },
+    analysisRunId: { type: String, required: false },
+    analyzedAt: { type: Date, required: false },
   },
   { _id: false }
 );
@@ -118,7 +141,7 @@ const DreamSchema = new Schema<IDream>(
     },
     ai_status: {
       type: String,
-      enum: ['pending', 'sensing', 'completed', 'failed'],
+      enum: ['pending', 'sensing', 'completed', 'failed', 'cancelled'],
       default: 'pending',
     },
     ai_result: {
@@ -144,6 +167,15 @@ const DreamSchema = new Schema<IDream>(
     analysisMetadata: {
       type: Schema.Types.Mixed,
       default: {},
+    },
+    analysisRun: {
+      type: Schema.Types.Mixed,
+      default: null,
+    },
+    analysisRollback: {
+      type: Schema.Types.Mixed,
+      default: null,
+      select: false,
     },
     realLifeHypothesesFeedback: {
       type: [

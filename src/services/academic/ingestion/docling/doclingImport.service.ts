@@ -3,6 +3,8 @@ import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
 import AcademicChunk from '../../../../models/AcademicChunk';
+import AcademicSource from '../../../../models/AcademicSource';
+import SourceContribution from '../../../../models/SourceContribution';
 import { deleteAsset, uploadDocumentImage } from '../../../storage/cloudinaryStorage.service';
 import { downloadOriginalPdfAsset, OriginalPdfReference } from '../../../storage/originalPdfStorage.service';
 import { compileExtractedDocument, CompileExtractedDocumentResult } from '../../reader/compile/documentCompiler.service';
@@ -11,6 +13,10 @@ import { DoclingArtifactDescriptor } from '../../types/docling.types';
 import { DoclingClientService } from './doclingClient.service';
 import { CanonicalBlock } from '../../types/canonical.types';
 import { ExtractedDocument } from '../../types/extractedDocument.types';
+import {
+  assertReaderReplacementActive,
+  recordReaderReplacementAssets,
+} from '../../reader/persistence/readerReplacement.service';
 
 export interface DoclingImportInput {
   targetType: 'contribution' | 'approved_source';
@@ -18,6 +24,9 @@ export interface DoclingImportInput {
   originalFile: OriginalPdfReference;
   forceReplace?: boolean;
   doOcr?: boolean;
+  abortSignal?: AbortSignal;
+  replacementRunId?: string;
+  onStage?: (stage: 'parsing_layout' | 'cleaning_ocr' | 'compiling_reader', details?: { pageCount: number }) => Promise<void>;
 }
 
 export interface DoclingImportResult {
@@ -27,6 +36,7 @@ export interface DoclingImportResult {
   discardedFurnitureCount: number;
   metadataHints?: {
     authors?: string[];
+    title?: string;
   };
 }
 
@@ -49,6 +59,67 @@ export function detectFrontMatterAuthors(blocks: CanonicalBlock[]): string[] | u
     if (isShortPersonName) return [titleCasePersonName(candidate)];
   }
   return undefined;
+}
+
+function normalizeDocumentTitle(value: string): string {
+  return String(value || '')
+    .normalize('NFC')
+    .replace(/\.(?:pdf)$/iu, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
+function normalizedTitleKey(value: string): string {
+  return normalizeDocumentTitle(value)
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/gu, '')
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9\p{L}]+/gu, '');
+}
+
+function isUsableFrontMatterTitle(value: string): boolean {
+  const clean = normalizeDocumentTitle(value);
+  if (clean.length < 4 || clean.length > 240) return false;
+  if (/^(?:bản đọc thông minh|smart reader|document|tài liệu pdf|untitled)$/iu.test(clean)) return false;
+  if (/https?:\/\/|www\.|thuviennotion/iu.test(clean)) return false;
+  const words = clean.split(/\s+/u).filter(Boolean);
+  return words.length >= 2 && words.length <= 32 && /[\p{L}]/u.test(clean);
+}
+
+function shouldReplaceStoredTitle(
+  currentTitle: string | undefined,
+  originalFileName: string | undefined,
+): boolean {
+  const currentKey = normalizedTitleKey(currentTitle || '');
+  const fileKey = normalizedTitleKey(originalFileName || '');
+  return !currentKey ||
+    currentKey === fileKey ||
+    /^(?:bandoc|smartreader|tailieupdf|tailieuhocThuat|untitled|document)$/iu.test(currentKey);
+}
+
+export function detectFrontMatterTitle(
+  blocks: CanonicalBlock[],
+  extractionTitle: string,
+  originalFileName?: string,
+): string | undefined {
+  const fileKey = normalizedTitleKey(originalFileName || '');
+  const extractionKey = normalizedTitleKey(extractionTitle);
+  const blockCandidates = blocks
+    .slice(0, 40)
+    .filter((block) => block.blockType === 'title')
+    .map((block) => normalizeDocumentTitle(block.text))
+    .filter(isUsableFrontMatterTitle);
+  const distinctBlockTitle = blockCandidates.find((candidate) => {
+    const key = normalizedTitleKey(candidate);
+    return key && key !== fileKey && key !== extractionKey;
+  });
+  if (distinctBlockTitle) return distinctBlockTitle;
+  const normalizedExtractionTitle = normalizeDocumentTitle(extractionTitle);
+  if (
+    isUsableFrontMatterTitle(normalizedExtractionTitle) &&
+    normalizedTitleKey(normalizedExtractionTitle) !== fileKey
+  ) return normalizedExtractionTitle;
+  return blockCandidates[0];
 }
 
 function escapeHtml(text: string): string {
@@ -146,6 +217,13 @@ function toExtractedDocument(blocks: CanonicalBlock[], pageCount: number, title:
 }
 
 export async function runDoclingPdfImport(input: DoclingImportInput): Promise<DoclingImportResult> {
+  const throwIfCancelled = () => {
+    if (input.abortSignal?.aborted) {
+      const error = new Error('pdf_import_cancelled');
+      error.name = 'AbortError';
+      throw error;
+    }
+  };
   if (!(await DoclingClientService.isAvailable())) {
     throw new Error('Trình phân tích Docling chưa sẵn sàng trên máy chủ này.');
   }
@@ -167,18 +245,36 @@ export async function runDoclingPdfImport(input: DoclingImportInput): Promise<Do
   const uploadedIds: string[] = [];
 
   try {
-    const run = await DoclingClientService.extractPdf(pdfPath, input.doOcr === true);
+    const run = await DoclingClientService.extractPdf(pdfPath, input.doOcr === true, input.abortSignal);
     runCleanup = run.cleanup;
-    if (!run.result.success) throw new Error(run.result.errorDetail || 'Docling không thể phân tích PDF.');
+    if (!run.result.success) {
+      const extractionError = new Error(run.result.errorDetail || 'Docling không thể phân tích PDF.') as Error & {
+        code?: string;
+      };
+      extractionError.code = run.result.errorCode || 'DOCLING_EXTRACTION_FAILED';
+      throw extractionError;
+    }
+    throwIfCancelled();
 
+    await input.onStage?.('parsing_layout', { pageCount: run.result.pageCount });
+    await input.onStage?.('cleaning_ocr', { pageCount: run.result.pageCount });
     const adapter = DoclingAdapterService.mapToCanonicalBlocks(run.result, run.artifacts);
     const frontMatterAuthors = detectFrontMatterAuthors(adapter.canonicalOutput.blocks);
+    const frontMatterTitle = detectFrontMatterTitle(
+      adapter.canonicalOutput.blocks,
+      adapter.canonicalOutput.title,
+      input.originalFile.originalFileName,
+    );
+    if (frontMatterTitle) {
+      adapter.canonicalOutput.title = frontMatterTitle;
+    }
     const figureBlocks = adapter.canonicalOutput.blocks.filter((block) => block.blockType === 'figure');
     if (figureBlocks.length !== adapter.figureArtifacts.length) {
       throw new Error('Không thể đối chiếu figure Docling với artifact đã trích xuất.');
     }
 
     for (let index = 0; index < figureBlocks.length; index++) {
+      throwIfCancelled();
       const block = figureBlocks[index];
       const artifact: DoclingArtifactDescriptor = adapter.figureArtifacts[index];
       if (!artifact.filePath || artifact.figureType === 'region_only') {
@@ -188,6 +284,7 @@ export async function runDoclingPdfImport(input: DoclingImportInput): Promise<Do
       const assetName = `docling/${input.targetType}/${input.targetId}/${artifact.itemId}-${crypto.randomUUID()}`;
       const uploaded = await uploadDocumentImage(artifact.filePath, assetName);
       uploadedIds.push(uploaded.public_id);
+      await recordReaderReplacementAssets(input.replacementRunId, { newAssetIds: [uploaded.public_id] });
       block.imageUrl = uploaded.secure_url;
       const displayWidth = getFigureDisplayWidth(artifact, run.result.imageScale || 1);
       const widthAttribute = displayWidth ? ` width="${displayWidth}"` : '';
@@ -195,19 +292,24 @@ export async function runDoclingPdfImport(input: DoclingImportInput): Promise<Do
     }
 
     const oldAssetIds = await getExistingDoclingAssetIds(input.targetType, input.targetId);
+    await recordReaderReplacementAssets(input.replacementRunId, { oldAssetIds });
     const extractedDocument = toExtractedDocument(
       adapter.canonicalOutput.blocks,
       run.result.pageCount,
       adapter.canonicalOutput.title
     );
+    throwIfCancelled();
+    await input.onStage?.('compiling_reader', { pageCount: run.result.pageCount });
     const compileResult = await compileExtractedDocument({
       targetType: input.targetType,
       targetId: input.targetId,
       extractedDocument,
-      extractionMethod: 'pdf_text',
+      extractionMethod: input.doOcr ? 'ocr' : 'pdf_text',
       forceReplace: input.forceReplace,
       parserEngine: 'docling',
-      sourceType: 'uploaded_pdf'
+      sourceType: 'uploaded_pdf',
+      replacementRunId: input.replacementRunId,
+      abortSignal: input.abortSignal,
     });
 
     if (!compileResult.success) {
@@ -217,17 +319,29 @@ export async function runDoclingPdfImport(input: DoclingImportInput): Promise<Do
         detectedPictureCount: adapter.detectedPictureCount,
         acceptedFigureCount: adapter.acceptedFigureCount,
         discardedFurnitureCount: adapter.discardedFurnitureCount,
-        metadataHints: { authors: frontMatterAuthors }
+        metadataHints: { authors: frontMatterAuthors, title: frontMatterTitle }
       };
     }
 
-    await deleteImageAssets(oldAssetIds.filter((id) => !uploadedIds.includes(id)));
+    await assertReaderReplacementActive(input.replacementRunId, input.abortSignal);
+    const targetModel: any = input.targetType === 'contribution' ? SourceContribution : AcademicSource;
+    const currentTarget = await targetModel.findById(input.targetId).select('title metadata').lean();
+    if (
+      frontMatterTitle &&
+      currentTarget &&
+      shouldReplaceStoredTitle(currentTarget.title, input.originalFile.originalFileName)
+    ) {
+      await targetModel.updateOne(
+        { _id: input.targetId },
+        { $set: { title: frontMatterTitle, 'metadata.title': frontMatterTitle } },
+      );
+    }
     return {
       compileResult,
       detectedPictureCount: adapter.detectedPictureCount,
       acceptedFigureCount: adapter.acceptedFigureCount,
       discardedFurnitureCount: adapter.discardedFurnitureCount,
-      metadataHints: { authors: frontMatterAuthors }
+      metadataHints: { authors: frontMatterAuthors, title: frontMatterTitle }
     };
   } catch (error) {
     await deleteImageAssets(uploadedIds);

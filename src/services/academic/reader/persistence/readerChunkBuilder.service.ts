@@ -4,6 +4,11 @@ import AcademicSection from '../../../../models/AcademicSection';
 import AcademicChunk from '../../../../models/AcademicChunk';
 import { CanonicalBlock } from '../../types/canonical.types';
 import { buildAndSaveRagChunks } from './ragChunkBuilder.service';
+import {
+  assertReaderReplacementActive,
+  captureReaderReplacementBackup,
+  markReaderReplacementWritten,
+} from './readerReplacement.service';
 
 export async function buildAndSaveSmartReaderData(
   source: any,
@@ -11,7 +16,8 @@ export async function buildAndSaveSmartReaderData(
   blocks: CanonicalBlock[],
   parserEngine: string,
   sourceType: string,
-  isContribution = false
+  isContribution = false,
+  replacement?: { runId?: string; abortSignal?: AbortSignal },
 ): Promise<{ ragChunkCount: number; embedModel: string }> {
   // Filter out any blocks duplicate of the main title (excluding the actual title block)
   const normalizeString = (t: string) => t.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -68,6 +74,8 @@ export async function buildAndSaveSmartReaderData(
   const documentSelector = isContribution
     ? { previewContributionId: source._id }
     : { sourceId: source._id };
+  await assertReaderReplacementActive(replacement?.runId, replacement?.abortSignal);
+  await captureReaderReplacementBackup(replacement?.runId, documentSelector);
 
   const captureExistingReader = async () => {
     const documents = await AcademicDocument.find(documentSelector).lean();
@@ -99,6 +107,7 @@ export async function buildAndSaveSmartReaderData(
   };
 
   const executeSave = async () => {
+    await assertReaderReplacementActive(replacement?.runId, replacement?.abortSignal);
     const opt = useTransaction ? { session } : {};
 
     // 1. Delete existing documents, sections, and chunks for this source
@@ -232,6 +241,8 @@ export async function buildAndSaveSmartReaderData(
         throw saveError;
       }
     }
+    await markReaderReplacementWritten(replacement?.runId);
+    await assertReaderReplacementActive(replacement?.runId, replacement?.abortSignal);
   } finally {
     session.endSession();
   }
@@ -252,7 +263,7 @@ export async function buildAndSaveSmartReaderData(
               chunkCount: cleanBlocks.length,
               builtAt: new Date(),
             }],
-            $slice: -6,
+            $slice: -20,
           },
         },
       },

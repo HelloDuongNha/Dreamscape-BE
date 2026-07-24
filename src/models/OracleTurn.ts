@@ -57,8 +57,31 @@ const OracleCitationSchema = new Schema(
     },
     sourceId: { type: String, required: true, maxlength: 100 },
     title: { type: String, required: true, maxlength: 500 },
+    year: { type: Number, min: 1800, max: 3000 },
     excerpt: { type: String, required: true, maxlength: 1200 },
     detail: { type: String, maxlength: 500 },
+    ruleLinks: {
+      type: [{
+        ruleId: { type: String, required: true },
+        ruleCode: { type: String, required: true },
+        statement: { type: String, required: true, maxlength: 1000 },
+        localizedStatement: {
+          vi: { type: String, maxlength: 1000 },
+          en: { type: String, maxlength: 1000 },
+        },
+        quote: { type: String, required: true, maxlength: 1200 },
+        evidenceScore: { type: Number, min: 0, max: 100 },
+        supportingSourceCount: { type: Number, min: 0 },
+        verificationKey: { type: String, maxlength: 300 },
+        verificationQuestion: { type: String, maxlength: 1200 },
+        localizedVerificationQuestion: {
+          vi: { type: String, maxlength: 1200 },
+          en: { type: String, maxlength: 1200 },
+        },
+        currentUserAnswer: { type: String, enum: ['yes', 'no', 'unsure', null], default: null },
+      }],
+      default: undefined,
+    },
   },
   { _id: false },
 );

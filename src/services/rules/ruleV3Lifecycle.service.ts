@@ -4,6 +4,7 @@ import AcademicRuleExtractionRunV3 from '../../models/rulesV3/AcademicRuleExtrac
 import KnowledgeRuleV3 from '../../models/rulesV3/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../../models/rulesV3/KnowledgeRuleEvidence';
 import { scoreRuleV3 } from './ruleV3Scoring.service';
+import { applyStoredValidationAdjustment } from './ruleV3ValidationScore.service';
 
 export interface RemoveRuleV3SourceDataOptions {
   session?: ClientSession;
@@ -89,9 +90,17 @@ export async function removeRuleV3SourceData(
     if (session) ruleQuery.session(session);
     const rule = await ruleQuery;
     if (!rule) continue;
-    const score = scoreRuleV3(rule, remainingEvidence);
+    const sourceScore = scoreRuleV3(rule, remainingEvidence);
+    const score = applyStoredValidationAdjustment(sourceScore, rule);
+    rule.sourceEvidenceScore = sourceScore.evidenceScore;
     rule.evidenceScore = score.evidenceScore;
-    rule.certaintyTier = score.certaintyTier;
+    rule.certaintyTier = score.evidenceScore >= 85
+      ? 'strong'
+      : score.evidenceScore >= 65
+        ? 'moderate'
+        : score.evidenceScore >= 45
+          ? 'limited'
+          : 'weak';
     rule.supportingSourceCount = score.supportingSourceCount;
     rule.contradictingSourceCount = score.contradictingSourceCount;
     if (rule.status === 'verified' && !score.oracleEligible) {

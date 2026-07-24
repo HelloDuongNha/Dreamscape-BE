@@ -5,11 +5,105 @@ import json
 import time
 import re
 import html as html_mod
+import hashlib
 import importlib.util
+import traceback
 
 from docling.datamodel.base_models import InputFormat
-from docling.datamodel.pipeline_options import OcrMacOptions, PdfPipelineOptions
+from docling.datamodel.pipeline_options import EasyOcrOptions, OcrMacOptions, PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
+
+
+def _sort_easyocr_results_spatially(results):
+    """
+    EasyOCR can return slightly slanted words after all axis-aligned words.
+    Docling then preserves that detector order while composing a paragraph,
+    which moves valid words to the end of the paragraph. Reorder detections
+    into visual lines before Docling creates TextCell indices.
+    """
+    if not isinstance(results, list) or len(results) < 2:
+        return results
+
+    positioned = []
+    unpositioned = []
+    for sequence, result in enumerate(results):
+        try:
+            box = result[0]
+            xs = [float(point[0]) for point in box]
+            ys = [float(point[1]) for point in box]
+            positioned.append({
+                "result": result,
+                "sequence": sequence,
+                "left": min(xs),
+                "top": min(ys),
+                "right": max(xs),
+                "bottom": max(ys),
+                "center_y": (min(ys) + max(ys)) / 2,
+                "height": max(1.0, max(ys) - min(ys)),
+            })
+        except (IndexError, TypeError, ValueError):
+            unpositioned.append((sequence, result))
+
+    if len(positioned) < 2:
+        return results
+
+    lines = []
+    for item in sorted(positioned, key=lambda value: (value["center_y"], value["left"], value["sequence"])):
+        best_line = None
+        best_distance = None
+        for line in lines:
+            overlap = max(
+                0.0,
+                min(item["bottom"], line["bottom"]) - max(item["top"], line["top"]),
+            )
+            min_height = min(item["height"], line["height"])
+            center_distance = abs(item["center_y"] - line["center_y"])
+            same_visual_line = (
+                overlap >= min_height * 0.35
+                or center_distance <= max(item["height"], line["height"]) * 0.55
+            )
+            if same_visual_line and (best_distance is None or center_distance < best_distance):
+                best_line = line
+                best_distance = center_distance
+
+        if best_line is None:
+            lines.append({
+                "items": [item],
+                "top": item["top"],
+                "bottom": item["bottom"],
+                "center_y": item["center_y"],
+                "height": item["height"],
+            })
+            continue
+
+        best_line["items"].append(item)
+        best_line["top"] = min(best_line["top"], item["top"])
+        best_line["bottom"] = max(best_line["bottom"], item["bottom"])
+        best_line["center_y"] = sum(value["center_y"] for value in best_line["items"]) / len(best_line["items"])
+        best_line["height"] = max(1.0, best_line["bottom"] - best_line["top"])
+
+    ordered = []
+    for line in sorted(lines, key=lambda value: value["center_y"]):
+        ordered.extend(
+            value["result"]
+            for value in sorted(line["items"], key=lambda item: (item["left"], item["center_y"], item["sequence"]))
+        )
+    ordered.extend(result for _, result in sorted(unpositioned))
+    return ordered
+
+
+def _install_easyocr_spatial_order_patch():
+    import easyocr
+
+    if getattr(easyocr.Reader.readtext, "_dreamscape_spatial_order", False):
+        return
+    original_readtext = easyocr.Reader.readtext
+
+    def spatially_ordered_readtext(reader, *args, **kwargs):
+        return _sort_easyocr_results_spatially(original_readtext(reader, *args, **kwargs))
+
+    spatially_ordered_readtext._dreamscape_spatial_order = True
+    easyocr.Reader.readtext = spatially_ordered_readtext
 
 
 def _safe_relative(parent_real: str, child_real: str) -> str | None:
@@ -408,18 +502,39 @@ def main():
             do_ocr = sys.argv[3].lower() == "true"
 
         image_scale = 2.0
-        pipeline_options = PdfPipelineOptions()
+        artifacts_path = os.environ.get("DOCLING_ARTIFACTS_PATH", "").strip()
+        pipeline_options = PdfPipelineOptions(
+            artifacts_path=artifacts_path if artifacts_path and os.path.isdir(artifacts_path) else None
+        )
         pipeline_options.do_ocr = do_ocr
-        # Apple Vision gives substantially better Vietnamese diacritics than
-        # the generic OCR fallback on the local macOS runtime. Keep this
-        # conditional so Linux/Windows deployments continue using Docling's
-        # automatic OCR engine instead of importing a macOS-only dependency.
+        # EasyOCR is the primary engine for Vietnamese scans. OCRMac accepts a
+        # Vietnamese locale but has returned successful, empty pages on some
+        # book scans; using it first silently produced image-only readers.
         if (
+            do_ocr
+            and importlib.util.find_spec("easyocr") is not None
+        ):
+            _install_easyocr_spatial_order_patch()
+            configured_easyocr_dir = os.environ.get("EASYOCR_MODEL_DIR", "").strip()
+            default_easyocr_dir = os.path.expanduser("~/.EasyOCR/model")
+            easyocr_model_dir = (
+                configured_easyocr_dir
+                or (default_easyocr_dir if os.path.isdir(default_easyocr_dir) else "")
+            )
+            pipeline_options.ocr_options = EasyOcrOptions(
+                lang=["vi", "en"],
+                force_full_page_ocr=True,
+                use_gpu=None,
+                confidence_threshold=0.3,
+                model_storage_directory=easyocr_model_dir or None,
+            )
+        elif (
             do_ocr
             and sys.platform == "darwin"
             and importlib.util.find_spec("ocrmac") is not None
         ):
             pipeline_options.ocr_options = OcrMacOptions(
+                # OCRMac exposes Apple's Vietnamese locale as ``vi-VT``.
                 lang=["vi-VT", "en-US"],
                 force_full_page_ocr=True,
                 recognition="accurate",
@@ -472,6 +587,7 @@ def main():
             width = None
             height = None
             img_format = None
+            image_hash = None
             fig_type = "embedded"
             confidence = 1.0
 
@@ -528,6 +644,8 @@ def main():
                         fig_type = "region_only"
                     else:
                         img.save(save_real, "PNG")
+                        with open(save_real, "rb") as saved_image:
+                            image_hash = hashlib.sha256(saved_image.read()).hexdigest()
                         img_desc = filename
                         file_path = save_real
                         width, height = img.size
@@ -570,6 +688,7 @@ def main():
                 item_data["fileName"] = img_desc
                 item_data["width"] = width
                 item_data["height"] = height
+                item_data["imageHash"] = image_hash
                 item_data["format"] = img_format
                 item_data["figureType"] = fig_type
                 item_data["confidence"] = confidence
@@ -597,12 +716,22 @@ def main():
         # six-byte ``\\uXXXX`` escape in large OCR books.
         print(json.dumps(output, ensure_ascii=False))
 
-    except Exception:
+    except Exception as exc:
+        # Keep the Python traceback on the backend's stderr so large-book OCR
+        # failures are diagnosable without exposing local paths to the client.
+        traceback.print_exc(file=sys.stderr)
+        safe_detail = re.sub(r"\s+", " ", str(exc)).strip()[:600]
+        exception_name = type(exc).__name__
+        missing_models = exception_name == "LocalEntryNotFoundError"
         print(json.dumps({
             "success": False,
-            "errorCode": "PARSING_FAILED",
-            "errorDetail": "Failed to parse PDF document.",
-        }))
+            "errorCode": "DOCLING_MODELS_UNAVAILABLE" if missing_models else f"PARSING_FAILED_{exception_name.upper()}",
+            "errorDetail": (
+                "Thiếu model Docling cục bộ và máy chủ không thể tải model cần thiết."
+                if missing_models
+                else safe_detail or "Failed to parse PDF document."
+            ),
+        }, ensure_ascii=False))
         sys.exit(1)
 
 

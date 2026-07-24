@@ -4,6 +4,9 @@ import OracleThread from '../models/OracleThread';
 import OracleTurn from '../models/OracleTurn';
 import OracleRun from '../models/OracleRun';
 import OracleRunEvent from '../models/OracleRunEvent';
+import KnowledgeRuleV3 from '../models/rulesV3/KnowledgeRule';
+import KnowledgeRuleEvidenceV3 from '../models/rulesV3/KnowledgeRuleEvidence';
+import AcademicSource from '../models/AcademicSource';
 import { createOracleTurnRun } from '../services/oracle/oraclePersistence.service';
 import { OracleContractError } from '../services/oracle/oracle.types';
 import {
@@ -18,6 +21,19 @@ import {
   compactUsedCitations,
   executeOracleRun,
 } from '../services/oracle/oracleRun.service';
+import {
+  buildRuleGroundedFallbackHypotheses,
+  resolveQuestionRuleIds,
+} from '../services/dream/dreamAnalysisGrounding.service';
+import {
+  localizeOracleRuleStatement,
+  localizeOracleVerificationQuestion,
+} from '../services/oracle/oracleRulePresentation.service';
+import {
+  getCurrentRuleValidationAnswers,
+  setRuleValidationFeedback,
+} from '../services/rules/ruleV3ValidationScore.service';
+import { logger } from '../services/infrastructure/logger';
 
 function requesterId(req: Request): Types.ObjectId {
   if (!req.user?._id) {
@@ -70,6 +86,75 @@ function deriveThreadTitle(content: string): string {
   const shortened = compact.slice(0, 64);
   const wordBoundary = shortened.lastIndexOf(' ');
   return `${(wordBoundary >= 36 ? shortened.slice(0, wordBoundary) : shortened).trim()}…`;
+}
+
+function parseOracleValidationReply(content: string): 'yes' | 'no' | 'unsure' | null {
+  const normalized = content.normalize('NFKC').trim().toLocaleLowerCase('vi');
+  const explicitYes = /^(?:có|yes)\s*[.!?]*$/iu.test(normalized)
+    || /^(?:có|yes)\s*[,;:—-]/iu.test(normalized)
+    || /^có\s+(?:tôi|mình|đúng|điều|chính xác|chắc chắn)\b/iu.test(normalized)
+    || /^yes\s+(?:i|that|this|it)\b/iu.test(normalized);
+  if (explicitYes) return 'yes';
+  const explicitNo = /^(?:không|no)\s*[.!?]*$/iu.test(normalized)
+    || /^(?:không|no)\s*[,;:—-]/iu.test(normalized)
+    || /^không\s+(?:tôi|mình|đúng|điều|chính xác)\b/iu.test(normalized)
+    || /^no\s+(?:i|that|this|it)\b/iu.test(normalized);
+  if (explicitNo) return 'no';
+  if (/^(?:tôi\s+)?(?:chưa\s+chắc|không\s+chắc|not\s+sure|i'?m\s+not\s+sure)\b/iu.test(normalized)) {
+    return 'unsure';
+  }
+  return null;
+}
+
+async function applyOracleReplyValidation(
+  userId: Types.ObjectId,
+  parentTurnId: Types.ObjectId | undefined,
+  content: string,
+): Promise<void> {
+  const answer = parseOracleValidationReply(content);
+  if (!answer || !parentTurnId) return;
+  const parent = await OracleTurn.findOne({
+    _id: parentTurnId,
+    userId,
+    role: 'assistant',
+    status: 'completed',
+  });
+  if (!parent) return;
+  const answerText = parent.contentBlocks.map((block) => block.text).join('\n');
+  const candidates = parent.citations.flatMap((citation) =>
+    (citation.ruleLinks || [])
+      .filter((link) => link.verificationQuestion && link.verificationKey)
+      .map((link) => ({
+        citation,
+        link,
+        position: answerText.lastIndexOf(link.verificationQuestion || ''),
+      })))
+    .filter((item) => item.position >= 0)
+    .sort((left, right) => right.position - left.position);
+  const selected = candidates[0];
+  if (!selected?.link.verificationKey || !selected.link.verificationQuestion) return;
+  const scoreUpdates = await setRuleValidationFeedback({
+    userId,
+    verificationKey: selected.link.verificationKey,
+    origin: 'oracle',
+    originId: parent._id as Types.ObjectId,
+    questionText: selected.link.verificationQuestion,
+    answer,
+    directRuleIds: [selected.link.ruleId],
+    sourceId: selected.citation.sourceId,
+    exactQuote: selected.link.quote,
+  });
+  const scoreByRuleId = new Map(scoreUpdates.map((item) => [item.ruleId, item.score]));
+  for (const citation of parent.citations) {
+    for (const link of citation.ruleLinks || []) {
+      link.evidenceScore = scoreByRuleId.get(link.ruleId) ?? link.evidenceScore;
+      if (link.verificationKey === selected.link.verificationKey) {
+        link.currentUserAnswer = answer;
+      }
+    }
+  }
+  parent.markModified('citations');
+  await parent.save();
 }
 
 export async function listOracleThreads(req: Request, res: Response): Promise<void> {
@@ -307,6 +392,18 @@ export async function postOracleTurn(req: Request, res: Response): Promise<void>
       parentTurnId,
     });
     if (!result.replayed) {
+      try {
+        await applyOracleReplyValidation(userId, parentTurnId, content);
+      } catch (error) {
+        // A validation-score write must never strand the already-created,
+        // idempotent Oracle run. The answer remains in the chat and can be
+        // submitted again from the source modal.
+        logger.warn('Oracle reply validation could not update the argument score.', {
+          error: String(error),
+          threadId: String(threadId),
+          parentTurnId: parentTurnId ? String(parentTurnId) : null,
+        });
+      }
       await OracleThread.updateOne(
         { _id: threadId, userId, nextTurnSequence: 2 },
         { $set: { title: deriveThreadTitle(content) } },
@@ -314,6 +411,213 @@ export async function postOracleTurn(req: Request, res: Response): Promise<void>
       void executeOracleRun(result.runId);
     }
     res.status(result.replayed ? 200 : 201).json({ success: true, data: result });
+  } catch (error) {
+    sendOracleError(res, error);
+  }
+}
+
+export async function submitOracleCitationFeedback(req: Request, res: Response): Promise<void> {
+  try {
+    const userId = requesterId(req);
+    const turnId = parseOracleObjectId(req.params.turnId);
+    const citationIndex = Number(req.params.index);
+    const ruleId = String(req.body?.ruleId || '').trim();
+    const answer = req.body?.answer === null
+      ? null
+      : String(req.body?.answer || '').trim() as 'yes' | 'no' | 'unsure';
+    if (!Number.isInteger(citationIndex) || citationIndex < 1 || !Types.ObjectId.isValid(ruleId)) {
+      throw new OracleContractError('oracle_invalid_request', 'Invalid citation feedback target.');
+    }
+    if (answer !== null && !['yes', 'no', 'unsure'].includes(answer)) {
+      throw new OracleContractError('oracle_invalid_request', 'Invalid citation feedback answer.');
+    }
+    const turn = await OracleTurn.findOne({
+      _id: turnId,
+      userId,
+      role: 'assistant',
+      status: 'completed',
+    });
+    if (!turn) throw new OracleContractError('oracle_not_found', 'Oracle turn was not found.');
+    const citation = turn.citations.find((item) => item.index === citationIndex);
+    const ruleLink = citation?.ruleLinks?.find((item) => item.ruleId === ruleId);
+    if (!citation || citation.sourceType !== 'academic_source' || !ruleLink?.verificationQuestion) {
+      throw new OracleContractError('oracle_invalid_request', 'This citation has no rule-backed verification question.');
+    }
+    const verifiedRule = await KnowledgeRuleV3.findOne({ _id: ruleId, status: 'verified' })
+      .select('_id')
+      .lean();
+    if (!verifiedRule) {
+      throw new OracleContractError('oracle_invalid_request', 'The linked rule is not approved.');
+    }
+    const verificationKey = ruleLink.verificationKey || `${ruleId}:oracle-citation`;
+    const scoreUpdates = await setRuleValidationFeedback({
+      userId,
+      verificationKey,
+      origin: 'oracle',
+      originId: turn._id as Types.ObjectId,
+      questionText: ruleLink.verificationQuestion,
+      answer,
+      directRuleIds: [ruleId],
+      sourceId: citation.sourceId,
+      exactQuote: ruleLink.quote,
+    });
+    const scoreByRuleId = new Map(scoreUpdates.map((item) => [item.ruleId, item]));
+    for (const storedCitation of turn.citations) {
+      for (const storedLink of storedCitation.ruleLinks || []) {
+        const scoreUpdate = scoreByRuleId.get(storedLink.ruleId);
+        if (scoreUpdate) storedLink.evidenceScore = scoreUpdate.score;
+        if (storedLink.ruleId === ruleId
+          && storedLink.verificationKey === verificationKey) {
+          storedLink.currentUserAnswer = answer;
+        }
+      }
+    }
+    turn.markModified('citations');
+    await turn.save();
+    const directScore = scoreUpdates.find((item) => item.ruleId === ruleId);
+    res.status(200).json({
+      success: true,
+      data: {
+        ruleId,
+        answer,
+        score: directScore?.score ?? ruleLink.evidenceScore,
+        scoreDelta: directScore?.scoreDelta ?? 0,
+        voteDelta: directScore?.voteDelta ?? 0,
+        scoreUpdates,
+      },
+    });
+  } catch (error) {
+    sendOracleError(res, error);
+  }
+}
+
+export async function getOracleCitationDetails(req: Request, res: Response): Promise<void> {
+  try {
+    const userId = requesterId(req);
+    const turnId = parseOracleObjectId(req.params.turnId);
+    const citationIndex = Number(req.params.index);
+    if (!Number.isInteger(citationIndex) || citationIndex < 1) {
+      throw new OracleContractError('oracle_invalid_request', 'Invalid citation index.');
+    }
+    const turn = await OracleTurn.findOne({
+      _id: turnId,
+      userId,
+      role: 'assistant',
+      status: 'completed',
+    });
+    if (!turn) throw new OracleContractError('oracle_not_found', 'Oracle turn was not found.');
+    const citation = turn.citations.find((item) => item.index === citationIndex);
+    if (!citation) throw new OracleContractError('oracle_not_found', 'Oracle citation was not found.');
+    if (citation.sourceType !== 'academic_source') {
+      res.status(200).json({ success: true, data: citation });
+      return;
+    }
+    if (citation.ruleLinks?.length) {
+      if (!citation.year) {
+        const sourceYear = await AcademicSource.findById(citation.sourceId).select('year').lean();
+        if (sourceYear?.year) citation.year = sourceYear.year;
+      }
+      const verificationKeys = citation.ruleLinks
+        .map((rule) => rule.verificationKey || '')
+        .filter(Boolean);
+      const answerByKey = await getCurrentRuleValidationAnswers(userId, verificationKeys);
+      const liveRules = await KnowledgeRuleV3.find({
+        _id: { $in: citation.ruleLinks.map((rule) => rule.ruleId) },
+        status: 'verified',
+      }).select('_id evidenceScore').lean();
+      const scoreByRuleId = new Map(
+        liveRules.map((rule) => [String(rule._id), Number(rule.evidenceScore) || 0]),
+      );
+      for (const link of citation.ruleLinks) {
+        link.localizedStatement = localizeOracleRuleStatement(link);
+        link.localizedVerificationQuestion = localizeOracleVerificationQuestion(
+          link,
+          link.verificationQuestion,
+        );
+        link.currentUserAnswer = link.verificationKey
+          ? answerByKey.get(link.verificationKey) || null
+          : null;
+        link.evidenceScore = scoreByRuleId.get(link.ruleId) ?? link.evidenceScore;
+      }
+      turn.markModified('citations');
+      await turn.save();
+      res.status(200).json({ success: true, data: citation });
+      return;
+    }
+    const academicSource = await AcademicSource.findById(citation.sourceId)
+      .select('_id sourceContributionId year')
+      .lean();
+    if (academicSource?.year) citation.year = academicSource.year;
+    const evidenceSourceIds = [
+      citation.sourceId,
+      academicSource?.sourceContributionId ? String(academicSource.sourceContributionId) : '',
+    ].filter(Boolean);
+    const evidence = await KnowledgeRuleEvidenceV3.find({
+      sourceId: { $in: evidenceSourceIds },
+      stance: 'supports',
+    }).sort({ verificationScore: -1, createdAt: 1 }).lean();
+    const evidenceRuleIds = [...new Set(evidence.map((item) => String(item.ruleId)))];
+    const rules = await KnowledgeRuleV3.find({
+      status: 'verified',
+      $or: [
+        { _id: { $in: evidenceRuleIds } },
+        { 'compositeComponents.sourceRuleId': { $in: evidenceRuleIds } },
+      ],
+    }).lean();
+    const userTurn = turn.parentTurnId
+      ? await OracleTurn.findOne({ _id: turn.parentTurnId, userId, role: 'user' }).lean()
+      : null;
+    const narrative = userTurn?.contentBlocks.map((block) => block.text).join('\n') || '';
+    const ruleShapes = rules.map((rule) => ({
+      ...rule,
+      ruleId: String(rule._id),
+      ruleStatement: rule.statement,
+      factor: rule.subject,
+      outcome: rule.outcome,
+      applicationTier: Number(rule.evidenceScore) >= 60 && Number(rule.supportingSourceCount) >= 2
+        ? 'supported'
+        : 'exploratory',
+    }));
+    const questions = buildRuleGroundedFallbackHypotheses(ruleShapes, narrative);
+    const questionByRuleId = new Map<string, any>();
+    for (const question of questions) {
+      for (const id of resolveQuestionRuleIds(question)) {
+        if (!questionByRuleId.has(id)) questionByRuleId.set(id, question);
+      }
+    }
+    const verificationKeys = questions
+      .map((question) => String(question.verificationKey || ''))
+      .filter(Boolean);
+    const currentAnswerByKey = await getCurrentRuleValidationAnswers(userId, verificationKeys);
+    const links = await Promise.all(rules.map(async (rule) => {
+      const ownerIds = [String(rule._id), ...(rule.compositeComponents || []).map((item) => String(item.sourceRuleId))];
+      const linkedEvidence = evidence.find((item) => ownerIds.includes(String(item.ruleId)));
+      const question = questionByRuleId.get(String(rule._id));
+      return {
+        ruleId: String(rule._id),
+        ruleCode: rule.ruleCode,
+        statement: rule.statement,
+        localizedStatement: localizeOracleRuleStatement(rule),
+        quote: linkedEvidence?.exactQuote || citation.excerpt,
+        evidenceScore: rule.evidenceScore,
+        supportingSourceCount: rule.supportingSourceCount,
+        ...(question ? {
+          verificationKey: String(question.verificationKey || ''),
+          verificationQuestion: String(question.followUpQuestion || ''),
+          localizedVerificationQuestion: localizeOracleVerificationQuestion(
+            rule,
+            question.followUpQuestion,
+          ),
+        } : {}),
+        currentUserAnswer: question?.verificationKey
+          ? currentAnswerByKey.get(String(question.verificationKey)) || null
+          : null,
+      };
+    }));
+    citation.ruleLinks = links;
+    turn.markModified('citations');
+    await turn.save();
+    res.status(200).json({ success: true, data: citation });
   } catch (error) {
     sendOracleError(res, error);
   }

@@ -4,6 +4,7 @@ import SourceContribution from '../../models/SourceContribution';
 import OracleEvidenceGap from '../../models/OracleEvidenceGap';
 import OracleTurn from '../../models/OracleTurn';
 import KnowledgeRuleEvidenceV3 from '../../models/rulesV3/KnowledgeRuleEvidence';
+import { inferDocumentLanguage } from '../rules/documentLanguage.service';
 import type { OracleCitation } from './oracle.types';
 
 function normalize(value: string): string {
@@ -40,7 +41,7 @@ function lexicalSimilarity(left: string, right: string): number {
   return shared / Math.min(a.size, b.size);
 }
 
-function evidenceGapRuleSimilarity(gapClaim: string, ruleText: string): number {
+export function evidenceGapRuleSimilarity(gapClaim: string, ruleText: string): number {
   const lexical = lexicalSimilarity(gapClaim, ruleText);
   const canonicalLexical = lexicalSimilarity(
     canonicalizeOracleEvidenceClaim(gapClaim),
@@ -48,11 +49,62 @@ function evidenceGapRuleSimilarity(gapClaim: string, ruleText: string): number {
   );
   const gapCluster = oracleEvidenceClaimClusterKey(gapClaim);
   const ruleCluster = oracleEvidenceClaimClusterKey(ruleText);
+  const gapHasSemanticCluster = gapCluster.includes('__');
+  const ruleHasSemanticCluster = ruleCluster.includes('__');
+  if (gapHasSemanticCluster && ruleHasSemanticCluster && gapCluster !== ruleCluster) {
+    // Sibling concepts can share most words (for example, memory fragments in
+    // dreams vs. memory plus future concerns) while asserting different
+    // outcomes. Do not let lexical overlap link or resolve the wrong need.
+    return Math.min(0.24, Math.max(lexical, canonicalLexical));
+  }
   // Cluster keys encode bilingual subject/relation/outcome concepts. Equality
   // is stronger than shared words, but remains below certainty: evidence and
   // approval gates still decide whether the gap can actually be resolved.
   const relationMatch = gapCluster && gapCluster === ruleCluster ? 0.72 : 0;
   return Math.max(lexical, canonicalLexical, relationMatch);
+}
+
+export async function findOracleEvidenceNeedsForTexts(
+  texts: string[],
+  limit = 8,
+  sourceLanguage = 'en',
+): Promise<Array<{ gapId: string; claim: string; similarity: number }>> {
+  const searchableText = texts
+    .map(text => String(text || '').replace(/\s+/gu, ' ').trim())
+    .filter(Boolean)
+    .join('\n');
+  if (!searchableText) return [];
+
+  const gaps = await OracleEvidenceGap.find({ status: { $ne: 'resolved' } })
+    .sort({ updatedAt: -1 })
+    .select('_id claim')
+    .lean();
+
+  const wantsVietnamese = sourceLanguage.toLowerCase().startsWith('vi');
+  const matches = gaps
+    .filter(gap => isResearchableOracleEvidenceClaim(String(gap.claim || '')))
+    .map(gap => {
+      const rawClaim = String(gap.claim || '');
+      const localized = localizeOracleEvidenceClaim(rawClaim);
+      const claim = wantsVietnamese ? localized.vi : localized.en;
+      return {
+        gapId: String(gap._id),
+        claimKey: localized.key,
+        claim,
+        similarity: evidenceGapRuleSimilarity(rawClaim, searchableText),
+      };
+    })
+    .filter(match => wantsVietnamese || inferDocumentLanguage([match.claim]) !== 'vi')
+    .filter(match => match.similarity >= 0.28)
+    .sort((left, right) => right.similarity - left.similarity);
+
+  const deduplicated = new Map<string, typeof matches[number]>();
+  for (const match of matches) {
+    if (!deduplicated.has(match.claimKey)) deduplicated.set(match.claimKey, match);
+  }
+  return [...deduplicated.values()]
+    .slice(0, Math.max(0, Math.min(20, limit)))
+    .map(({ gapId, claim, similarity }) => ({ gapId, claim, similarity }));
 }
 
 const EVIDENCE_GAP_STOP_WORDS = new Set([

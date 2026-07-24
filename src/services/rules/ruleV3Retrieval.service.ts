@@ -1,10 +1,8 @@
-import { Types } from 'mongoose';
 import KnowledgeRuleV3 from '../../models/rulesV3/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../../models/rulesV3/KnowledgeRuleEvidence';
 import AcademicChunk from '../../models/AcademicChunk';
 import AcademicSource from '../../models/AcademicSource';
 import SourceContribution from '../../models/SourceContribution';
-import Dream from '../../models/Dream';
 import { generateEmbedding } from '../infrastructure/llm.service';
 import { classifyRuleV3DreamApplication } from './ruleV3DreamApplication.service';
 
@@ -121,7 +119,6 @@ export function rankRuleV3Candidates(
   dreamText: string,
   dreamEmbedding: number[],
   queryLanguage: 'vi' | 'en' | 'unknown',
-  feedbackByRule: Map<string, { supports: number; weakens: number }> = new Map(),
 ) {
   const expandedDreamText = expandDreamRetrievalConcepts(dreamText);
   return rules.map(rule => {
@@ -130,19 +127,13 @@ export function rankRuleV3Candidates(
     const featureOverlap = lexicalOverlap(expandedDreamText, [...(rule.dreamFeatureTags || []), ...componentParts].join(' '));
     const statementOverlap = lexicalOverlap(expandedDreamText, [rule.statement || '', ...componentParts].join(' '));
     const vector = cosine(dreamEmbedding, rule.embedding || []);
-    const feedback = feedbackByRule.get(String(rule._id)) || { supports: 0, weakens: 0 };
-    const answered = feedback.supports + feedback.weakens;
-    const posteriorSupport = (feedback.supports + 1) / (answered + 2);
-    const feedbackConfidence = answered / (answered + 5);
-    const experientialSignal = (posteriorSupport - 0.5) * 2 * feedbackConfidence;
     const semanticGate = Math.max(featureOverlap, lexical, statementOverlap);
     const applicable = conditionIsApplicable(rule, dreamText, expandedDreamText);
     const score = Math.min(1, featureOverlap) * 0.4
       + Math.min(1, lexical) * 0.23
       + Math.min(1, statementOverlap) * 0.12
       + Math.max(0, vector) * 0.15
-      + (rule.evidenceScore / 100) * 0.1
-      + experientialSignal * 0.05;
+      + (rule.evidenceScore / 100) * 0.1;
     const crossLanguage = queryLanguage !== 'unknown' && rule.sourceLanguage && rule.sourceLanguage !== queryLanguage;
     return { rule, score, vector, lexical, featureOverlap, statementOverlap, semanticGate, applicable, crossLanguage };
   })
@@ -164,10 +155,9 @@ export function classifyRuleApplicationTier(rule: any): 'supported' | 'explorato
 }
 
 export async function retrieveApprovedRuleV3(dreamText: string, limit = 4) {
-  // All verified rules may be retrieved for case-level questions. Academic
-  // strength remains a separate tier: weak or single-source rules are marked
-  // exploratory and may collect confirming context, but must not be presented
-  // as established mechanisms or have their score inflated by user feedback.
+  // All verified arguments may be retrieved for case-level questions. The
+  // stored score already includes canonical source evidence and deduplicated
+  // user validation, so retrieval must not add a second feedback signal.
   const rules = await KnowledgeRuleV3.find({
     status: 'verified',
     embedding: { $exists: true, $ne: [] },
@@ -181,52 +171,10 @@ export async function retrieveApprovedRuleV3(dreamText: string, limit = 4) {
       if (component?.sourceRuleId) ownerToPrimaryRuleId.set(String(component.sourceRuleId), primaryId);
     }
   }
-  const feedbackOwnerIds = [...ownerToPrimaryRuleId.keys()];
   const expandedDreamText = expandDreamRetrievalConcepts(dreamText);
   const dreamEmbedding = await generateEmbedding(expandedDreamText);
   const queryLanguage = inferQueryLanguage(dreamText);
-  const feedbackRows = await Dream.aggregate<{
-    _id: { ruleId: string; userId: Types.ObjectId };
-    effect: 'supports' | 'weakens';
-    updatedAt: Date;
-  }>([
-    { $unwind: '$realLifeHypothesesFeedback' },
-    { $match: {
-      'realLifeHypothesesFeedback.ruleId': { $in: feedbackOwnerIds },
-      'realLifeHypothesesFeedback.effect': { $in: ['supports', 'weakens'] }
-    } },
-    { $sort: { 'realLifeHypothesesFeedback.updatedAt': -1 } },
-    { $group: {
-      _id: {
-        ruleId: '$realLifeHypothesesFeedback.ruleId',
-        userId: '$realLifeHypothesesFeedback.userId',
-      },
-      effect: { $first: '$realLifeHypothesesFeedback.effect' },
-      updatedAt: { $first: '$realLifeHypothesesFeedback.updatedAt' },
-    } },
-  ]);
-  const feedbackByRuleAndUser = new Map<string, Map<string, {
-    effect: 'supports' | 'weakens';
-    updatedAt: number;
-  }>>();
-  for (const row of feedbackRows) {
-    const primaryRuleId = ownerToPrimaryRuleId.get(row._id.ruleId) || row._id.ruleId;
-    const userId = String(row._id.userId);
-    const byUser = feedbackByRuleAndUser.get(primaryRuleId) || new Map();
-    const updatedAt = new Date(row.updatedAt || 0).getTime();
-    const existing = byUser.get(userId);
-    if (!existing || updatedAt >= existing.updatedAt) {
-      byUser.set(userId, { effect: row.effect, updatedAt });
-    }
-    feedbackByRuleAndUser.set(primaryRuleId, byUser);
-  }
-  const feedbackByRule = new Map<string, { supports: number; weakens: number }>();
-  for (const [primaryRuleId, byUser] of feedbackByRuleAndUser) {
-    const counts = { supports: 0, weakens: 0 };
-    for (const feedback of byUser.values()) counts[feedback.effect] += 1;
-    feedbackByRule.set(primaryRuleId, counts);
-  }
-  const ranked = rankRuleV3Candidates(rules, dreamText, dreamEmbedding, queryLanguage, feedbackByRule).slice(0, limit);
+  const ranked = rankRuleV3Candidates(rules, dreamText, dreamEmbedding, queryLanguage).slice(0, limit);
   if (!ranked.length) return { rules: [], evidenceLinks: [] };
 
   const rankedOwnerToPrimary = new Map<string, string>();
@@ -249,8 +197,6 @@ export async function retrieveApprovedRuleV3(dreamText: string, limit = 4) {
   const sourceMap = new Map([...sources, ...contributions].map(source => [String(source._id), source]));
 
   const mappedRules = ranked.map(({ rule, score, vector, lexical, featureOverlap, statementOverlap }) => {
-    const feedback = feedbackByRule.get(String(rule._id)) || { supports: 0, weakens: 0 };
-    const resolvedFeedback = feedback.supports + feedback.weakens;
     const evidenceScore = Number(rule.evidenceScore) || 0;
     const supportingSourceCount = Number(rule.supportingSourceCount) || 0;
     const applicationTier = classifyRuleApplicationTier(rule);
@@ -276,12 +222,6 @@ export async function retrieveApprovedRuleV3(dreamText: string, limit = 4) {
     dreamFeatureTags: rule.dreamFeatureTags || [],
     retrievalScore: score,
     retrievalSignals: { vector, lexical, featureOverlap, statementOverlap },
-    applicationFeedback: {
-      supports: feedback.supports,
-      weakens: feedback.weakens,
-      resolvedObservations: resolvedFeedback,
-      smoothedApplicability: (feedback.supports + 2) / (resolvedFeedback + 4)
-    },
     applicationRole: classifyRuleV3DreamApplication(rule),
     isComposite: Boolean(rule.isComposite),
     compositeComponents: (rule.compositeComponents || []).map((component: any) => ({

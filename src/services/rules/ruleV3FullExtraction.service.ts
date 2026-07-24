@@ -11,12 +11,24 @@ import { logger } from '../infrastructure/logger';
 import { RULE_V3_SCORING_VERSION, scoreRuleV3 } from './ruleV3Scoring.service';
 import { classifyRuleV3Relationship } from './ruleV3Relationship.service';
 import { removeRuleV3SourceData, resolveRuleV3SourceAliases } from './ruleV3Lifecycle.service';
-import { linkOracleEvidenceGapCandidatesForRules } from '../oracle/oracleEvidenceGap.service';
+import {
+  findOracleEvidenceNeedsForTexts,
+  linkOracleEvidenceGapCandidatesForRules,
+} from '../oracle/oracleEvidenceGap.service';
+import {
+  backupRuleV3TouchedRule,
+  commitRuleV3MutationJournal,
+  isRuleV3MutationCommitted,
+  markRuleV3MutationApplying,
+  prepareRuleV3MutationJournal,
+  registerRuleV3NewRule,
+  rollbackRuleV3MutationJournal,
+} from './ruleV3ReplacementJournal.service';
 
-const ENGINE_VERSION = 'rule-v3-full-2';
-const PROMPT_VERSION = 'rule-v3-evidence-ref-1';
+const ENGINE_VERSION = 'rule-v3-full-3';
+const PROMPT_VERSION = 'rule-v3-evidence-ref-2';
 const SCORING_VERSION = RULE_V3_SCORING_VERSION;
-const activeRuns = new Map<string, Promise<void>>();
+const activeRuns = new Map<string, { task: Promise<void>; controller: AbortController }>();
 const MAX_ATTEMPT_HISTORY = 10;
 const MAX_REJECTION_DIAGNOSTICS = 50;
 
@@ -58,7 +70,7 @@ export interface RuleV3FullRunOptions {
 }
 
 function toAttemptSnapshot(run: any) {
-  if (!run?.startedAt || !['success', 'failed'].includes(run.status)) return null;
+  if (!run?.startedAt || !['success', 'failed', 'cancelled'].includes(run.status)) return null;
   const finishedAt = run.finishedAt ? new Date(run.finishedAt) : undefined;
   const startedAt = new Date(run.startedAt);
   return {
@@ -81,36 +93,14 @@ function toAttemptSnapshot(run: any) {
   };
 }
 
-interface SourceRuleBackup {
-  rules: any[];
-  evidence: any[];
-}
-
-async function captureSourceRuleBackup(sourceAliases: mongoose.Types.ObjectId[]): Promise<SourceRuleBackup> {
-  const evidence = await KnowledgeRuleEvidenceV3.find({ sourceId: { $in: sourceAliases } }).lean();
-  const ruleIds = [...new Set(evidence.map(item => String(item.ruleId)))].map(id => new mongoose.Types.ObjectId(id));
-  const rules = ruleIds.length ? await KnowledgeRuleV3.find({ _id: { $in: ruleIds } }).lean() : [];
-  return { rules, evidence };
-}
-
-async function restoreSourceRuleBackup(
-  backup: SourceRuleBackup,
-  sourceAliases: mongoose.Types.ObjectId[],
-  newlyCreatedRuleIds: mongoose.Types.ObjectId[],
-  touchedExistingRuleBackups: Map<string, any>
-): Promise<void> {
-  await KnowledgeRuleEvidenceV3.deleteMany({ sourceId: { $in: sourceAliases } });
-  if (newlyCreatedRuleIds.length) {
-    await KnowledgeRuleEvidenceV3.deleteMany({ ruleId: { $in: newlyCreatedRuleIds } });
-    await KnowledgeRuleV3.deleteMany({ _id: { $in: newlyCreatedRuleIds } });
-  }
-  for (const rule of backup.rules) {
-    await KnowledgeRuleV3.replaceOne({ _id: rule._id }, rule, { upsert: true });
-  }
-  for (const rule of touchedExistingRuleBackups.values()) {
-    await KnowledgeRuleV3.replaceOne({ _id: rule._id }, rule, { upsert: true });
-  }
-  if (backup.evidence.length) await KnowledgeRuleEvidenceV3.insertMany(backup.evidence, { ordered: true });
+async function updateAttemptRun(runId: string, attemptId: string, update: Record<string, unknown>) {
+  const run = await AcademicRuleExtractionRunV3.findOneAndUpdate(
+    { _id: runId, attemptId, status: 'pending' },
+    update,
+    { new: true },
+  );
+  if (!run) throw new Error('attempt_superseded');
+  return run;
 }
 
 export async function startRuleV3FullExtraction(
@@ -130,7 +120,17 @@ export async function startRuleV3FullExtraction(
     scoringFormulaVersion: SCORING_VERSION
   };
 
-  const previousRun = await AcademicRuleExtractionRunV3.findOne(fingerprint).lean();
+  let previousRun = await AcademicRuleExtractionRunV3.findOne(fingerprint).lean();
+  const sourceAliases = await resolveRuleV3SourceAliases(sourceId);
+  if (previousRun?.status === 'pending') {
+    const previousAttemptId = String(previousRun.attemptId || '');
+    if (!previousAttemptId || activeRuns.has(`${String(previousRun._id)}:${previousAttemptId}`)) {
+      return { runId: String(previousRun._id), reused: true, status: 'pending' };
+    }
+    // A pending run without a local controller may belong to another API
+    // instance. Do not steal or roll it back from a request handler.
+    return { runId: String(previousRun._id), reused: true, status: 'pending' };
+  }
   const completed = options.replaceExisting || previousRun?.status !== 'success' ? null : previousRun;
   if (completed) {
     const resultIds = completed.resultRuleIds || [];
@@ -143,17 +143,18 @@ export async function startRuleV3FullExtraction(
     }
   }
 
-  const sourceAliases = await resolveRuleV3SourceAliases(sourceId);
   const previousSnapshot = options.replaceExisting ? toAttemptSnapshot(previousRun) : null;
   const attemptHistory = [
     ...((previousRun?.attemptHistory || []) as any[]),
     ...(previousSnapshot ? [previousSnapshot] : [])
   ].slice(-MAX_ATTEMPT_HISTORY);
 
+  const attemptId = crypto.randomUUID();
   const run = await AcademicRuleExtractionRunV3.findOneAndUpdate(
     fingerprint,
     {
       $set: {
+        attemptId,
         status: 'pending',
         currentStage: 'initializing',
         totalBatches: raw.evidencePlan.batches.length,
@@ -177,29 +178,40 @@ export async function startRuleV3FullExtraction(
   );
 
   const runId = String(run._id);
-  if (!activeRuns.has(runId)) {
-    const task = executeRuleV3FullExtraction(runId, sourceId, sourceAliases, raw, provider, options.replaceExisting === true)
-      .finally(() => activeRuns.delete(runId));
-    activeRuns.set(runId, task);
+  const activeKey = `${runId}:${attemptId}`;
+  if (!activeRuns.has(activeKey)) {
+    const controller = new AbortController();
+    const task = executeRuleV3FullExtraction(
+      runId,
+      attemptId,
+      sourceId,
+      sourceAliases,
+      raw,
+      provider,
+      options.replaceExisting === true,
+      controller.signal,
+    ).finally(() => activeRuns.delete(activeKey));
+    activeRuns.set(activeKey, { task, controller });
   }
   return { runId, reused: false, status: 'pending' };
 }
 
 async function executeRuleV3FullExtraction(
   runId: string,
+  attemptId: string,
   sourceId: string,
   sourceAliases: mongoose.Types.ObjectId[],
   raw: Awaited<ReturnType<typeof buildRuleV3PlanPreviewRaw>>,
   provider: RuleV3GenerationProvider,
-  replaceExisting: boolean
+  replaceExisting: boolean,
+  abortSignal: AbortSignal,
 ): Promise<void> {
-  let replacementBackup: SourceRuleBackup | null = null;
-  let replacementApplied = false;
-  let replacementRestored = false;
+  let mutationJournalId: string | null = null;
+  let mutationRolledBack = false;
   const newlyCreatedRuleIds: mongoose.Types.ObjectId[] = [];
   const touchedExistingRuleBackups = new Map<string, any>();
   try {
-    await AcademicRuleExtractionRunV3.findByIdAndUpdate(runId, {
+    await updateAttemptRun(runId, attemptId, {
       currentStage: 'extracting_candidates',
       processedBatches: 0,
       rawCandidateCount: 0,
@@ -215,6 +227,19 @@ async function executeRuleV3FullExtraction(
     }
 
     const chunkTextById = new Map(raw.chunks.map((chunk: any) => [String(chunk._id), String(chunk.text || '')]));
+    const evidenceNeeds = await findOracleEvidenceNeedsForTexts(
+      raw.evidencePlan.batches.flatMap((batch: any) =>
+        batch.chunks.map((chunk: any) => String(chunk.text || '')),
+      ),
+      8,
+      raw.profile.sourceLanguage,
+    ).catch((error) => {
+      logger.warn('Could not load Oracle evidence needs for Rule V3 extraction.', {
+        runId,
+        errorName: error instanceof Error ? error.name : 'Error',
+      });
+      return [];
+    });
     const merged = new Map<string, any>();
     let rawCount = 0;
     let rejectedCount = 0;
@@ -227,6 +252,7 @@ async function executeRuleV3FullExtraction(
     }> = [];
 
     for (const batch of raw.evidencePlan.batches) {
+      if (abortSignal.aborted) throw new Error('user_cancelled');
       const unit = workUnitByBatch.get(batch.batchId);
       if (!unit) continue;
       const oneBatchUnit = { ...unit, batchIds: [batch.batchId], batchCount: 1 };
@@ -246,7 +272,9 @@ async function executeRuleV3FullExtraction(
             readerChunkCount: raw.chunks.length
           },
           unit.workUnitId,
-          provider
+          provider,
+          abortSignal,
+          evidenceNeeds.map(({ gapId, claim }) => ({ gapId, claim })),
         );
       } catch (error: any) {
         if (error?.message !== 'provider_schema_invalid') throw error;
@@ -255,7 +283,7 @@ async function executeRuleV3FullExtraction(
           rejectionDiagnostics.push({
             batchId: batch.batchId,
             reasonCode: 'provider_schema_invalid',
-            safeMessage: 'Mô hình trả về quy luật không đúng cấu trúc bắt buộc.'
+            safeMessage: 'Mô hình trả về lập luận không đúng cấu trúc bắt buộc.'
           });
         }
         processed += 1;
@@ -263,7 +291,7 @@ async function executeRuleV3FullExtraction(
           runId,
           batchId: batch.batchId
         });
-        await AcademicRuleExtractionRunV3.findByIdAndUpdate(runId, {
+        await updateAttemptRun(runId, attemptId, {
           processedBatches: processed,
           rejectedCandidateCount: rejectedCount,
           rejectionDiagnostics
@@ -303,7 +331,7 @@ async function executeRuleV3FullExtraction(
       }
 
       processed += 1;
-      await AcademicRuleExtractionRunV3.findByIdAndUpdate(runId, {
+      await updateAttemptRun(runId, attemptId, {
         processedBatches: processed,
         rawCandidateCount: rawCount,
         verifiedCandidateCount: merged.size,
@@ -312,12 +340,19 @@ async function executeRuleV3FullExtraction(
       });
     }
 
-    if (replaceExisting && merged.size > 0) {
-      replacementBackup = await captureSourceRuleBackup(sourceAliases);
-      await removeRuleV3SourceData(sourceId);
-      replacementApplied = true;
+    if (abortSignal.aborted) throw new Error('user_cancelled');
+    if (merged.size > 0) {
+      mutationJournalId = await prepareRuleV3MutationJournal({
+        runId,
+        attemptId,
+        sourceId,
+        sourceAliases,
+        replaceExisting,
+      });
+      await markRuleV3MutationApplying(mutationJournalId);
+      if (replaceExisting) await removeRuleV3SourceData(sourceId);
     }
-    await AcademicRuleExtractionRunV3.findByIdAndUpdate(runId, { currentStage: 'saving_candidates' });
+    await updateAttemptRun(runId, attemptId, { currentStage: 'saving_candidates' });
     const resultRuleIds: mongoose.Types.ObjectId[] = [];
     let savedCount = 0;
     let mergedCount = 0;
@@ -327,12 +362,16 @@ async function executeRuleV3FullExtraction(
     });
 
     for (const candidate of merged.values()) {
+      if (abortSignal.aborted) throw new Error('user_cancelled');
       let newlyCreatedRuleId: mongoose.Types.ObjectId | null = null;
       try {
         const existing = comparableRules.find(rule => rule.dedupKey === candidate.dedupKey)
           || comparableRules.find(rule => classifyRuleV3Relationship(rule, candidate) === 'equivalent');
         if (existing && !touchedExistingRuleBackups.has(String(existing._id))) {
           touchedExistingRuleBackups.set(String(existing._id), existing.toObject());
+          if (mutationJournalId) {
+            await backupRuleV3TouchedRule(mutationJournalId, existing.toObject());
+          }
         }
         const rule = existing || new KnowledgeRuleV3({
           status: 'pending',
@@ -377,6 +416,7 @@ async function executeRuleV3FullExtraction(
               $setOnInsert: {
                 sourceId: new mongoose.Types.ObjectId(sourceId),
                 extractionRunId: new mongoose.Types.ObjectId(runId),
+                extractionAttemptId: attemptId,
                 exactQuote: evidence.exactQuote,
                 quoteHash,
                 exactness: 'canonical_exact',
@@ -393,6 +433,7 @@ async function executeRuleV3FullExtraction(
         if (evidenceWrites.length === 0) throw new Error('candidate_has_no_persistable_evidence');
 
         if (!existing) {
+          if (mutationJournalId) await registerRuleV3NewRule(mutationJournalId, rule._id);
           await rule.save();
           comparableRules.push(rule);
           newlyCreatedRuleId = rule._id;
@@ -403,8 +444,18 @@ async function executeRuleV3FullExtraction(
         }
         const persistedEvidence = await KnowledgeRuleEvidenceV3.find({ ruleId: rule._id }).lean();
         const score = scoreRuleV3(rule, persistedEvidence);
-        rule.evidenceScore = score.evidenceScore;
-        rule.certaintyTier = score.certaintyTier;
+        rule.sourceEvidenceScore = score.evidenceScore;
+        rule.evidenceScore = Math.max(
+          0,
+          Math.min(100, score.evidenceScore + (Number(rule.userValidationAdjustment) || 0)),
+        );
+        rule.certaintyTier = rule.evidenceScore >= 85
+          ? 'strong'
+          : rule.evidenceScore >= 65
+            ? 'moderate'
+            : rule.evidenceScore >= 45
+              ? 'limited'
+              : 'weak';
         rule.supportingSourceCount = score.supportingSourceCount;
         rule.contradictingSourceCount = score.contradictingSourceCount;
         await rule.save();
@@ -424,7 +475,7 @@ async function executeRuleV3FullExtraction(
           rejectionDiagnostics.push({
             batchId: 'persistence',
             reasonCode: 'candidate_persistence_invalid',
-            safeMessage: 'Quy luật vượt qua kiểm chứng nhưng không đáp ứng hợp đồng lưu trữ.',
+            safeMessage: 'Lập luận vượt qua kiểm chứng nhưng không đáp ứng hợp đồng lưu trữ.',
             proposedStatement: candidate.statement?.slice(0, 300)
           });
         }
@@ -438,24 +489,39 @@ async function executeRuleV3FullExtraction(
     }
 
     const allVerifiedCandidatesRejected = merged.size > 0 && resultRuleIds.length === 0;
-    const incompleteReplacement = replaceExisting && merged.size > 0 && resultRuleIds.length !== merged.size;
-    if ((allVerifiedCandidatesRejected || incompleteReplacement) && replacementApplied && replacementBackup) {
-      await restoreSourceRuleBackup(
-        replacementBackup,
-        sourceAliases,
-        newlyCreatedRuleIds,
-        touchedExistingRuleBackups
-      );
-      replacementRestored = true;
+    const incompleteMutation = merged.size > 0 && resultRuleIds.length !== merged.size;
+    if ((allVerifiedCandidatesRejected || incompleteMutation) && mutationJournalId) {
+      await rollbackRuleV3MutationJournal(mutationJournalId);
+      mutationRolledBack = true;
     }
-    const replacementFailed = allVerifiedCandidatesRejected || incompleteReplacement;
-    const finalRuleIds = replacementFailed ? [] : resultRuleIds;
+    const mutationFailed = allVerifiedCandidatesRejected || incompleteMutation;
+    const finalRuleIds = mutationFailed ? [] : resultRuleIds;
     const evidenceChunkIds = finalRuleIds.length > 0
       ? await KnowledgeRuleEvidenceV3.distinct('chunkId', {
         ruleId: { $in: finalRuleIds },
         sourceId: { $in: sourceAliases }
       })
       : [];
+    if (abortSignal.aborted) throw new Error('user_cancelled');
+    if (!mutationFailed && mutationJournalId) {
+      await commitRuleV3MutationJournal(mutationJournalId);
+    }
+    await updateAttemptRun(runId, attemptId, {
+      status: mutationFailed ? 'failed' : 'success',
+      currentStage: mutationFailed ? 'failed' : 'completed',
+      processedBatches: raw.evidencePlan.batches.length,
+      verifiedCandidateCount: merged.size,
+      savedCandidateCount: mutationFailed ? 0 : savedCount,
+      mergedCandidateCount: mutationFailed ? 0 : mergedCount,
+      rejectedCandidateCount: rejectedCount,
+      rejectionDiagnostics,
+      evidenceChunkCount: evidenceChunkIds.length,
+      resultRuleIds: finalRuleIds,
+      sanitizedErrorCode: mutationFailed
+        ? (incompleteMutation ? 'candidate_persistence_incomplete' : 'all_verified_candidates_rejected')
+      : undefined,
+      finishedAt: new Date()
+    });
     if (finalRuleIds.length > 0) {
       const extractedRules = await KnowledgeRuleV3.find({ _id: { $in: finalRuleIds } })
         .select('_id statement subject outcome status evidenceScore supportingSourceCount')
@@ -467,45 +533,69 @@ async function executeRuleV3FullExtraction(
         });
       });
     }
-    await AcademicRuleExtractionRunV3.findByIdAndUpdate(runId, {
-      status: replacementFailed ? 'failed' : 'success',
-      currentStage: replacementFailed ? 'failed' : 'completed',
-      processedBatches: raw.evidencePlan.batches.length,
-      verifiedCandidateCount: merged.size,
-      savedCandidateCount: replacementFailed ? 0 : savedCount,
-      mergedCandidateCount: replacementFailed ? 0 : mergedCount,
-      rejectedCandidateCount: rejectedCount,
-      rejectionDiagnostics,
-      evidenceChunkCount: evidenceChunkIds.length,
-      resultRuleIds: finalRuleIds,
-      sanitizedErrorCode: replacementFailed
-        ? (incompleteReplacement ? 'replacement_persistence_incomplete' : 'all_verified_candidates_rejected')
-        : undefined,
-      finishedAt: new Date()
-    });
   } catch (error: any) {
-    if (replacementApplied && !replacementRestored && replacementBackup) {
+    let rollbackFailed = false;
+    if (mutationJournalId && !mutationRolledBack) {
       try {
-        await restoreSourceRuleBackup(
-          replacementBackup,
-          sourceAliases,
-          newlyCreatedRuleIds,
-          touchedExistingRuleBackups
-        );
-        replacementRestored = true;
+        await rollbackRuleV3MutationJournal(mutationJournalId);
+        mutationRolledBack = true;
       } catch (restoreError: any) {
-        logger.error('Rule V3 replacement rollback failed.', restoreError, { runId });
+        rollbackFailed = true;
+        logger.error('Rule V3 mutation rollback failed.', restoreError, { runId, attemptId });
       }
     }
+    const cancellationRequested = abortSignal.aborted || error?.message === 'user_cancelled' || error?.name === 'AbortError';
+    const cancelled = cancellationRequested && !rollbackFailed;
     const safeCodes = new Set(['provider_unavailable', 'provider_timeout', 'provider_schema_invalid', 'input_too_large']);
-    await AcademicRuleExtractionRunV3.findByIdAndUpdate(runId, {
-      status: 'failed',
-      currentStage: 'failed',
-      sanitizedErrorCode: safeCodes.has(error?.message) ? error.message : 'extraction_failed',
-      finishedAt: new Date()
-    });
-    logger.error('Rule V3 full extraction failed.', error, { runId });
+    await AcademicRuleExtractionRunV3.updateOne(
+      { _id: runId, attemptId, status: 'pending' },
+      {
+        $set: {
+          status: cancelled ? 'cancelled' : 'failed',
+          currentStage: cancelled ? 'cancelled' : 'failed',
+          sanitizedErrorCode: rollbackFailed
+            ? 'rollback_failed'
+            : cancelled
+              ? 'user_cancelled'
+              : safeCodes.has(error?.message)
+                ? error.message
+                : 'extraction_failed',
+          finishedAt: new Date()
+        }
+      },
+    );
+    if (!cancelled) logger.error('Rule V3 full extraction failed.', error, { runId });
   }
+}
+
+export async function cancelRuleV3FullExtraction(runId: string): Promise<boolean> {
+  if (!mongoose.Types.ObjectId.isValid(runId)) return false;
+  const run = await AcademicRuleExtractionRunV3.findById(runId).select('status attemptId');
+  if (!run || run.status !== 'pending') return false;
+  const attemptId = String(run.attemptId || '');
+  const active = activeRuns.get(`${runId}:${attemptId}`);
+  active?.controller.abort();
+  if (active) {
+    await active.task;
+  } else if (attemptId) {
+    await rollbackRuleV3MutationJournal(attemptId, { markRunCancelled: true });
+  }
+  if (attemptId && await isRuleV3MutationCommitted(attemptId)) return false;
+  let finalRun = await AcademicRuleExtractionRunV3.findOne({ _id: runId, attemptId }).select('status');
+  if (finalRun?.status === 'success') return false;
+  await AcademicRuleExtractionRunV3.updateOne(
+    { _id: runId, attemptId, status: 'pending' },
+    {
+      $set: {
+        status: 'cancelled',
+        currentStage: 'cancelled',
+        sanitizedErrorCode: 'user_cancelled',
+        finishedAt: new Date(),
+      },
+    },
+  );
+  finalRun = await AcademicRuleExtractionRunV3.findOne({ _id: runId, attemptId }).select('status');
+  return finalRun?.status === 'cancelled';
 }
 
 export async function getRuleV3FullRun(runId: string) {

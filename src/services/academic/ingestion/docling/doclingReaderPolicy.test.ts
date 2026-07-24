@@ -61,4 +61,158 @@ assert.equal(
 );
 assert.equal(ordered.find(item => item.id === 'next-author')?.text, 'V. Loukola et al. (2021). Another study.', 'next author entry must remain separate');
 
-console.log('DOCLING READER POLICY: 19 PASSED, 0 FAILED');
+const illustratedBookItems: DoclingItem[] = [
+  {
+    id: 'inline-figure-1-caption',
+    type: 'paragraph',
+    text: 'Body prose ends here. Hình 1: The large image at the top of the next page.',
+    pageNumber: 20,
+    bbox: [250, 560, 430, 370],
+  },
+  {
+    id: 'already-captioned-previous-figure',
+    type: 'figure',
+    text: '',
+    caption: 'Hình trang bên: A different image on this page.',
+    pageNumber: 20,
+    bbox: [57, 353, 430, 205],
+  },
+  {
+    id: 'figure-1',
+    type: 'figure',
+    text: '',
+    pageNumber: 21,
+    bbox: [69, 675, 445, 357],
+  },
+  {
+    id: 'figure-2',
+    type: 'figure',
+    text: '',
+    pageNumber: 21,
+    bbox: [70, 326, 183, 126],
+  },
+  {
+    id: 'figure-2-caption',
+    type: 'paragraph',
+    text: 'Hình 2: The image on the lower left.',
+    pageNumber: 21,
+    bbox: [193, 175, 338, 118],
+  },
+  {
+    id: 'figure-3-caption',
+    type: 'paragraph',
+    text: 'Hình 3: The image on the lower right.',
+    pageNumber: 21,
+    bbox: [193, 111, 327, 70],
+  },
+  {
+    id: 'figure-3',
+    type: 'figure',
+    text: '',
+    pageNumber: 21,
+    bbox: [346, 326, 486, 159],
+  },
+];
+const illustratedCaptionMap = new Map<string, string>();
+const evaluateIllustration = (id: string) => {
+  const item = illustratedBookItems.find(candidate => candidate.id === id)!;
+  return DoclingReaderPolicyService.evaluateItem(item, illustratedCaptionMap, illustratedBookItems);
+};
+
+assert.equal(
+  evaluateIllustration('figure-1').captionText,
+  'Hình 1: The large image at the top of the next page.',
+  'an inline caption carried from the preceding page must match the first image in a complete cluster',
+);
+assert.equal(
+  evaluateIllustration('figure-2').captionText,
+  'Hình 2: The image on the lower left.',
+  'a central caption column must match the lower-left image by cluster order',
+);
+assert.equal(
+  evaluateIllustration('figure-3').captionText,
+  'Hình 3: The image on the lower right.',
+  'a central caption column must match the lower-right image by cluster order',
+);
+assert.equal(
+  evaluateIllustration('inline-figure-1-caption').isExcluded,
+  false,
+  'body prose containing a trailing caption must not be discarded wholesale',
+);
+assert.equal(
+  evaluateIllustration('inline-figure-1-caption').textOverride,
+  'Body prose ends here.',
+  'a trailing caption linked to a figure must be removed from its body paragraph',
+);
+assert.equal(
+  evaluateIllustration('figure-2-caption').isExcluded,
+  true,
+  'a standalone clustered caption must not be duplicated as a paragraph',
+);
+
+const untitledIllustrations: DoclingItem[] = [
+  {
+    id: 'body',
+    type: 'paragraph',
+    text: 'This page contains enough explanatory body prose to establish that the surrounding raster belongs to the document content.',
+    pageNumber: 30,
+  },
+  {
+    id: 'large-unique',
+    type: 'figure',
+    text: '',
+    pageNumber: 30,
+    bbox: [60, 500, 300, 250],
+    figureType: 'embedded',
+    filePath: '/tmp/unique.png',
+    width: 480,
+    height: 500,
+    imageHash: 'unique-image',
+  },
+  {
+    id: 'small-logo',
+    type: 'figure',
+    text: '',
+    pageNumber: 30,
+    bbox: [20, 760, 90, 730],
+    figureType: 'embedded',
+    filePath: '/tmp/logo.png',
+    width: 140,
+    height: 60,
+    imageHash: 'small-logo',
+  },
+  {
+    id: 'repeated-logo-1',
+    type: 'figure',
+    text: '',
+    pageNumber: 30,
+    bbox: [60, 500, 300, 250],
+    figureType: 'embedded',
+    filePath: '/tmp/repeated-1.png',
+    width: 480,
+    height: 500,
+    imageHash: 'repeated-logo',
+  },
+  {
+    id: 'repeated-logo-2',
+    type: 'figure',
+    text: '',
+    pageNumber: 31,
+    bbox: [60, 500, 300, 250],
+    figureType: 'embedded',
+    filePath: '/tmp/repeated-2.png',
+    width: 480,
+    height: 500,
+    imageHash: 'repeated-logo',
+  },
+];
+const evaluateUntitled = (id: string) => {
+  const item = untitledIllustrations.find(candidate => candidate.id === id)!;
+  return DoclingReaderPolicyService.evaluateItem(item, new Map(), untitledIllustrations);
+};
+
+assert.equal(evaluateUntitled('large-unique').isExcluded, false, 'a substantial unique untitled illustration must remain');
+assert.equal(evaluateUntitled('small-logo').isExcluded, true, 'a small logo-like raster must remain excluded');
+assert.equal(evaluateUntitled('repeated-logo-1').isExcluded, true, 'a repeated raster must remain excluded');
+
+console.log('DOCLING READER POLICY: 28 PASSED, 0 FAILED');

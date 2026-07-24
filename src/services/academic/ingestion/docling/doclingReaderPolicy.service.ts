@@ -4,6 +4,7 @@ export interface DoclingPolicyResult {
   isExcluded: boolean;
   blockTypeOverride?: 'title' | 'heading' | 'paragraph' | 'list_item' | 'reference' | 'table' | 'figure';
   captionText?: string;
+  textOverride?: string;
 }
 
 type BBox = [number, number, number, number];
@@ -242,6 +243,25 @@ export class DoclingReaderPolicyService {
     return /^(figure|fig\.|fig|hình|hinh|hđ\.)\s*\d+/i.test(clean);
   }
 
+  private static extractNumberedFigureCaption(
+    item: DoclingItem
+  ): { item: DoclingItem; number: number; text: string; standalone: boolean } | undefined {
+    const text = item.text.trim();
+    const pattern = /(?:^|(?<=[.!?]\s))((?:figure|fig\.?|hình|hinh)\s*(\d+)\s*[:.−–—-]\s*[\s\S]+)$/iu;
+    const match = text.match(pattern);
+    const caption = match?.[1]?.trim();
+    const number = Number.parseInt(match?.[2] || '', 10);
+    if (!caption || !Number.isFinite(number) || caption.length < 18 || caption.length > 700) {
+      return undefined;
+    }
+    return {
+      item,
+      number,
+      text: caption,
+      standalone: text === caption,
+    };
+  }
+
   private static horizontalOverlap(a: BBox, b: BBox): number {
     return Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0]));
   }
@@ -329,12 +349,32 @@ export class DoclingReaderPolicyService {
     }
     if (this.isPageFurnitureOrMetadata(item, text, allItems)) return { isExcluded: true };
 
+    const trailingCaption = this.extractNumberedFigureCaption(item);
+    if (
+      trailingCaption &&
+      !trailingCaption.standalone &&
+      allItems.some((candidate) =>
+        candidate.type === 'figure' &&
+        this.findClusteredFigureCaption(candidate, allItems)?.id === item.id
+      )
+    ) {
+      const captionStart = text.lastIndexOf(trailingCaption.text);
+      const bodyText = captionStart > 0 ? text.slice(0, captionStart).trim() : '';
+      if (bodyText) return { isExcluded: false, textOverride: bodyText };
+    }
+
     // A scientific figure owns its caption. Do not emit the same caption as a
     // loose paragraph immediately before the figure block.
     if (
       (item.type === 'caption' || this.isFigureCaptionText(text)) &&
       allItems.some((candidate) =>
-        candidate.type === 'figure' && this.findNearbyFigureCaption(candidate, allItems)?.id === item.id
+        candidate.type === 'figure' && (
+          this.findNearbyFigureCaption(candidate, allItems)?.id === item.id ||
+          (
+            this.extractNumberedFigureCaption(item)?.standalone &&
+            this.findClusteredFigureCaption(candidate, allItems)?.id === item.id
+          )
+        )
       )
     ) {
       return { isExcluded: true };
@@ -351,11 +391,17 @@ export class DoclingReaderPolicyService {
     }
 
     if (item.type === 'figure') {
-      if (!this.verifyFigureScientificEvidence(item, allItems)) return { isExcluded: true };
+      const linkedCaption =
+        item.caption?.trim() ||
+        this.findNearbyFigureCaption(item, allItems)?.text ||
+        this.findClusteredFigureCaption(item, allItems)?.text;
+      if (!linkedCaption && !this.verifyStrictUntitledFigure(item, allItems)) {
+        return { isExcluded: true };
+      }
       return {
         isExcluded: false,
         blockTypeOverride: 'figure',
-        captionText: item.caption || this.findNearbyFigureCaption(item, allItems)?.text
+        captionText: linkedCaption || this.buildUntitledFigureCaption(item, allItems)
       };
     }
 
@@ -373,6 +419,22 @@ export class DoclingReaderPolicyService {
     if (!text) return true;
     if (/^WKH$/i.test(text)) return true;
     if (/Sd,Lh/i.test(text)) return true;
+    const folded = text
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+    // Distribution/watermark notices from scanned community copies are not
+    // book content. Their OCR is often severely damaged and must not become
+    // canonical reader prose or RAG material.
+    if (
+      folded === 'luu y gui toi ban doc' ||
+      folded.includes('thuviennotion') ||
+      (folded.includes('ung ho nhom') && folded.includes('cam on')) ||
+      (folded.includes('book') && folded.includes('danh dau') && folded.includes('cong khai')) ||
+      (folded.startsWith('sach ') && /suu\s+[tf]am/u.test(folded))
+    ) return true;
     return false;
   }
 
@@ -458,7 +520,113 @@ export class DoclingReaderPolicyService {
       .sort((a, b) => Math.abs(figureBox[3] - (a.bbox as BBox)[1]) - Math.abs(figureBox[3] - (b.bbox as BBox)[1]))[0];
   }
 
-  private static verifyFigureScientificEvidence(item: DoclingItem, allItems: DoclingItem[]): boolean {
-    return Boolean(item.caption?.trim() || this.findNearbyFigureCaption(item, allItems));
+  /**
+   * Illustrated books often put several images around a central caption
+   * column. In that layout, no caption horizontally overlaps its image.
+   * Associate only a complete, consecutively numbered cluster so a loose
+   * "see Figure N" reference cannot pull an unrelated logo into the reader.
+   */
+  private static findClusteredFigureCaption(
+    item: DoclingItem,
+    allItems: DoclingItem[]
+  ): DoclingItem | undefined {
+    if (!item.bbox || item.type !== 'figure') return undefined;
+
+    const pageFigures = allItems
+      .filter((candidate) =>
+        candidate.type === 'figure' &&
+        candidate.pageNumber === item.pageNumber &&
+        candidate.bbox &&
+        !candidate.caption?.trim() &&
+        !this.findNearbyFigureCaption(candidate, allItems)
+      )
+      .sort((left, right) => {
+        const leftBox = left.bbox as BBox;
+        const rightBox = right.bbox as BBox;
+        const sameRow = Math.abs(leftBox[1] - rightBox[1]) <= 30;
+        return sameRow ? leftBox[0] - rightBox[0] : rightBox[1] - leftBox[1];
+      });
+    if (!pageFigures.length) return undefined;
+
+    const previousPageHasUncaptionedFigure = allItems.some((candidate) =>
+      candidate.type === 'figure' &&
+      candidate.pageNumber === item.pageNumber - 1 &&
+      !candidate.caption?.trim() &&
+      !this.findNearbyFigureCaption(candidate, allItems)
+    );
+    const numbered = allItems
+      .filter((candidate) =>
+        candidate.pageNumber === item.pageNumber ||
+        (
+          candidate.pageNumber === item.pageNumber - 1 &&
+          !previousPageHasUncaptionedFigure
+        )
+      )
+      .map((candidate) => this.extractNumberedFigureCaption(candidate))
+      .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate));
+
+    const uniqueByNumber = new Map<number, typeof numbered[number]>();
+    for (const candidate of numbered) {
+      if (!uniqueByNumber.has(candidate.number)) uniqueByNumber.set(candidate.number, candidate);
+    }
+    const orderedCaptions = [...uniqueByNumber.values()].sort((a, b) => a.number - b.number);
+    const consecutive = orderedCaptions.every(
+      (candidate, index) => index === 0 || candidate.number === orderedCaptions[index - 1].number + 1
+    );
+    if (!consecutive || orderedCaptions.length !== pageFigures.length) return undefined;
+
+    const figureIndex = pageFigures.findIndex((candidate) => candidate.id === item.id);
+    const match = orderedCaptions[figureIndex];
+    return match ? { ...match.item, text: match.text } : undefined;
+  }
+
+  /**
+   * Captionless pictures are admitted only when they are substantial,
+   * unique raster regions inside a page that also contains body prose.
+   * This keeps small/repeated publisher logos, icons, rules, and banners out.
+   */
+  private static verifyStrictUntitledFigure(item: DoclingItem, allItems: DoclingItem[]): boolean {
+    if (
+      item.figureType !== 'embedded' ||
+      !item.filePath ||
+      !item.imageHash ||
+      !item.bbox ||
+      !item.width ||
+      !item.height
+    ) return false;
+
+    const pixelArea = item.width * item.height;
+    const aspectRatio = item.width / item.height;
+    const box = item.bbox as BBox;
+    const boxArea = Math.abs((box[2] - box[0]) * (box[1] - box[3]));
+    if (
+      pixelArea < 70_000 ||
+      Math.min(item.width, item.height) < 100 ||
+      aspectRatio < 0.25 ||
+      aspectRatio > 4 ||
+      boxArea < 10_000
+    ) return false;
+
+    const duplicateCount = allItems.filter(
+      (candidate) => candidate.type === 'figure' && candidate.imageHash === item.imageHash
+    ).length;
+    const pageHasBodyProse = allItems.some(
+      (candidate) =>
+        candidate.pageNumber === item.pageNumber &&
+        (candidate.type === 'paragraph' || candidate.type === 'list_item') &&
+        candidate.text.trim().length >= 80
+    );
+    return duplicateCount === 1 && pageHasBodyProse;
+  }
+
+  private static buildUntitledFigureCaption(item: DoclingItem, allItems: DoclingItem[]): string {
+    const pageText = allItems
+      .filter((candidate) => candidate.pageNumber === item.pageNumber)
+      .map((candidate) => candidate.text)
+      .join(' ');
+    const isVietnamese = /[ăâđêôơưàáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵ]/iu.test(pageText);
+    return isVietnamese
+      ? `Hình minh họa không có chú thích · trang ${item.pageNumber}`
+      : `Untitled figure · page ${item.pageNumber}`;
   }
 }

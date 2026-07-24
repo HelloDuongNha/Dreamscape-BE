@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import Dream, { IDream } from '../models/Dream';
+import Dream, { IDream, IDreamAddition } from '../models/Dream';
 import Comment           from '../models/Comment';
 import { Types }         from 'mongoose';
 import crypto            from 'crypto';
@@ -19,6 +19,10 @@ import {
   resolveQuestionRuleIds,
 } from '../services/dream/dreamAnalysisGrounding.service';
 import { materializeDreamSymbolObservations } from '../services/dream/symbolObservation.service';
+import { setRuleValidationFeedback } from '../services/rules/ruleV3ValidationScore.service';
+import { estimateDreamAnalysisSeconds } from '../services/dream/dreamAnalysisTiming.service';
+
+const activeDreamAnalysisControllers = new Map<string, AbortController>();
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -54,6 +58,9 @@ function parsePaginationParams(query: Request['query']): {
 function mapDreamResponse(dream: any): any {
   if (!dream) return dream;
   const obj = typeof dream.toObject === 'function' ? dream.toObject() : { ...dream };
+  // The rollback slot may contain the previous analysis metadata. It exists
+  // only to make replacement jobs reversible and must never cross the API.
+  delete obj.analysisRollback;
   const completeNarrative = composeDreamNarrative(obj.content || obj.dreamText || '', obj.additions || []);
   if (obj.ai_result) {
     obj.ai_result = enrichScientificNotesForResponse(obj.ai_result, obj.retrievedContext, completeNarrative);
@@ -133,6 +140,8 @@ export const createDream = async (req: Request, res: Response): Promise<void> =>
     const normalizedContent = normalizedDreamContent(content);
     const contentHash = dreamContentHash(normalizedContent);
     const analysisStartedAt = new Date();
+    const analysisRunId = crypto.randomUUID();
+    const estimatedDurationSeconds = await estimateDreamAnalysisSeconds(req.user!._id as Types.ObjectId, normalizedContent);
     const dream = await Dream.create({
       userId:    req.user!._id as Types.ObjectId,
       content:   normalizedContent,
@@ -148,13 +157,29 @@ export const createDream = async (req: Request, res: Response): Promise<void> =>
         stageResults: {},
         startedAt: analysisStartedAt,
         lastProgressAt: analysisStartedAt,
+        estimatedDurationSeconds,
+        trigger: 'initial',
+        runId: analysisRunId,
+      },
+      analysisRun: {
+        runId: analysisRunId,
+        trigger: 'initial',
+        startedAt: analysisStartedAt,
+        previousStatus: null,
+        targetAdditionSequences: [],
+      },
+      analysisRollback: {
+        runId: analysisRunId,
+        previousStatus: null,
+        hadPreviousResult: false,
+        previousAnalysisMetadata: null,
       },
       // ai_status and ai_result use schema defaults ('pending' and null)
     });
 
     // Kick off background analysis (never await this so the HTTP response is immediate)
     setImmediate(() => {
-      runBackgroundAnalysis(dream._id, String(req.user!._id), dream.content, {});
+      runBackgroundAnalysis(dream._id, String(req.user!._id), dream.content, {}, analysisRunId);
     });
 
     res.status(201).json({
@@ -341,21 +366,40 @@ export const appendDreamAddition = async (req: Request, res: Response): Promise<
       res.status(409).json({ success: false, message: 'Giấc mơ đã đạt giới hạn 10 phần bổ sung.' });
       return;
     }
-    const nextAddition = { sequence: additions.length + 1, content: addition, addedAt: new Date() };
+    const analysisRunId = crypto.randomUUID();
+    const nextAddition: IDreamAddition = {
+      sequence: additions.length + 1,
+      content: addition,
+      addedAt: new Date(),
+      analysisState: 'pending',
+      analysisRunId,
+    };
+    const targetAdditionSequences = [
+      ...additions
+        .filter(item => item.analysisState === 'unanalyzed' || item.analysisState === 'pending')
+        .map(item => item.sequence),
+      nextAddition.sequence,
+    ];
     const completeNarrative = composeDreamNarrative(dream.content, [...additions, nextAddition]);
     if (completeNarrative.length > 12000) {
       res.status(413).json({ success: false, message: 'Tổng lời kể sau khi bổ sung không được vượt quá 12.000 ký tự.' });
       return;
     }
 
+    const previousStatus = dream.ai_status;
+    const previousAnalysisMetadata = dream.analysisMetadata
+      ? { ...(dream.analysisMetadata as Record<string, any>) }
+      : null;
+    for (const existingAddition of dream.additions) {
+      if (!targetAdditionSequences.includes(existingAddition.sequence)) continue;
+      existingAddition.analysisState = 'pending';
+      existingAddition.analysisRunId = analysisRunId;
+    }
     dream.additions.push(nextAddition);
     dream.contentHash = dreamContentHash(completeNarrative);
     dream.ai_status = 'pending';
-    dream.ai_result = null;
-    dream.analysisEmbedding = undefined;
-    dream.retrievedContext = null;
-    dream.realLifeHypothesesFeedback = [];
     const analysisStartedAt = new Date();
+    const estimatedDurationSeconds = await estimateDreamAnalysisSeconds(userId, completeNarrative);
     dream.analysisMetadata = {
       currentStage: 'preparing',
       progress: 8,
@@ -365,13 +409,31 @@ export const appendDreamAddition = async (req: Request, res: Response): Promise<
       startedAt: analysisStartedAt,
       lastProgressAt: analysisStartedAt,
       trigger: 'dream_addition',
+      runId: analysisRunId,
       additionCount: dream.additions.length,
+      estimatedDurationSeconds,
+    };
+    dream.analysisRun = {
+      runId: analysisRunId,
+      trigger: 'dream_addition',
+      startedAt: analysisStartedAt,
+      previousStatus,
+      targetAdditionSequences,
+    };
+    dream.analysisRollback = {
+      runId: analysisRunId,
+      previousStatus,
+      hadPreviousResult: previousStatus === 'completed' && Boolean(dream.ai_result),
+      previousAnalysisMetadata,
     };
     dream.markModified('analysisMetadata');
+    dream.markModified('analysisRun');
+    dream.markModified('analysisRollback');
+    dream.markModified('additions');
     await dream.save();
 
     setImmediate(() => {
-      runBackgroundAnalysis(dream._id, String(userId), completeNarrative, dream.sleepContext || {});
+      runBackgroundAnalysis(dream._id, String(userId), completeNarrative, dream.sleepContext || {}, analysisRunId);
     });
 
     res.status(202).json({
@@ -890,14 +952,115 @@ export const debugRag = async (req: Request, res: Response): Promise<void> => {
 /**
  * Background analysis helper runner.
  */
+async function rollbackDreamAnalysisRun(
+  dreamId: Types.ObjectId | string,
+  runId: string,
+  outcome: 'cancelled' | 'failed',
+  errorMessage?: string,
+): Promise<IDream | null> {
+  const dream = await Dream.findOne({
+    _id: dreamId,
+    ai_status: 'pending',
+    'analysisRun.runId': runId,
+  }).select('+analysisRollback');
+  if (!dream) return null;
+
+  const run = (dream.analysisRun || {}) as NonNullable<IDream['analysisRun']>;
+  const rollback = (dream.analysisRollback || {}) as NonNullable<IDream['analysisRollback']>;
+  const now = new Date();
+  const startedAt = run.startedAt ? new Date(run.startedAt) : now;
+  const targetSequences = Array.isArray(run.targetAdditionSequences)
+    ? run.targetAdditionSequences.filter(Number.isInteger)
+    : [];
+  const isAdditionRun = run.trigger === 'dream_addition' || run.trigger === 'addition_retry';
+  const hasPreviousAnalysis = rollback.runId === runId && rollback.hadPreviousResult;
+  const previousMetadata = rollback.runId === runId && rollback.previousAnalysisMetadata
+    ? { ...rollback.previousAnalysisMetadata }
+    : {};
+
+  const update: Record<string, any> = {
+    $set: {
+      ai_status: hasPreviousAnalysis ? 'completed' : outcome,
+      analysisMetadata: hasPreviousAnalysis
+        ? {
+            ...previousMetadata,
+            lastReplacementOutcome: outcome,
+            lastReplacementTrigger: run.trigger,
+            replacementEndedAt: now,
+            replacementDurationMs: Math.max(0, now.getTime() - startedAt.getTime()),
+            hasUnanalyzedAdditions: isAdditionRun || Boolean(previousMetadata.hasUnanalyzedAdditions),
+          }
+        : {
+            ...(dream.analysisMetadata || {}),
+            currentStage: outcome,
+            statusMessage: outcome === 'cancelled'
+              ? 'Đã hủy phân tích theo yêu cầu.'
+              : 'Phân tích chưa hoàn tất. Bạn có thể thử lại.',
+            currentMiniStep: '',
+            progress: Math.max(0, Number((dream.analysisMetadata as any)?.progress) || 0),
+            endedAt: now,
+            durationMs: Math.max(0, now.getTime() - startedAt.getTime()),
+            lastReplacementOutcome: outcome,
+            lastReplacementTrigger: run.trigger,
+            hasUnanalyzedAdditions: isAdditionRun,
+          },
+    },
+    $unset: {
+      analysisRun: 1,
+      analysisRollback: 1,
+    },
+  };
+
+  if (!hasPreviousAnalysis && outcome === 'failed') {
+    update.$set.ai_result = {
+      errorSummary: errorMessage || 'An unexpected internal error occurred during dream analysis.',
+      title: 'Không thể phân tích',
+      summary: 'Oracle chưa thể phân tích giấc mơ này. Vui lòng thử lại sau.',
+      emotional_tone: 'Unknown',
+      scientific_context_notes: [],
+      symbolic_notes: [],
+      cultural_symbolic_notes: [],
+      real_life_hypotheses: [],
+      confidence: 0,
+      core_analysis: 'Đã xảy ra lỗi trong quá trình phân tích giấc mơ. Vui lòng thử lại.',
+      disclaimer: 'Phân tích không thành công do lỗi hệ thống.',
+    };
+  }
+
+  const options: Record<string, any> = { new: true };
+  if (targetSequences.length > 0) {
+    update.$set['additions.$[target].analysisState'] = 'unanalyzed';
+    update.$unset['additions.$[target].analysisRunId'] = 1;
+    options.arrayFilters = [{ 'target.sequence': { $in: targetSequences } }];
+  }
+
+  return Dream.findOneAndUpdate(
+    { _id: dreamId, ai_status: 'pending', 'analysisRun.runId': runId },
+    update,
+    options,
+  ).select('+analysisRollback');
+}
+
 export const runBackgroundAnalysis = async (
   dreamId: any,
   userId: string,
   content: string,
-  sleepContext: any
+  sleepContext: any,
+  runId: string,
 ): Promise<void> => {
   logger.info(`Starting background analysis for dream ${dreamId}`);
-  const analysisStartedAt = new Date();
+  const queuedDream = await Dream.findOne({
+    _id: dreamId,
+    ai_status: 'pending',
+    'analysisRun.runId': runId,
+  }).select('ai_status analysisRun analysisMetadata').lean();
+  if (!queuedDream) return;
+  const analysisStartedAt = (queuedDream.analysisRun as any)?.startedAt
+    ? new Date((queuedDream.analysisRun as any).startedAt)
+    : new Date();
+  const analysisKey = `${String(dreamId)}:${runId}`;
+  const abortController = new AbortController();
+  activeDreamAnalysisControllers.set(analysisKey, abortController);
 
   try {
     // Local models can legitimately take several minutes. Do not turn an estimate
@@ -920,34 +1083,29 @@ export const runBackgroundAnalysis = async (
           progressFields[`analysisMetadata.stageResults.${stage.stage}`] = stage.resultSummary;
         }
         await Dream.updateOne(
-          { _id: dreamId, ai_status: 'pending' },
+          { _id: dreamId, ai_status: 'pending', 'analysisRun.runId': runId },
           {
             $set: progressFields,
           }
         );
       },
+      abortController.signal,
     );
 
-    // Late Overwrite Protection: re-read the dream from database
-    const freshDream = await Dream.findById(dreamId);
-    if (!freshDream) {
-      logger.warn(`Dream ${dreamId} not found during finalization.`);
+    const pendingDream = await Dream.findOne({
+      _id: dreamId,
+      ai_status: 'pending',
+      'analysisRun.runId': runId,
+    });
+    if (!pendingDream) {
+      logger.warn(`Dream ${dreamId} no longer owns analysis run ${runId}. Discarding late LLM success.`);
       return;
     }
 
-    if (freshDream.ai_status !== 'pending') {
-      logger.warn(`Dream ${dreamId} status is already '${freshDream.ai_status}'. Discarding late LLM success.`);
-      return;
-    }
-
-    // Save completed result
-    freshDream.ai_status = 'completed';
-    freshDream.ai_result = aiAnalysis as any;
-    freshDream.mood_tag = aiAnalysis.emotional_tone || '';
-    freshDream.analysisEmbedding = analysisEmbedding;
-    freshDream.retrievedContext = retrievedContext as any;
-    const progressHistory = (freshDream.analysisMetadata as any)?.stageResults || {};
-    freshDream.analysisMetadata = {
+    const progressHistory = (pendingDream.analysisMetadata as any)?.stageResults || {};
+    const estimatedDurationSeconds = Number((pendingDream.analysisMetadata as any)?.estimatedDurationSeconds) || null;
+    const durationMs = Date.now() - analysisStartedAt.getTime();
+    const completedMetadata = {
       strategyUsed,
       llmModel: process.env.OLLAMA_MODEL || 'qwen2.5:14b',
       embeddingModel: process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text',
@@ -962,16 +1120,49 @@ export const runBackgroundAnalysis = async (
       stageResults: progressHistory,
       startedAt: analysisStartedAt,
       generatedAt: new Date(),
-      durationMs: Date.now() - analysisStartedAt.getTime(),
+      durationMs,
+      estimatedDurationSeconds,
+      timingDeltaSeconds: estimatedDurationSeconds === null
+        ? null
+        : Math.round(durationMs / 1000 - estimatedDurationSeconds),
+      hasUnanalyzedAdditions: false,
     } as any;
-
-    // Remove duplicate aiAnalysis if any
-    freshDream.set('aiAnalysis', undefined, { strict: false });
-    if ((freshDream as any)._doc) {
-      delete (freshDream as any)._doc.aiAnalysis;
+    const targetSequences = Array.isArray((pendingDream.analysisRun as any)?.targetAdditionSequences)
+      ? (pendingDream.analysisRun as any).targetAdditionSequences.filter(Number.isInteger)
+      : [];
+    const completionUpdate: Record<string, any> = {
+      $set: {
+        ai_status: 'completed',
+        ai_result: aiAnalysis as any,
+        mood_tag: aiAnalysis.emotional_tone || '',
+        analysisEmbedding,
+        retrievedContext: retrievedContext as any,
+        analysisMetadata: completedMetadata,
+        realLifeHypothesesFeedback: [],
+      },
+      $unset: {
+        analysisRun: 1,
+        analysisRollback: 1,
+        aiAnalysis: 1,
+      },
+    };
+    const completionOptions: Record<string, any> = { new: true };
+    if (targetSequences.length > 0) {
+      completionUpdate.$set['additions.$[target].analysisState'] = 'analyzed';
+      completionUpdate.$set['additions.$[target].analyzedAt'] = new Date();
+      completionUpdate.$unset['additions.$[target].analysisRunId'] = 1;
+      completionOptions.arrayFilters = [{ 'target.sequence': { $in: targetSequences } }];
+    }
+    const freshDream = await Dream.findOneAndUpdate(
+      { _id: dreamId, ai_status: 'pending', 'analysisRun.runId': runId },
+      completionUpdate,
+      completionOptions,
+    );
+    if (!freshDream) {
+      logger.warn(`Dream ${dreamId} analysis run ${runId} lost its commit fence.`);
+      return;
     }
 
-    await freshDream.save();
     await syncDreamSymbolObservations(freshDream);
     try {
       await Notification.create({
@@ -989,32 +1180,25 @@ export const runBackgroundAnalysis = async (
     }
     logger.info(`Background analysis completed successfully for dream ${dreamId}`);
   } catch (err: any) {
+    if (err?.name === 'AbortError' || err?.message === 'dream_analysis_cancelled') {
+      logger.info(`Background analysis cancelled for dream ${dreamId}`);
+      return;
+    }
     logger.error(`Background analysis failed for dream ${dreamId}`, err);
 
-    // Set status to failed and save safe error summary
-    const safeErrorMessage = err.message || "An unexpected internal error occurred during dream analysis.";
-    
     try {
-      const freshDream = await Dream.findById(dreamId);
-      if (freshDream && freshDream.ai_status === 'pending') {
-        freshDream.ai_status = 'failed';
-        freshDream.ai_result = {
-          errorSummary: safeErrorMessage,
-          title: "Không thể phân tích",
-          summary: "Oracle chưa thể phân tích giấc mơ này. Vui lòng thử lại sau.",
-          emotional_tone: "Unknown",
-          scientific_context_notes: [],
-          symbolic_notes: [],
-          cultural_symbolic_notes: [],
-          real_life_hypotheses: [],
-          confidence: 0,
-          core_analysis: "Đã xảy ra lỗi trong quá trình phân tích giấc mơ. Vui lòng thử lại.",
-          disclaimer: "Phân tích không thành công do lỗi hệ thống hoặc quá hạn thời gian."
-        };
-        await freshDream.save();
-      }
+      await rollbackDreamAnalysisRun(
+        dreamId,
+        runId,
+        'failed',
+        err.message || 'An unexpected internal error occurred during dream analysis.',
+      );
     } catch (saveErr) {
       logger.error(`Failed to mark dream ${dreamId} as failed:`, saveErr);
+    }
+  } finally {
+    if (activeDreamAnalysisControllers.get(analysisKey) === abortController) {
+      activeDreamAnalysisControllers.delete(analysisKey);
     }
   }
 };
@@ -1050,18 +1234,64 @@ export const analyzeDreamById = async (req: Request, res: Response): Promise<voi
     }
 
     // Update status to pending
+    const completeNarrative = composeDreamNarrative(dream.content, dream.additions || []);
+    const analysisStartedAt = new Date();
+    const analysisRunId = crypto.randomUUID();
+    const targetAdditionSequences = (dream.additions || [])
+      .filter(addition => addition.analysisState === 'unanalyzed' || addition.analysisState === 'pending')
+      .map(addition => addition.sequence);
+    const trigger = targetAdditionSequences.length > 0 ? 'addition_retry' : 'retry';
+    const previousStatus = dream.ai_status;
+    const previousAnalysisMetadata = dream.analysisMetadata
+      ? { ...(dream.analysisMetadata as Record<string, any>) }
+      : null;
+    const estimatedDurationSeconds = await estimateDreamAnalysisSeconds(req.user!._id as Types.ObjectId, completeNarrative);
     dream.ai_status = 'pending';
-    dream.ai_result = null;
-    // Feedback is bound to the exact generated question text. A new analysis may
-    // produce different questions, so old answers must not be counted against
-    // the replacement hypotheses.
-    dream.realLifeHypothesesFeedback = [];
+    for (const addition of dream.additions || []) {
+      if (!targetAdditionSequences.includes(addition.sequence)) continue;
+      addition.analysisState = 'pending';
+      addition.analysisRunId = analysisRunId;
+    }
+    dream.analysisMetadata = {
+      currentStage: 'preparing',
+      progress: 8,
+      statusMessage: 'Đang chuẩn bị phân tích lại giấc mơ...',
+      currentMiniStep: 'Đang đọc lại toàn bộ lời kể và dữ liệu đã cung cấp.',
+      stageResults: {},
+      startedAt: analysisStartedAt,
+      lastProgressAt: analysisStartedAt,
+      estimatedDurationSeconds,
+      trigger,
+      runId: analysisRunId,
+    };
+    dream.analysisRun = {
+      runId: analysisRunId,
+      trigger,
+      startedAt: analysisStartedAt,
+      previousStatus,
+      targetAdditionSequences,
+    };
+    dream.analysisRollback = {
+      runId: analysisRunId,
+      previousStatus,
+      hadPreviousResult: previousStatus === 'completed' && Boolean(dream.ai_result),
+      previousAnalysisMetadata,
+    };
+    dream.markModified('analysisMetadata');
+    dream.markModified('analysisRun');
+    dream.markModified('analysisRollback');
+    dream.markModified('additions');
     await dream.save();
 
     // Start background analysis once
-    const completeNarrative = composeDreamNarrative(dream.content, dream.additions || []);
     setImmediate(() => {
-      runBackgroundAnalysis(dream._id, String(req.user!._id), completeNarrative, dream.sleepContext || {});
+      runBackgroundAnalysis(
+        dream._id,
+        String(req.user!._id),
+        completeNarrative,
+        dream.sleepContext || {},
+        analysisRunId,
+      );
     });
 
     res.status(200).json({
@@ -1072,6 +1302,49 @@ export const analyzeDreamById = async (req: Request, res: Response): Promise<voi
   } catch (err: any) {
     res.status(500).json({ success: false, message: 'Failed to restart dream analysis.', error: err.message });
   }
+};
+
+/**
+ * Cancel a running analysis without deleting the dream. A late provider result
+ * cannot overwrite the cancelled state because runBackgroundAnalysis persists
+ * only while ai_status remains pending.
+ */
+export const cancelDreamAnalysis = async (req: Request, res: Response): Promise<void> => {
+  const dreamId = String(req.params.id);
+  if (!Types.ObjectId.isValid(dreamId)) {
+    res.status(400).json({ success: false, message: 'Invalid dream ID.' });
+    return;
+  }
+  const dream = await Dream.findOne({
+    _id: new Types.ObjectId(dreamId),
+    userId: req.user!._id,
+  }).select('+analysisRollback');
+  if (!dream) {
+    res.status(404).json({ success: false, message: 'Dream not found.' });
+    return;
+  }
+  if (dream.ai_status !== 'pending') {
+    res.status(409).json({ success: false, message: 'Dream analysis is not running.' });
+    return;
+  }
+
+  const runId = String((dream.analysisRun as any)?.runId || '');
+  if (!runId) {
+    res.status(409).json({ success: false, message: 'Dream analysis run is missing.' });
+    return;
+  }
+
+  activeDreamAnalysisControllers.get(`${dreamId}:${runId}`)?.abort();
+  const restoredDream = await rollbackDreamAnalysisRun(dreamId, runId, 'cancelled');
+  if (!restoredDream) {
+    res.status(409).json({ success: false, message: 'Dream analysis has already finished.' });
+    return;
+  }
+  res.status(200).json({
+    success: true,
+    message: 'Dream analysis cancelled.',
+    data: mapDreamResponse(restoredDream),
+  });
 };
 
 /**
@@ -1150,7 +1423,7 @@ export const saveHypothesisFeedback = async (req: Request, res: Response): Promi
     if (!ruleId) {
       res.status(400).json({
         success: false,
-        message: 'Câu hỏi này không gắn với một quy luật đã duyệt nên không thể dùng để xác minh.'
+        message: 'Câu hỏi này không gắn với một lập luận đã duyệt nên không thể dùng để xác minh.'
       });
       return;
     }
@@ -1242,6 +1515,17 @@ export const saveHypothesisFeedback = async (req: Request, res: Response): Promi
     }
 
     await dream.save();
+    const ruleScoreUpdates = await setRuleValidationFeedback({
+      userId: new Types.ObjectId(userId),
+      verificationKey: verificationKey || `${ruleId}:${matchedIndex}`,
+      origin: 'dream_analysis',
+      originId: dream._id as Types.ObjectId,
+      questionText,
+      answer,
+      directRuleIds: linkedRuleIds,
+      sourceId: String(matchedHypothesis.validationSourceId || '').trim() || undefined,
+      exactQuote: String(matchedHypothesis.validationExactQuote || '').trim() || undefined,
+    });
     await syncDreamSymbolObservations(dream);
 
     res.status(200).json({
@@ -1252,6 +1536,7 @@ export const saveHypothesisFeedback = async (req: Request, res: Response): Promi
         feedbackRevision: refreshedAnalysis?.feedback_revision || [],
         feedbackConclusion: refreshedAnalysis?.feedback_conclusion || null,
         analysis: refreshedAnalysis,
+        ruleScoreUpdates,
       }
     });
   } catch (err: any) {

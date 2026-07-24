@@ -72,6 +72,29 @@ export interface IAcademicSource extends Document {
     chunkCount: number;
     builtAt: Date;
   }>;
+  pdfImportProgress?: {
+    stage: string;
+    startedAt: Date;
+    updatedAt: Date;
+    expectedDurationSeconds: number;
+    pageCount: number;
+    fileSizeBytes: number;
+    ocrExpected: boolean;
+    completedAt?: Date;
+    durationMs?: number;
+    timingDeltaSeconds?: number;
+    failureCode?: string;
+    failureMessage?: string;
+  };
+  pdfImportHistory?: Array<{
+    durationMs: number;
+    estimatedDurationSeconds: number;
+    pageCount: number;
+    fileSizeBytes: number;
+    ocrUsed: boolean;
+    succeeded?: boolean;
+    completedAt: Date;
+  }>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -297,6 +320,31 @@ const AcademicSourceSchema = new Schema<IAcademicSource>(
       sectionCount: { type: Number, required: true, min: 0 },
       chunkCount: { type: Number, required: true, min: 0 },
       builtAt: { type: Date, required: true },
+      _id: false,
+    }],
+    pdfImportProgress: {
+      stage: { type: String },
+      startedAt: { type: Date },
+      updatedAt: { type: Date },
+      expectedDurationSeconds: { type: Number, min: 1 },
+      pageCount: { type: Number, min: 0, default: 0 },
+      fileSizeBytes: { type: Number, min: 0, default: 0 },
+      ocrExpected: { type: Boolean, default: false },
+      completedAt: { type: Date },
+      durationMs: { type: Number, min: 0 },
+      timingDeltaSeconds: { type: Number },
+      failureCode: { type: String },
+      failureMessage: { type: String },
+      _id: false,
+    },
+    pdfImportHistory: [{
+      durationMs: { type: Number, required: true, min: 0 },
+      estimatedDurationSeconds: { type: Number, required: true, min: 1 },
+      pageCount: { type: Number, required: true, min: 0 },
+      fileSizeBytes: { type: Number, required: true, min: 0 },
+      ocrUsed: { type: Boolean, required: true },
+      succeeded: { type: Boolean },
+      completedAt: { type: Date, required: true },
       _id: false,
     }],
   },

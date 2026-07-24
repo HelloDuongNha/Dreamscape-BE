@@ -15,6 +15,8 @@ export interface CompileExtractedDocumentInput {
   forceReplace?: boolean;
   parserEngine?: string;
   sourceType?: string;
+  replacementRunId?: string;
+  abortSignal?: AbortSignal;
 }
 
 export interface CompileExtractedDocumentResult {
@@ -150,7 +152,8 @@ export async function compileExtractedDocument(
       canonicalBlocks,
       input.parserEngine || 'pymupdf',
       input.sourceType || 'pdf',
-      isContribution
+      isContribution,
+      { runId: input.replacementRunId, abortSignal: input.abortSignal },
     );
 
     // 5. Calculate statistics using shared dynamic pageCount helper

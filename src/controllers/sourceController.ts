@@ -630,7 +630,7 @@ export const getApprovedSourceById = async (req: Request, res: Response): Promis
     }
 
     const source = await AcademicSource.findById(id)
-      .select('_id title authors year journal publisher doi url sourceProvider verificationStatus allowedUse copyrightStatus createdAt fullTextStatus fullTextUrl license oaStatus readableInApp fullTextSourceType fullTextImportError fullTextImportedAt fullTextImportedBy landingPageUrl pdfUrl xmlUrl htmlUrl chunkBuildStatus chunkBuiltAt chunkEmbeddingModel chunkCount chunkBuildError originalFile sourceOrigin metadata pmcid normalizedPmcid smartReaderStats readerBuildSnapshots');
+      .select('_id title authors year journal publisher doi url sourceProvider verificationStatus allowedUse copyrightStatus createdAt fullTextStatus fullTextUrl license oaStatus readableInApp fullTextSourceType fullTextImportError fullTextImportedAt fullTextImportedBy landingPageUrl pdfUrl xmlUrl htmlUrl chunkBuildStatus chunkBuiltAt chunkEmbeddingModel chunkCount chunkBuildError originalFile sourceOrigin metadata pmcid normalizedPmcid smartReaderStats readerBuildSnapshots pdfPageCount extractionMethod pdfImportProgress pdfImportHistory');
 
     if (!source) {
       res.status(404).json({
@@ -1613,7 +1613,26 @@ export const deleteOriginalPdf = async (req: Request, res: Response): Promise<vo
   }
 };
 
-import { runUploadedPdfImport } from '../services/academic/ingestion/pdf/uploadedPdfImport.service';
+import { cancelUploadedPdfImport, runUploadedPdfImport } from '../services/academic/ingestion/pdf/uploadedPdfImport.service';
+import { getPdfImportProgress } from '../services/academic/ingestion/pdf/pdfImportProgress.service';
+
+export const getUploadedPdfImportProgressForApprovedSource = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const result = await getPdfImportProgress('approved_source', req.params.id as string);
+    res.status(200).json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(404).json({ success: false, message: err.message || 'Không tìm thấy trạng thái xử lý PDF.' });
+  }
+};
+
+export const cancelUploadedPdfImportForApprovedSource = async (req: Request, res: Response): Promise<void> => {
+  const cancelled = await cancelUploadedPdfImport('approved_source', req.params.id as string);
+  if (!cancelled) {
+    res.status(409).json({ success: false, message: 'Tác vụ nhập PDF không còn chạy.' });
+    return;
+  }
+  res.status(200).json({ success: true, message: 'Đã hủy nhập PDF.' });
+};
 
 export const processUploadedPdfForApprovedSource = async (req: Request, res: Response): Promise<void> => {
   try {

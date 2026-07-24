@@ -14,6 +14,7 @@ export interface DoclingItem {
   fileName?: string;
   width?: number;
   height?: number;
+  imageHash?: string;
   format?: string;
   figureType?: 'embedded' | 'rendered_crop' | 'region_only';
   confidence?: number;

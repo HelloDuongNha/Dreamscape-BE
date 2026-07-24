@@ -11,9 +11,9 @@ test('direct yes/no questions receive short reply affordances', () => {
     'Bạn có cảm thấy hình ảnh cây cầu gợi ra một ý tưởng cụ thể không?',
   );
   assert.deepEqual(suggestions, [
-    'Có, điều đó đúng với tôi.',
-    'Không, tôi không thấy như vậy.',
-    'Tôi chưa chắc.',
+    'Có, tôi có cảm thấy như vậy.',
+    'Không, tôi không cảm thấy như vậy.',
+    'Tôi chưa chắc mình có cảm thấy như vậy không.',
   ]);
   assert.equal(
     directAnswerSuggestions('Bạn muốn giải thích ý tưởng đó như thế nào?').length,

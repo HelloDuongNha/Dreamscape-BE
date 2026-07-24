@@ -23,7 +23,26 @@ export class DoclingTextRepairService {
     text = text
       .replace(/\bngư\s*['’]\s*i\b/giu, 'người')
       .replace(/\btư\s*['’]\s*ng\b/giu, 'tượng')
-      .replace(/\bn\s*['’]\s*i\s+dung\b/giu, 'nội dung');
+      .replace(/\bn\s*['’]\s*i\s+dung\b/giu, 'nội dung')
+      .replace(/\bđư\s*['’]\s*c\b/giu, 'được')
+      .replace(/\bm\s*['’]\s*t\b/giu, 'một');
+
+    // High-confidence Vietnamese diacritic repairs use surrounding words,
+    // never a global token replacement. For example, "lân" is valid in
+    // "kỳ lân" and "lân cận", but after a quantity or before "nữa" it is
+    // unambiguously the occurrence counter "lần".
+    text = text
+      .replace(/\b(\d[\d.,]*\s+)lân\b/giu, '$1lần')
+      .replace(/\b((?:một|hai|ba|bốn|năm|sáu|bảy|tám|chín|mười|nhiều|vài|mấy|bao|mỗi|từng)\s+)lân\b/giu, '$1lần')
+      .replace(/\blân(\s+(?:nữa|đầu|cuối|trước|sau|thứ|kế tiếp))\b/giu, 'lần$1')
+      .replace(/(^|[^\p{L}\p{N}])đơn\s+thuân\b/giu, '$1đơn thuần')
+      .replace(/\bthuân\s+(túy|nhất|thục|phục)\b/giu, 'thuần $1')
+      .replace(/\bcẩu\s+nguyện\b/giu, 'cầu nguyện')
+      .replace(/\bthẩn\s+linh\b/giu, 'thần linh')
+      .replace(/\btruyên\s+(hình|tải|đạt|thống|thuyết)\b/giu, 'truyền $1')
+      .replace(/\bnhiêu\s+(người|lần|điều|ý nghĩa|hơn|năm|tháng|vấn đề)\b/giu, 'nhiều $1')
+      .replace(/\bđiêu\s+(này|đó|gì|kiện|khoản)\b/giu, 'điều $1')
+      .replace(/\bgân\s+(như|đây|đó|nhà|gũi)\b/giu, 'gần $1');
 
     text = text.replace(/(^|\n)\s*['’"`-]\s*(?=\n|$)/gu, '$1');
     text = text.replace(/,\s*(\d{1,3})\s+(\d{1,3})(?=\s*(?:\n|$))/gu, ', $1–$2');

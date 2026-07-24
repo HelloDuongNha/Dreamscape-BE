@@ -2,6 +2,15 @@ import type { OracleCitation } from './oracle.types';
 import { retrieveSimilarDreams } from '../dream/similarDreamRetrieval.service';
 import { retrieveApprovedRuleV3 } from '../rules/ruleV3Retrieval.service';
 import { logger } from '../infrastructure/logger';
+import {
+  buildRuleGroundedFallbackHypotheses,
+  resolveQuestionRuleIds,
+} from '../dream/dreamAnalysisGrounding.service';
+import {
+  localizeOracleRuleStatement,
+  localizeOracleVerificationQuestion,
+} from './oracleRulePresentation.service';
+import { getCurrentRuleValidationAnswers } from '../rules/ruleV3ValidationScore.service';
 
 export interface OracleGrounding {
   citations: OracleCitation[];
@@ -13,6 +22,12 @@ export interface OracleGrounding {
     exact: boolean;
     duplicateCount: number;
   };
+  verificationQuestions: Array<{
+    ruleIds: string[];
+    verificationKey: string;
+    question: string;
+    citationIndex: number;
+  }>;
 }
 
 function xmlEscape(value: unknown): string {
@@ -52,6 +67,20 @@ export async function buildOracleGrounding(
   const rulesById = new Map(
     ruleResult.rules.map((rule: any) => [String(rule.ruleId || rule._id), rule]),
   );
+  const allVerificationQuestions = buildRuleGroundedFallbackHypotheses(ruleResult.rules, dreamText);
+  const currentAnswers = await getCurrentRuleValidationAnswers(
+    userId,
+    allVerificationQuestions.map((question) => String(question.verificationKey || '')),
+  );
+  const answeredVerificationKeys = new Set(currentAnswers.keys());
+  const verificationQuestions = allVerificationQuestions
+    .filter((question) => !answeredVerificationKeys.has(String(question.verificationKey || '')));
+  const questionByRuleId = new Map<string, any>();
+  for (const question of allVerificationQuestions) {
+    for (const ruleId of resolveQuestionRuleIds(question)) {
+      if (!questionByRuleId.has(ruleId)) questionByRuleId.set(ruleId, question);
+    }
+  }
   const academicEvidenceBySource = new Map<string, {
     source: any;
     evidence: any[];
@@ -85,11 +114,38 @@ export async function buildOracleGrounding(
       .map((evidence) => compact(evidence.quote, 700))
       .filter(Boolean))]
       .slice(0, 3);
+    const ruleLinks = [...new Map(group.evidence.map((evidence) => {
+      const rule: any = rulesById.get(String(evidence.ruleId));
+      if (!rule) return ['', null];
+      const ruleId = String(rule.ruleId || rule._id);
+      const question = questionByRuleId.get(ruleId);
+      return [ruleId, {
+        ruleId,
+        ruleCode: String(rule.ruleCode || ''),
+        statement: String(rule.ruleStatement || ''),
+        localizedStatement: localizeOracleRuleStatement(rule),
+        quote: compact(evidence.quote, 1200),
+        evidenceScore: Number(rule.evidenceScore || 0),
+        supportingSourceCount: Number(rule.supportingSourceCount || 0),
+        ...(question ? {
+          verificationKey: String(question.verificationKey || ''),
+          verificationQuestion: String(question.followUpQuestion || ''),
+          localizedVerificationQuestion: localizeOracleVerificationQuestion(
+            rule,
+            question.followUpQuestion,
+          ),
+        } : {}),
+        currentUserAnswer: question?.verificationKey
+          ? currentAnswers.get(String(question.verificationKey)) || null
+          : null,
+      }];
+    }).filter((entry) => entry[0] && entry[1]) as Array<[string, any]>).values()];
     citations.push({
       index: citations.length + 1,
       sourceType: 'academic_source',
       sourceId,
       title: compact(source?.title || 'Academic source', 500),
+      ...(Number(source?.year) ? { year: Number(source.year) } : {}),
       excerpt: compact(exactQuotes.join(' … '), 1000),
       detail: compact([
         supportingClaims.length ? `Supported claims (${supportingClaims.length}): ${supportingClaims.join(' | ')}` : '',
@@ -98,6 +154,7 @@ export async function buildOracleGrounding(
         source?.year,
         source?.doi ? `DOI ${source.doi}` : '',
       ].filter(Boolean).join(' · '), 500),
+      ruleLinks,
     });
   }
 
@@ -176,5 +233,33 @@ export async function buildOracleGrounding(
     ].join('\n')
     : '';
 
-  return { citations, promptContext, personalContext };
+  const ruleCitationIndex = new Map<string, number>();
+  for (const citation of citations) {
+    for (const ruleLink of citation.ruleLinks || []) {
+      ruleCitationIndex.set(ruleLink.ruleId, citation.index);
+    }
+  }
+  const groundedVerificationQuestions = verificationQuestions
+    .map((question) => {
+      const ruleIds = resolveQuestionRuleIds(question);
+      const citationIndex = ruleIds
+        .map((ruleId) => ruleCitationIndex.get(ruleId))
+        .find((index): index is number => Boolean(index));
+      if (!citationIndex) return null;
+      return {
+        ruleIds,
+        verificationKey: String(question.verificationKey || ''),
+        question: String(question.followUpQuestion || ''),
+        citationIndex,
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item?.question))
+    .slice(0, 5);
+
+  return {
+    citations,
+    promptContext,
+    personalContext,
+    verificationQuestions: groundedVerificationQuestions,
+  };
 }

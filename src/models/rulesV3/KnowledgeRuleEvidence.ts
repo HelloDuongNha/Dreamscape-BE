@@ -5,6 +5,7 @@ export interface IKnowledgeRuleEvidenceV3 extends Document {
   sourceId: Types.ObjectId;
   chunkId: Types.ObjectId;
   extractionRunId: Types.ObjectId;
+  extractionAttemptId?: string;
   chunkContentHash: string;
   startOffset: number;
   endOffset: number;
@@ -41,6 +42,12 @@ const KnowledgeRuleEvidenceV3Schema = new Schema<IKnowledgeRuleEvidenceV3>(
       type: Schema.Types.ObjectId,
       ref: 'AcademicRuleExtractionRunV3',
       required: true,
+      index: true
+    },
+    extractionAttemptId: {
+      type: String,
+      required: false,
+      trim: true,
       index: true
     },
     chunkContentHash: {

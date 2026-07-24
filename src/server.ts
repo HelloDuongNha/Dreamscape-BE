@@ -3,12 +3,16 @@ import http from 'http';
 import app from './app';
 import connectDB from './config/db';
 import { initSocket } from './config/socket';
+import { recoverInterruptedReaderReplacements } from './services/academic/reader/persistence/readerReplacement.service';
+import { recoverIncompleteRuleV3Replacements } from './services/rules/ruleV3ReplacementJournal.service';
 
 const PORT = Number(process.env.PORT) || 5000;
 
 const startServer = async (): Promise<void> => {
   // 1. Connect to MongoDB before accepting traffic
   await connectDB();
+  await recoverInterruptedReaderReplacements();
+  await recoverIncompleteRuleV3Replacements();
 
   // 2. Wrap Express app in a raw Node.js HTTP server so Socket.io can share it
   const httpServer = http.createServer(app);

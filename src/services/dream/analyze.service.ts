@@ -57,12 +57,6 @@ interface IAppliedRule {
   applicationTier?: 'supported' | 'exploratory';
   evidenceScore?: number;
   supportingSourceCount?: number;
-  applicationFeedback?: {
-    supports: number;
-    weakens: number;
-    resolvedObservations: number;
-    smoothedApplicability: number;
-  };
 }
 
 // Interface for retrieved symbols in audit trail
@@ -260,7 +254,15 @@ export async function runDreamAnalysis(
   dreamText: string,
   sleepContext: Record<string, any>,
   onProgress?: (progress: DreamAnalysisProgress) => void | Promise<void>,
+  abortSignal?: AbortSignal,
 ): Promise<IAnalysisResult> {
+  const throwIfCancelled = () => {
+    if (abortSignal?.aborted) {
+      const error = new Error('dream_analysis_cancelled');
+      error.name = 'AbortError';
+      throw error;
+    }
+  };
   const report = async (
     stage: DreamAnalysisStage,
     progress: number,
@@ -268,8 +270,10 @@ export async function runDreamAnalysis(
     miniStep?: string,
     resultSummary?: string,
   ) => {
+    throwIfCancelled();
     await onProgress?.({ stage, progress, message, miniStep, resultSummary });
   };
+  throwIfCancelled();
   const db = mongoose.connection.db;
   if (!db) {
     throw new Error('Database connection is not initialized');
@@ -372,7 +376,7 @@ export async function runDreamAnalysis(
     `Nhận diện ${retrievedSymbols.length} mục từ điển, ${contextualMotifHints.length} chi tiết theo ngữ cảnh, ${observedSymbolPatterns.length} mẫu trong kho quan sát, ${similarDreamResult.matches.length} giấc mơ tương đồng, ${personalSymbolPatterns.length} mô-típ cá nhân lặp lại và ${Object.keys(enrichedSleepContext).length} dữ kiện về điều kiện ngủ.`,
   );
 
-  await report('retrieving_rules', 38, 'Đang chọn quy luật phù hợp và kiểm tra dẫn chứng...', 'Đang lọc kết luận mô tả, câu hỏi kiểm tra và cơ chế tâm lý.');
+  await report('retrieving_rules', 38, 'Đang chọn lập luận phù hợp và kiểm tra dẫn chứng...', 'Đang lọc kết luận mô tả, câu hỏi kiểm tra và cơ chế tâm lý.');
   // ─── STEP 3: Rule V3 Evaluation (Component D) ───
   // Rule V3 is the only production knowledge source. When no approved V3 rule
   // matches, Oracle continues without making an academic rule claim.
@@ -546,7 +550,7 @@ ${truncatedRuleText.split('\n').map(line => `- "${line}"`).join('\n')}
   const compactRulesText = llmUsableRules
     .map(
       (r) =>
-        `- RuleId: "${String(r.ruleId || r._id)}", ApplicationRole: "${r.applicationRole}", ApplicationTier: "${r.applicationTier || 'supported'}", RuleCode: "${r.ruleCode}" (Statement: "${r.ruleStatement}", Basis: "${r.scientificBasis}", Classifications: "${r.classifications.join(', ')}", Prior case applicability: ${r.applicationFeedback?.supports || 0} supported / ${r.applicationFeedback?.weakens || 0} weakened)`
+        `- RuleId: "${String(r.ruleId || r._id)}", ApplicationRole: "${r.applicationRole}", ApplicationTier: "${r.applicationTier || 'supported'}", RuleCode: "${r.ruleCode}" (Statement: "${r.ruleStatement}", Basis: "${r.scientificBasis}", Classifications: "${r.classifications.join(', ')}", Unified argument score: ${r.evidenceScore ?? 0}/100)`
     )
     .join('\n');
 
@@ -611,7 +615,7 @@ PriorDream ${index + 1}:
 
   const compactedPrompt = `
 You are DreamScape's evidence-constrained dream reflection engine. Explain the sequence and reported emotion in plain Vietnamese, distinguish observation from inference, and never act as a clinician or fortune teller.
-Prior case applicability counts only indicate how often users confirmed that a rule's application condition fit their own case. They may help rank applicability, but they are not academic evidence and must never increase the rule's scientific certainty.
+The unified argument score combines documentary support with deterministic case-verification adjustments. A user's answer may update that score, but it never creates a new academic source and must not be described as independent research evidence.
 Your task is to analyze the user's dream and output a strictly structured JSON analysis.
 
 INPUT DATA:
@@ -684,7 +688,7 @@ The JSON object must match this exact TypeScript interface:
 CRITICAL RULES:
 1. All note, hypothesis, summary, analysis, and follow-up text fields MUST be written in Vietnamese (Tiếng Việt).
 2. ApplicationRole is a hard boundary: only psychological_mechanism may appear in scientific_context_notes or explain a waking-life psychological process. contextual_probe may only support a concrete unanswered question. descriptive_pattern may only remain in the audit trail and must not become a psychological explanation, hypothesis, or advice.
-2a. ApplicationTier "exploratory" means the approved rule is still weak or single-source. It may generate concrete case questions and a cautious structural comparison, but must never be written as an established fact, diagnosis, prediction, or proof of creativity. User answers change case applicability only and never raise the academic evidence score.
+2a. ApplicationTier "exploratory" means the approved argument is still weak or single-source. It may generate concrete case questions and a cautious structural comparison, but must never be written as an established fact, diagnosis, prediction, or proof of creativity. User answers update the argument's unified score through the deterministic validation pipeline; they do not create new academic sources.
 2. Translate "Threat Simulation Theory (TST)" into Vietnamese as "Lý thuyết mô phỏng mối đe dọa". Never use "Simulasi Dị Nghi" or similar incorrect terms.
 3. Make all scientific notes cautious using terms like "có thể", "một khung diễn giải", "không phải chẩn đoán", "không khẳng định quan hệ nhân quả chắc chắn".
 4. The overall "confidence" float must respect the "confidenceCap" of any matched rules. If multiple rules are matched, the confidence should not exceed the minimum confidenceCap of those matched rules.
@@ -731,7 +735,7 @@ CRITICAL RULES:
   );
   let rawAiAnalysis: ILLMOutput;
   try {
-    rawAiAnalysis = await generateAnalysis(compactedPrompt);
+    rawAiAnalysis = await generateAnalysis(compactedPrompt, abortSignal);
     rawAiAnalysis.analysis_mode = 'llm_grounded';
   } catch (error) {
     const fallbackThreads = ensureInterpretiveThreadCoverage(dreamNarrative, []);
@@ -945,10 +949,18 @@ CRITICAL RULES:
         aiAnalysis.real_life_hypotheses,
         questionRules,
       );
-      aiAnalysis.real_life_hypotheses = aiAnalysis.real_life_hypotheses.map((item: any) => ({
-        ...item,
-        sources: deduplicateAcademicSources(validSourcesMap.get(String(item.ruleId || '')) || []),
-      }));
+      aiAnalysis.real_life_hypotheses = aiAnalysis.real_life_hypotheses.map((item: any) => {
+        const ruleId = String(item.ruleId || '');
+        const validationEvidence = (validEvidenceMap.get(ruleId) || [])[0];
+        return {
+          ...item,
+          sources: deduplicateAcademicSources(validSourcesMap.get(ruleId) || []),
+          ...(validationEvidence ? {
+            validationSourceId: validationEvidence.sourceId,
+            validationExactQuote: validationEvidence.quote,
+          } : {}),
+        };
+      });
       aiAnalysis.scientific_context_notes = (aiAnalysis.scientific_context_notes || []).map((note: any) => {
         const linkedEvidence = (aiAnalysis.real_life_hypotheses || [])
           .filter((item: any) => String(item?.ruleId || '') === String(note?.ruleId || ''))

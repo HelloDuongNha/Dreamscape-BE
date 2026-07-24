@@ -29,6 +29,12 @@ import fs from 'fs';
 import path from 'path';
 import { parseHtmlArticle } from '../services/source/htmlArticleParser';
 import { importFullTextForSource } from '../services/source/fullTextImport.service';
+import {
+  beginReaderReplacement,
+  captureReaderRuleBackup,
+  completeReaderReplacement,
+  rollbackReaderReplacement,
+} from '../services/academic/reader/persistence/readerReplacement.service';
 import { resolveSourceImport } from '../services/source/sourceImportResolver.service';
 import { recordApproval, recordRejection } from '../services/contribution/contributionStats.service';
 import multer from 'multer';
@@ -214,6 +220,51 @@ export const getPendingSources = async (req: Request, res: Response): Promise<vo
  * Approves or rejects a source contribution. If approved, promotes it to AcademicSource.
  * Access: Moderator only
  */
+export const updateSourceContributionTitle = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const cleanTitle = typeof req.body?.title === 'string'
+      ? req.body.title.normalize('NFC').replace(/\s+/gu, ' ').trim()
+      : '';
+    if (cleanTitle.length < 3 || cleanTitle.length > 300) {
+      res.status(400).json({
+        success: false,
+        message: 'Document title must contain between 3 and 300 characters.',
+      });
+      return;
+    }
+
+    const contribution = await SourceContribution.findById(req.params.id);
+    if (!contribution) {
+      res.status(404).json({ success: false, message: 'Source contribution not found.' });
+      return;
+    }
+    if (contribution.reviewStatus !== 'pending') {
+      res.status(409).json({
+        success: false,
+        message: 'Only a pending contribution title can be updated here.',
+      });
+      return;
+    }
+
+    contribution.title = cleanTitle;
+    contribution.metadata = {
+      ...(contribution.metadata || {}),
+      title: cleanTitle,
+    };
+    await contribution.save();
+    res.status(200).json({
+      success: true,
+      message: 'Document title updated.',
+      data: { title: contribution.title },
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      message: err.message || 'Could not update the document title.',
+    });
+  }
+};
+
 /**
  * PATCH /api/moderation/sources/:id/status
  * Approves or rejects a source contribution. If approved, promotes it to AcademicSource.
@@ -222,9 +273,10 @@ export const getPendingSources = async (req: Request, res: Response): Promise<vo
 export const reviewSource = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const { reviewStatus, reviewNote } = req.body as {
+    const { reviewStatus, reviewNote, title } = req.body as {
       reviewStatus: string;
       reviewNote?: string;
+      title?: string;
     };
 
     const reviewerId = req.user?._id;
@@ -248,6 +300,16 @@ export const reviewSource = async (req: Request, res: Response): Promise<void> =
       res.status(400).json({
         success: false,
         message: 'Review note must not exceed 1000 characters.',
+      });
+      return;
+    }
+    const cleanTitle = typeof title === 'string'
+      ? title.normalize('NFC').replace(/\s+/gu, ' ').trim()
+      : '';
+    if (title !== undefined && (cleanTitle.length < 3 || cleanTitle.length > 300)) {
+      res.status(400).json({
+        success: false,
+        message: 'Document title must contain between 3 and 300 characters.',
       });
       return;
     }
@@ -296,7 +358,7 @@ export const reviewSource = async (req: Request, res: Response): Promise<void> =
       // Defensive Metadata Sanitization
       const rawMetadata = contribution.metadata || {};
       const sanitizedMeta = sanitizeAcademicSourceData({
-        title: rawMetadata.title || contribution.title,
+        title: cleanTitle || rawMetadata.title || contribution.title,
         authors: rawMetadata.authors || contribution.authors,
         journal: rawMetadata.journal || rawMetadata.publisher || contribution.journal,
         publisher: rawMetadata.publisher || contribution.publisher,
@@ -438,6 +500,13 @@ export const reviewSource = async (req: Request, res: Response): Promise<void> =
         year: sanitizedMeta.year,
         originalFile: contribution.originalFile,
         sourceOrigin: contribution.sourceOrigin || (isUploadedPdf ? 'uploaded_pdf' : 'doi_import'),
+        extractionMethod: contribution.extractionMethod,
+        extractionQuality: contribution.extractionQuality,
+        pdfPageCount: contribution.pdfPageCount,
+        detectedLanguage: contribution.detectedLanguage,
+        readerBuildSnapshots: contribution.readerBuildSnapshots || [],
+        pdfImportProgress: contribution.pdfImportProgress,
+        pdfImportHistory: contribution.pdfImportHistory || [],
         smartReaderStats
       });
 
@@ -1810,10 +1879,20 @@ export const reimportFullText = async (req: Request, res: Response): Promise<voi
     ...(isContribution ? { previewContributionId: source._id } : { sourceId: source._id })
   });
   const hasExistingReader = existingChunksCount > 0;
+  const replacementRunId = await beginReaderReplacement({
+    targetType: isContribution ? 'contribution' : 'approved_source',
+    targetId: String(source._id),
+    kind: 'structured',
+  });
 
   // 3. Trigger the import FullText service
   try {
-    const importResult = await importFullTextForSource(source, moderatorId, true);
+    const importResult = await importFullTextForSource(
+      source,
+      moderatorId,
+      true,
+      { replacementRunId },
+    );
 
     if (importResult.success) {
       // Clear derived metadata only after new parsed output passes validation
@@ -1827,10 +1906,13 @@ export const reimportFullText = async (req: Request, res: Response): Promise<voi
       clearedCounts.chunks = await AcademicChunk.countDocuments(
         isContribution ? { previewContributionId: source._id } : { sourceId: source._id }
       );
+      await captureReaderRuleBackup(replacementRunId, String(source._id));
       const ruleCleanup = await removeRuleV3SourceData(String(source._id));
       clearedCounts.ruleEvidence = ruleCleanup.evidenceRemoved;
       clearedCounts.rulesRemoved = ruleCleanup.rulesRemoved;
       clearedCounts.rulesRescored = ruleCleanup.rulesRescored;
+      const replacement = await completeReaderReplacement(replacementRunId);
+      await Promise.all(replacement.oldAssetIds.map(id => deleteAsset(id, 'image').catch(() => undefined)));
 
       res.status(200).json({
         success: true,
@@ -1840,14 +1922,10 @@ export const reimportFullText = async (req: Request, res: Response): Promise<voi
         warnings
       });
     } else {
+      const rollback = await rollbackReaderReplacement(replacementRunId, 'failed');
+      await Promise.all(rollback.newAssetIds.map(id => deleteAsset(id, 'image').catch(() => undefined)));
       // Reimport failed
       if (hasExistingReader) {
-        // Restore/preserve old reader status
-        source.fullTextStatus = 'imported';
-        source.readableInApp = true;
-        source.chunkBuildStatus = 'completed';
-        await source.save();
-
         res.status(422).json({
           success: false,
           error: importResult.error || 'candidate_fetch_failed',
@@ -1857,11 +1935,17 @@ export const reimportFullText = async (req: Request, res: Response): Promise<voi
           warnings
         });
       } else {
-        source.fullTextStatus = 'failed';
-        source.readableInApp = false;
-        source.chunkBuildStatus = 'failed';
-        source.fullTextImportError = importResult.message || 'Lỗi không xác định.';
-        await source.save();
+        await source.constructor.updateOne(
+          { _id: source._id },
+          {
+            $set: {
+              fullTextStatus: 'failed',
+              readableInApp: false,
+              chunkBuildStatus: 'failed',
+              fullTextImportError: importResult.message || 'Lỗi không xác định.',
+            },
+          },
+        );
 
         res.status(422).json({
           success: false,
@@ -1874,11 +1958,17 @@ export const reimportFullText = async (req: Request, res: Response): Promise<voi
       }
     }
   } catch (importErr: any) {
-    if (hasExistingReader) {
-      source.fullTextStatus = 'imported';
-      source.readableInApp = true;
-      source.chunkBuildStatus = 'completed';
-      await source.save();
+    const cancelled = importErr?.name === 'AbortError' || importErr?.message === 'reader_replacement_cancelled';
+    const rollback = await rollbackReaderReplacement(
+      replacementRunId,
+      cancelled ? 'cancelled' : 'failed',
+    ).catch(() => ({ newAssetIds: [] }));
+    await Promise.all(rollback.newAssetIds.map(id => deleteAsset(id, 'image').catch(() => undefined)));
+    if (!hasExistingReader && !cancelled) {
+      await source.constructor.updateOne(
+        { _id: source._id },
+        { $set: { fullTextStatus: 'failed', readableInApp: false, chunkBuildStatus: 'failed' } },
+      );
     }
     res.status(422).json({
       success: false,
@@ -1962,8 +2052,12 @@ export const getSourcePreview = async (req: Request, res: Response): Promise<voi
       parserWarnings: [],
       ocrNeeded: false,
       sourceType: contribution.doi ? 'doi' : ((contribution.originalFile && (contribution.originalFile.originalFileName || contribution.originalFile.cloudinarySecureUrl)) ? 'uploaded_pdf' : 'web_url'),
-      smartReaderStats: contribution.smartReaderStats
-      ,readerBuildSnapshots: contribution.readerBuildSnapshots || []
+      smartReaderStats: contribution.smartReaderStats,
+      pdfPageCount: contribution.pdfPageCount,
+      extractionMethod: contribution.extractionMethod,
+      pdfImportProgress: contribution.pdfImportProgress,
+      pdfImportHistory: contribution.pdfImportHistory || [],
+      readerBuildSnapshots: contribution.readerBuildSnapshots || []
     };
 
     // Query preview AcademicDocument
@@ -2308,7 +2402,26 @@ export const deleteContributionPdf = async (req: Request, res: Response): Promis
   }
 };
 
-import { runUploadedPdfImport } from '../services/academic/ingestion/pdf/uploadedPdfImport.service';
+import { cancelUploadedPdfImport, runUploadedPdfImport } from '../services/academic/ingestion/pdf/uploadedPdfImport.service';
+import { getPdfImportProgress } from '../services/academic/ingestion/pdf/pdfImportProgress.service';
+
+export const getUploadedPdfImportProgressForContribution = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const result = await getPdfImportProgress('contribution', req.params.id);
+    res.status(200).json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(404).json({ success: false, message: err.message || 'Không tìm thấy trạng thái xử lý PDF.' });
+  }
+};
+
+export const cancelUploadedPdfImportForContribution = async (req: Request, res: Response): Promise<void> => {
+  const cancelled = await cancelUploadedPdfImport('contribution', req.params.id);
+  if (!cancelled) {
+    res.status(409).json({ success: false, message: 'Tác vụ nhập PDF không còn chạy.' });
+    return;
+  }
+  res.status(200).json({ success: true, message: 'Đã hủy nhập PDF.' });
+};
 
 export const processUploadedPdfForContribution = async (req: Request, res: Response): Promise<void> => {
   try {

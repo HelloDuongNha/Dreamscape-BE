@@ -85,7 +85,8 @@ const GENERIC_FIELD_PATTERNS = [
 const CASE_SPECIFIC_PATTERNS = [
   /\b(?:first|last|next|previous)\s+dream\b/iu,
   /\b(?:his|her|their)\s+dream\b/iu,
-  /\b(?:case|patient|participant)\s+(?:of|named|called)\b/iu,
+  /\bcase\s+of\s+(?:(?:a|the|this)\s+)?(?:patient|participant|person|dreamer|individual)\b/iu,
+  /\b(?:case|patient|participant)\s+(?:named|called)\b/iu,
   /\b(?:dream|giấc\s+mơ)\s+(?:of|của)\s+(?:the\s+patient|a\s+patient|bệnh\s+nhân|henry|một\s+người)\b/iu,
   /\b(?:giấc\s+mơ\s+(?:đầu\s+tiên|cuối\s+cùng|sau\s+cùng|tiếp\s+theo)|trong\s+giấc\s+mơ\s+này)\b/iu,
   /\b(?:bốn\s+người\s+bạn|cô\s+gái\s+bí\s+mật|tổng\s+thống\s+cộng\s+hòa\s+pháp|henry)\b/iu,
@@ -187,10 +188,43 @@ function percent(value: number): number {
   return Math.round(value * 100);
 }
 
+function supportQuoteClusters(
+  evidence: RuleV3QualityEvidence[],
+  maxClusterGap = 240,
+): string[] {
+  const standalone: string[] = [];
+  const byChunk = new Map<string, RuleV3QualityEvidence[]>();
+  for (const item of evidence.filter(entry => entry.stance === 'supports' && entry.exactQuote?.trim())) {
+    if (item.chunkId == null || !Number.isFinite(item.startOffset) || !Number.isFinite(item.endOffset)) {
+      standalone.push(item.exactQuote!.trim());
+      continue;
+    }
+    const key = String(item.chunkId);
+    const entries = byChunk.get(key) || [];
+    entries.push(item);
+    byChunk.set(key, entries);
+  }
+
+  const clusters = [...standalone];
+  for (const entries of byChunk.values()) {
+    const sorted = [...entries].sort((left, right) => Number(left.startOffset) - Number(right.startOffset));
+    let current: RuleV3QualityEvidence[] = [];
+    for (const item of sorted) {
+      const previous = current[current.length - 1];
+      const gap = previous ? Number(item.startOffset) - Number(previous.endOffset) : 0;
+      if (current.length && gap > maxClusterGap) {
+        clusters.push(current.map(entry => entry.exactQuote!.trim()).join(' '));
+        current = [];
+      }
+      current.push(item);
+    }
+    if (current.length) clusters.push(current.map(entry => entry.exactQuote!.trim()).join(' '));
+  }
+  return clusters;
+}
+
 function assessAtomicSupport(candidate: RuleV3QualityCandidate, evidence: RuleV3QualityEvidence[]): AtomicSupportAssessment {
-  const supportQuotes = evidence
-    .filter(item => item.stance === 'supports' && item.exactQuote?.trim())
-    .map(item => item.exactQuote!.trim());
+  const supportQuotes = supportQuoteClusters(evidence);
   let best: { quote: string; statement: number; subject: number; outcome: number } | null = null;
 
   for (const quote of supportQuotes) {
@@ -270,8 +304,7 @@ export function pruneUnsupportedSupportingEvidence<T extends RuleV3QualityEviden
       else current.push(item);
     }
     for (const cluster of clusters) {
-      const combinedQuote = cluster.map(item => String(item.exactQuote || '')).join(' ');
-      const support = assessAtomicSupport(candidate, [{ exactQuote: combinedQuote, stance: 'supports' }]);
+      const support = assessAtomicSupport(candidate, cluster);
       if (support.level !== 'none') retained.push(...cluster);
     }
   }
@@ -366,8 +399,8 @@ export function assessRuleV3CandidateQuality(
     research_recommendation: 'Câu này là đề xuất nghiên cứu tiếp theo, không phải kết luận đã được chứng minh.',
     claim_type_evidence_mismatch: 'Loại quan hệ được gán không phù hợp với nội dung bằng chứng.',
     evidence_does_not_entail_claim: 'Không có một trích dẫn hỗ trợ nào tự nó chứng minh đầy đủ kết luận.',
-    generic_subject_or_outcome: 'Chủ thể hoặc kết quả quá chung chung để trở thành quy luật có thể sử dụng.',
-    case_specific_narrative: 'Câu này mô tả một nhân vật, ca hoặc tình tiết riêng; tài liệu chưa khái quát nó thành quy luật cho người khác.',
+    generic_subject_or_outcome: 'Chủ thể hoặc kết quả quá chung chung để trở thành lập luận có thể sử dụng.',
+    case_specific_narrative: 'Câu này mô tả một nhân vật, ca hoặc tình tiết riêng; tài liệu chưa khái quát nó thành lập luận cho người khác.',
     historical_or_biographical_fact: 'Câu này là thông tin lịch sử hoặc tiểu sử, không phải kết luận tâm lý có thể áp dụng cho giấc mơ.',
     generic_relation_wording: 'Câu chỉ nói hai khái niệm “có liên hệ” nhưng không nêu cơ chế, hướng tác động hoặc điều kiện kiểm chứng.',
     not_applicable_to_dream_analysis: 'Kết luận không liên quan trực tiếp tới giấc mơ, giấc ngủ, ký ức hoặc cảm xúc có thể dùng trong phân tích.',
@@ -375,7 +408,7 @@ export function assessRuleV3CandidateQuality(
     unfalsifiable_prediction: 'Câu đưa ra dự báo hoặc tiên tri không có điều kiện kiểm chứng khoa học.',
     identity_stereotype: 'Câu gán đặc điểm tâm lý cho bản sắc con người và không an toàn để khái quát.',
     book_claim_lacks_generalizable_mechanism: 'Kết luận từ sách chưa nêu điều kiện hoặc cơ chế đủ khái quát để áp dụng cho trường hợp khác.',
-    non_operational_theory: 'Nội dung là hệ biểu tượng hoặc khái niệm lý thuyết không có điều kiện quan sát để dùng như một quy luật Oracle.'
+    non_operational_theory: 'Nội dung là hệ biểu tượng hoặc khái niệm lý thuyết không có điều kiện quan sát để dùng như một lập luận Oracle.'
   };
 
   return {

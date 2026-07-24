@@ -8,15 +8,16 @@ import { buildRuleV3PlanPreview, buildRuleV3PlanPreviewRaw } from '../services/r
 import {
   getRuleV3FullRun,
   getRuleV3SourceSummary,
-  startRuleV3FullExtraction
+  startRuleV3FullExtraction,
+  cancelRuleV3FullExtraction,
 } from '../services/rules/ruleV3FullExtraction.service';
 import KnowledgeRuleV3 from '../models/rulesV3/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../models/rulesV3/KnowledgeRuleEvidence';
 import AcademicChunk from '../models/AcademicChunk';
 import AcademicSource from '../models/AcademicSource';
 import SourceContribution from '../models/SourceContribution';
-import Dream from '../models/Dream';
 import { RULE_V3_SCORING_VERSION, scoreRuleV3 } from '../services/rules/ruleV3Scoring.service';
+import { applyStoredValidationAdjustment } from '../services/rules/ruleV3ValidationScore.service';
 import {
   assessRuleV3MergeCompatibility,
   buildRuleV3MergeClusters,
@@ -417,6 +418,16 @@ export const getFullRuleV3ExtractionProgress = async (req: Request, res: Respons
   res.status(200).json({ success: true, data: run });
 };
 
+export const cancelFullRuleV3Extraction = async (req: Request, res: Response): Promise<void> => {
+  res.setHeader('Cache-Control', 'no-store');
+  const cancelled = await cancelRuleV3FullExtraction(String(req.params.runId));
+  if (!cancelled) {
+    res.status(409).json({ success: false, message: 'Lượt phân tích không còn chạy hoặc không tồn tại.' });
+    return;
+  }
+  res.status(200).json({ success: true, message: 'Đã hủy phân tích lập luận.' });
+};
+
 export const getRuleV3SourceAnalysisSummary = async (req: Request, res: Response): Promise<void> => {
   res.setHeader('Cache-Control', 'no-store');
   try {
@@ -544,7 +555,7 @@ function buildProbeBlueprint(rule: any) {
       verificationMode: 'background_only',
       checkable: false,
       conditionSummary: condition || null,
-      explanation: 'Quy luật này chỉ cung cấp kiến thức nền. Dữ liệu nguồn chưa nêu điều kiện có thể hỏi người kể để kiểm tra việc áp dụng vào một giấc mơ cụ thể.',
+      explanation: 'Lập luận này chỉ cung cấp kiến thức nền. Dữ liệu nguồn chưa nêu điều kiện có thể hỏi người kể để kiểm tra việc áp dụng vào một giấc mơ cụ thể.',
       expectedPattern: cleanSourceMetadataText(rule.statement),
       supportCriterion: 'Câu trả lời cá nhân chỉ xác nhận hệ thống đã nhận diện đúng chi tiết; chưa có tiêu chí từ nguồn để tính nó là một ca ủng hộ kết luận.',
       weakeningCriterion: 'Nếu người kể liên tục bác bỏ chi tiết mà hệ thống đã khớp, điều đó làm yếu cách truy hồi/áp dụng rule—không tự nó bác bỏ kết luận học thuật.',
@@ -650,10 +661,10 @@ export function buildCompositeProbeBlueprint(rule: any) {
     verificationMode: checkable ? 'individual_question' : 'background_only',
     checkable,
     conditionSummary: [...new Set(blueprints.map(({ blueprint }: any) => blueprint.conditionSummary).filter(Boolean))].join('; ') || null,
-    explanation: 'Quy luật tổng hợp giữ các mệnh đề nguyên tử và chỉ gộp những câu hỏi kiểm tra cùng một loại dữ kiện.',
+    explanation: 'Lập luận tổng hợp giữ các mệnh đề nguyên tử và chỉ gộp những câu hỏi kiểm tra cùng một loại dữ kiện.',
     expectedPattern: components.map((component: any) => component.statement).join('\n'),
     supportCriterion: 'Mỗi mệnh đề con chỉ được giữ khi dữ liệu phù hợp với đúng điều kiện và trích dẫn gắn với mệnh đề đó.',
-    weakeningCriterion: 'Một câu trả lời chỉ làm yếu mệnh đề con mà nó kiểm tra; không tự động bác bỏ toàn bộ quy luật tổng hợp.',
+    weakeningCriterion: 'Một câu trả lời chỉ làm yếu mệnh đề con mà nó kiểm tra; không tự động bác bỏ toàn bộ lập luận tổng hợp.',
     inconclusiveCriterion: 'Mệnh đề chưa có dữ liệu phân biệt vẫn giữ trạng thái chưa đủ thông tin, không được suy rộng từ mệnh đề khác.',
     questionDimensions: [...questionByPurpose.values()],
     feedbackEffect: 'Các câu hỏi trùng mục đích được hợp nhất; câu hỏi thu một loại dữ kiện khác vẫn được giữ riêng và liên kết với mệnh đề tương ứng.',
@@ -776,7 +787,7 @@ function mapRuleV3Candidate(
   const weakestComponent = componentScores.reduce((weakest, current) =>
     !weakest || current.score.evidenceScore < weakest.score.evidenceScore ? current : weakest,
   null as (typeof componentScores[number] | null));
-  const score = pooledEquivalentScore || (weakestComponent ? {
+  const sourceScore = pooledEquivalentScore || (weakestComponent ? {
     ...weakestComponent.score,
     // A composite is only as review-ready as its weakest atomic claim. Counts
     // are kept per component below; the headline never averages a weak claim
@@ -790,6 +801,7 @@ function mapRuleV3Candidate(
     contradictingCitationCount: componentScores.reduce((sum, item) => sum + item.score.contradictingCitationCount, 0),
     exactCitationCount: componentScores.reduce((sum, item) => sum + item.score.exactCitationCount, 0),
   } : baseScore);
+  const score = applyStoredValidationAdjustment(sourceScore, rule);
   const sourceId = source?._id || String(evidence[0]?.sourceId || '');
   return {
     _id: String(rule._id),
@@ -883,7 +895,7 @@ function mapRuleV3Candidate(
             ? 'Các mệnh đề có cùng chủ thể và kết quả nên bằng chứng từ những tài liệu độc lập được gộp để chấm lại kết luận chung.'
             : 'The claims have equivalent subjects and outcomes, so evidence from independent documents is pooled to rescore the shared conclusion.')
           : (rule.sourceLanguage === 'vi'
-            ? 'Điểm tổng hợp lấy theo mệnh đề yếu nhất. Việc gộp các mệnh đề từ cùng một tài liệu hoặc cùng một đoạn nguồn không tạo thêm nguồn độc lập và không làm điểm học thuật tăng.'
+            ? 'Điểm tổng hợp lấy theo mệnh đề yếu nhất. Việc gộp các mệnh đề từ cùng một tài liệu hoặc cùng một đoạn nguồn không tạo thêm nguồn độc lập và không làm phần điểm từ tài liệu tăng.'
             : 'The composite score follows the weakest claim. Combining claims from the same document or source paragraph does not create independent evidence and therefore does not increase academic support.'),
       },
     } : {}),
@@ -1057,42 +1069,11 @@ export const getRuleV3CandidateDetail = async (req: Request, res: Response): Pro
         || right.evidenceScore - left.evidenceScore;
     })
     .slice(0, 20);
-  const feedbackRows = await Dream.aggregate<{ _id: 'supports' | 'weakens' | 'unresolved'; count: number }>([
-    { $match: { 'realLifeHypothesesFeedback.ruleId': { $in: feedbackRuleIds.map(id => String(id)) } } },
-    { $unwind: '$realLifeHypothesesFeedback' },
-    { $match: { 'realLifeHypothesesFeedback.ruleId': { $in: feedbackRuleIds.map(id => String(id)) } } },
-    { $sort: { 'realLifeHypothesesFeedback.updatedAt': -1 } },
-    { $group: {
-      _id: '$realLifeHypothesesFeedback.userId',
-      effect: { $first: '$realLifeHypothesesFeedback.effect' },
-    } },
-    { $group: { _id: '$effect', count: { $sum: 1 } } },
-  ]);
-  const feedbackStats = {
-    supports: 0,
-    weakens: 0,
-    unresolved: 0,
-    total: 0,
-    applicabilityRate: null as number | null,
-    applicabilityScore: null as number | null,
-  };
-  for (const row of feedbackRows) {
-    if (row._id in feedbackStats) feedbackStats[row._id] = row.count;
-    feedbackStats.total += row.count;
-  }
-  const resolvedCount = feedbackStats.supports + feedbackStats.weakens;
-  feedbackStats.applicabilityRate = resolvedCount > 0
-    ? Math.round((feedbackStats.supports / resolvedCount) * 100)
-    : null;
-  feedbackStats.applicabilityScore = resolvedCount > 0
-    ? Math.round(((feedbackStats.supports + 2) / (resolvedCount + 4)) * 100)
-    : null;
   res.status(200).json({
     success: true,
     data: {
       candidate,
       ruleRelationships,
-      feedbackStats,
       evidenceChunks: chunks.map((chunk: any) => ({
         chunkId: String(chunk._id),
         sectionTitle: chunk.sectionTitle,
@@ -1110,28 +1091,28 @@ export const getRuleV3CandidateDetail = async (req: Request, res: Response): Pro
 export const mergeRuleV3CandidateGroup = async (req: Request, res: Response): Promise<void> => {
   try {
     if (String(req.body?.confirmation || '') !== 'MERGE_COMPATIBLE_RULES') {
-      res.status(400).json({ success: false, code: 'merge_confirmation_required', message: 'Thiếu xác nhận gộp quy luật.' });
+      res.status(400).json({ success: false, code: 'merge_confirmation_required', message: 'Thiếu xác nhận gộp lập luận.' });
       return;
     }
     const result = await mergePendingRuleV3Group(String(req.params.id));
     res.status(200).json({
       success: true,
-      message: 'Đã tạo quy luật tổng hợp và lưu vết các mệnh đề nguồn.',
+      message: 'Đã tạo lập luận tổng hợp và lưu vết các mệnh đề nguồn.',
       data: result,
     });
   } catch (error) {
     if (error instanceof RuleV3MergeError) {
       const status = error.code === 'rule_not_found' ? 404 : 409;
       const messages = {
-        rule_not_found: 'Không tìm thấy quy luật cần gộp.',
-        rule_not_pending: 'Chỉ có thể gộp các quy luật nguyên tử cùng trạng thái chờ duyệt hoặc cùng trạng thái đã duyệt.',
-        no_compatible_rules: 'Không có mệnh đề đủ tương thích để gộp an toàn với quy luật này.',
-        merge_too_large: 'Cụm quy luật quá lớn để gộp an toàn trong một lần.',
+        rule_not_found: 'Không tìm thấy lập luận cần gộp.',
+        rule_not_pending: 'Chỉ có thể gộp các lập luận nguyên tử cùng trạng thái chờ duyệt hoặc cùng trạng thái đã duyệt.',
+        no_compatible_rules: 'Không có mệnh đề đủ tương thích để gộp an toàn với lập luận này.',
+        merge_too_large: 'Cụm lập luận quá lớn để gộp an toàn trong một lần.',
       };
       res.status(status).json({ success: false, code: error.code, message: messages[error.code] });
       return;
     }
-    res.status(500).json({ success: false, code: 'rule_merge_failed', message: 'Không thể gộp quy luật.' });
+    res.status(500).json({ success: false, code: 'rule_merge_failed', message: 'Không thể gộp lập luận.' });
   }
 };
 
@@ -1193,10 +1174,18 @@ async function approveRuleV3Record(existing: any): Promise<void> {
   } catch {
     throw new Error('embedding_unavailable');
   }
+  const finalScore = applyStoredValidationAdjustment(score, existing);
   await KnowledgeRuleV3.findByIdAndUpdate(existing._id, {
     status: 'verified',
-    evidenceScore: score.evidenceScore,
-    certaintyTier: score.certaintyTier,
+    sourceEvidenceScore: score.evidenceScore,
+    evidenceScore: finalScore.evidenceScore,
+    certaintyTier: finalScore.evidenceScore >= 85
+      ? 'strong'
+      : finalScore.evidenceScore >= 65
+        ? 'moderate'
+        : finalScore.evidenceScore >= 45
+          ? 'limited'
+          : 'weak',
     supportingSourceCount: score.supportingSourceCount,
     contradictingSourceCount: score.contradictingSourceCount,
     embedding,
@@ -1207,24 +1196,24 @@ async function approveRuleV3Record(existing: any): Promise<void> {
 export const approveRuleV3Candidate = async (req: Request, res: Response): Promise<void> => {
   const existing = await KnowledgeRuleV3.findById(req.params.id);
   if (!existing) {
-    res.status(404).json({ success: false, message: 'Không tìm thấy quy luật Rule V3.' });
+    res.status(404).json({ success: false, message: 'Không tìm thấy lập luận Rule V3.' });
     return;
   }
   try {
     await approveRuleV3Record(existing);
   } catch (error: any) {
     const messages: Record<string, string> = {
-      missing_supporting_citation: 'Không thể duyệt quy luật chưa có trích dẫn hỗ trợ nguyên văn.',
-      quality_gate_failed: 'Quy luật chưa vượt qua kiểm tra chất lượng bắt buộc.',
-      composite_component_quality_gate_failed: 'Chưa thể duyệt quy luật tổng hợp vì ít nhất một mệnh đề con chưa có dẫn chứng trực tiếp hoặc chưa vượt qua kiểm tra chất lượng.',
-      embedding_unavailable: 'Chưa thể tạo chỉ mục truy hồi cho quy luật. Quy luật chưa được duyệt; vui lòng kiểm tra mô hình embedding.'
+      missing_supporting_citation: 'Không thể duyệt lập luận chưa có trích dẫn hỗ trợ nguyên văn.',
+      quality_gate_failed: 'Lập luận chưa vượt qua kiểm tra chất lượng bắt buộc.',
+      composite_component_quality_gate_failed: 'Chưa thể duyệt lập luận tổng hợp vì ít nhất một mệnh đề con chưa có dẫn chứng trực tiếp hoặc chưa vượt qua kiểm tra chất lượng.',
+      embedding_unavailable: 'Chưa thể tạo chỉ mục truy hồi cho lập luận. Lập luận chưa được duyệt; vui lòng kiểm tra mô hình embedding.'
     };
-    res.status(error?.message === 'embedding_unavailable' ? 503 : 422).json({ success: false, message: messages[error?.message] || 'Không thể duyệt quy luật.' });
+    res.status(error?.message === 'embedding_unavailable' ? 503 : 422).json({ success: false, message: messages[error?.message] || 'Không thể duyệt lập luận.' });
     return;
   }
   const rule = await KnowledgeRuleV3.findById(existing._id);
   if (!rule) {
-    res.status(404).json({ success: false, message: 'Không tìm thấy quy luật Rule V3.' });
+    res.status(404).json({ success: false, message: 'Không tìm thấy lập luận Rule V3.' });
     return;
   }
   await reconcileOracleEvidenceGapsForRule({

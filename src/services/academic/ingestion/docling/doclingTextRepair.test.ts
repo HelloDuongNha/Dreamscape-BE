@@ -18,6 +18,18 @@ assert.equal(
   DoclingTextRepairService.repairHtml("<table><tr><td>Con ngư'i</td><td>5.2 mg/dL</td></tr></table>"),
   '<table><tr><td>Con người</td><td>5.2 mg/dL</td></tr></table>',
 );
+assert.equal(
+  DoclingTextRepairService.repairText('phóng đại lên 2.000.000 lân; một lân nữa nhưng kỳ lân vẫn ở lân cận'),
+  'phóng đại lên 2.000.000 lần; một lần nữa nhưng kỳ lân vẫn ở lân cận',
+);
+assert.equal(
+  DoclingTextRepairService.repairText('một cách đơn thuân và thuân túy'),
+  'một cách đơn thuần và thuần túy',
+);
+assert.equal(
+  DoclingTextRepairService.repairText('vị sư cẩu nguyện trước Mặt trời thẩn linh'),
+  'vị sư cầu nguyện trước Mặt trời thần linh',
+);
 
 const canonical = DoclingAdapterService.mapToCanonicalBlocks({
   success: true,
@@ -53,4 +65,4 @@ assert.equal(canonical.canonicalOutput.blocks[0]?.text, "Taken from 'An Introduc
 assert.match(canonical.canonicalOutput.blocks[1]?.html || '', /Con người/u);
 assert.equal(canonical.canonicalOutput.blocks[1]?.tableData?.cells[0]?.text, 'Con người');
 
-console.log('DOCLING TEXT REPAIR: 7 PASSED, 0 FAILED');
+console.log('DOCLING TEXT REPAIR: 10 PASSED, 0 FAILED');

@@ -15,6 +15,7 @@ import {
   analyzeDreamById,
   debugRag,
   saveHypothesisFeedback,
+  cancelDreamAnalysis,
 } from '../controllers/dreamController';
 import authMiddleware from '../middleware/authMiddleware';
 
@@ -522,6 +523,7 @@ router.get('/:id', authMiddleware, getDream);
  */
 router.post('/analyze', authMiddleware, analyzeDream);
 router.post('/:id/analyze', authMiddleware, analyzeDreamById);
+router.post('/:id/analysis/cancel', authMiddleware, cancelDreamAnalysis);
 router.post('/:id/hypothesis-feedback', authMiddleware, saveHypothesisFeedback);
 
 // ─── POST /api/dreams/debug-rag ──────────────────────────────────────────────

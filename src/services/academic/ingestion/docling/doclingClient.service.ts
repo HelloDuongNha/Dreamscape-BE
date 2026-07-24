@@ -164,6 +164,7 @@ export class DoclingClientService {
   public static async extractPdf(
     pdfPath: string,
     doOcr: boolean = false,
+    abortSignal?: AbortSignal,
   ): Promise<DoclingRunResult> {
     const pythonBin = this.getPythonBin();
     const noopCleanup = async () => {};
@@ -205,9 +206,23 @@ export class DoclingClientService {
     const cleanup = this.makeCleanup(runDir);
 
     return new Promise<DoclingRunResult>((resolve) => {
-      const pyProcess = spawn(pythonBin, [scriptPath, pdfPath, runDir, String(doOcr)]);
+      const bundledArtifactsPath = path.resolve(path.dirname(pythonBin), '..', '..', 'models');
+      const configuredArtifactsPath = process.env.DOCLING_ARTIFACTS_PATH?.trim();
+      const artifactsPath = configuredArtifactsPath ||
+        (fs.existsSync(bundledArtifactsPath) ? bundledArtifactsPath : undefined);
+      const pyProcess = spawn(
+        pythonBin,
+        [scriptPath, pdfPath, runDir, String(doOcr)],
+        {
+          env: {
+            ...process.env,
+            ...(artifactsPath ? { DOCLING_ARTIFACTS_PATH: artifactsPath } : {}),
+          },
+        },
+      );
       let stdoutAccum = '';
       let stderrAccum = '';
+      let timer: ReturnType<typeof setTimeout> | null = null;
 
       // Settled guard: only one of timeout / close / error may win
       let settled = false;
@@ -232,11 +247,25 @@ export class DoclingClientService {
         });
       };
 
+      const abortExtraction = () => {
+        settle(async () => {
+          if (timer) clearTimeout(timer);
+          abortSignal?.removeEventListener('abort', abortExtraction);
+          pyProcess.kill('SIGKILL');
+          await fail('EXTRACTION_CANCELLED', 'Docling extraction was cancelled.');
+        });
+      };
+      if (abortSignal?.aborted) {
+        abortExtraction();
+        return;
+      }
+      abortSignal?.addEventListener('abort', abortExtraction, { once: true });
+
       // ── Timeout ──────────────────────────────────────────────────────────────
       const extractionTimeoutMs = doOcr
         ? DOCLING_OCR_TIMEOUT_MS
         : DOCLING_EXTRACTION_TIMEOUT_MS;
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         settle(async () => {
           pyProcess.kill('SIGKILL');
           // Await close before cleaning
@@ -260,7 +289,7 @@ export class DoclingClientService {
       });
 
       pyProcess.on('error', () => {
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         settle(async () => {
           await fail('SPAWN_ERROR', 'Failed to start the Docling Python process.');
         });
@@ -268,10 +297,40 @@ export class DoclingClientService {
 
       // ── Process close ────────────────────────────────────────────────────────
       pyProcess.on('close', (code) => {
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
+        abortSignal?.removeEventListener('abort', abortExtraction);
         settle(async () => {
           if (code !== 0) {
-            await fail('EXTRACTION_FAILED', 'Docling extraction process failed.');
+            let parsedFailure: DoclingExtractionResult | null = null;
+            try {
+              const candidate = JSON.parse(stdoutAccum.trim()) as DoclingExtractionResult;
+              if (candidate.success === false) parsedFailure = candidate;
+            } catch {
+              // The safe structured error is optional; stderr is logged below.
+            }
+            const stderrSummary = stderrAccum
+              .split(/\r?\n/)
+              .map(line => line.trim())
+              .filter(Boolean)
+              .slice(-8)
+              .join(' | ')
+              .slice(0, 2000);
+            console.error(
+              `[Docling] Extraction failed (${parsedFailure?.errorCode || 'EXTRACTION_FAILED'}).` +
+              (stderrSummary ? ` ${stderrSummary}` : ''),
+            );
+            await cleanup();
+            resolve({
+              result: parsedFailure || {
+                success: false, title: '', pageCount: 0, items: [],
+                duration: 0, ocrUsed: doOcr, warnings: [],
+                referenceQualityDegraded: false,
+                errorCode: 'EXTRACTION_FAILED',
+                errorDetail: 'Docling extraction process failed.',
+              },
+              artifacts: [],
+              cleanup,
+            });
             return;
           }
 

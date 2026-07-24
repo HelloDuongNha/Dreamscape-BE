@@ -64,7 +64,7 @@ export function removeInternalAnalysisVocabulary(value: unknown): string {
     .replace(/\brule\s+v3\b/giu, 'kết quả nghiên cứu')
     .replace(/\brule\s+(?:đã\s+duyệt\s+)?về\s+/giu, 'nghiên cứu về ')
     .replace(/\brule\s+(?:đã\s+duyệt\s+)?/giu, 'kết quả nghiên cứu ')
-    .replace(/quy luật\s+(?:đã\s+duyệt\s+)?/giu, 'kết quả nghiên cứu ')
+    .replace(/(?:quy luật|lập luận)\s+(?:đã\s+duyệt\s+)?/giu, 'kết quả nghiên cứu ')
     .replace(/\s+/gu, ' ')
     .trim();
 }
@@ -491,7 +491,7 @@ export function buildRuleGroundedFallbackHypotheses(rules: any[], narrative: str
       followUpQuestion = `Trong bảy ngày trước giấc mơ, bạn có thường xuyên nghĩ hoặc lo về một việc ngoài đời liên quan trực tiếp đến chi tiết “${cuePreview}” không?`;
       reasonForAsking = 'Tài liệu nêu rằng hoạt động hằng ngày và mối bận tâm hiện tại có thể được đưa vào nội dung giấc mơ. Câu hỏi kiểm tra mối nối này trong trường hợp cụ thể, thay vì gán nghĩa cho hình ảnh chỉ từ lời kể.';
       ifYesMeaning = 'Câu trả lời Có xác nhận điều kiện áp dụng trong ca này: chi tiết được hỏi có một mối bận tâm hoặc hoạt động đời thực tương ứng.';
-      ifNoMeaning = 'Câu trả lời Không làm yếu cách áp dụng quy luật này cho chi tiết được hỏi; phân tích phải tìm một nguồn khác hoặc giữ nó ở mức chưa xác định.';
+      ifNoMeaning = 'Câu trả lời Không làm yếu cách áp dụng lập luận này cho chi tiết được hỏi; phân tích phải tìm một nguồn khác hoặc giữ nó ở mức chưa xác định.';
       questionType = 'past';
       alternateQuestionDimension = 'recent_day_activity';
       alternateFollowUpQuestion = `Trong 24 giờ trước khi ngủ, bạn có làm một hoạt động cụ thể liên quan trực tiếp đến chi tiết “${cuePreview}” không?`;
@@ -905,9 +905,9 @@ function ruleAndComponentIds(rule: any): Set<string> {
 }
 
 /**
- * Summarises answers as case-level applicability. This deliberately does not
- * change the rule's academic evidence score: one person's answers can confirm
- * whether a rule fits this dream, but cannot create a new independent study.
+ * Summarises answers at case level for narrative rematerialisation. Score
+ * changes are applied separately by the deterministic validation pipeline;
+ * one person's answer still does not create a new independent study.
  */
 export function buildExploratoryCaseAssessment(
   hypotheses: any[],
@@ -984,7 +984,7 @@ export function buildExploratoryCaseAssessment(
     solutionConclusion = 'Ý tưởng giải pháp chưa từng xuất hiện khi thức nên có thể là một liên tưởng mới trong mơ, nhưng câu trả lời này chưa chứng minh ý tưởng đó đúng hoặc hữu ích.';
   }
   const prefix = answeredCount > 0
-    ? `Đã đối chiếu ${answeredCount}/${totalCount} chiều dữ kiện của quy luật; ${confirmedCount} được xác nhận, ${weakenedCount} bị làm yếu và ${unresolvedCount} còn chưa rõ.`
+    ? `Đã đối chiếu ${answeredCount}/${totalCount} chiều dữ kiện của lập luận; ${confirmedCount} được xác nhận, ${weakenedCount} bị làm yếu và ${unresolvedCount} còn chưa rõ.`
     : `Chưa có câu trả lời cho ${totalCount} chiều dữ kiện đã chuẩn bị.`;
   const combined = findings.length > 0
     ? `Các câu trả lời cho thấy ${findings.join('; ')}.`
@@ -992,8 +992,8 @@ export function buildExploratoryCaseAssessment(
   const interpretation = confirmedCount >= 3 && answer('implausible_future_scenario') === 'yes'
     ? 'Kết luận phù hợp nhất cho ca này là giấc mơ đã tổ chức lại ký ức gần đây và việc chuẩn bị đang tiếp diễn thành một màn diễn tập phi thực tế xoay quanh sự kiện sắp tới.'
     : status === 'weakened'
-      ? 'Các điều kiện cần chưa được xác nhận đủ, nên quy luật này không còn là hướng chính cho ca này.'
-      : 'Quy luật vẫn chỉ là một hướng đối chiếu cho ca này cho đến khi các chiều dữ kiện còn thiếu được làm rõ.';
+      ? 'Các điều kiện cần chưa được xác nhận đủ, nên lập luận này không còn là hướng chính cho ca này.'
+      : 'Lập luận vẫn chỉ là một hướng đối chiếu cho ca này cho đến khi các chiều dữ kiện còn thiếu được làm rõ.';
   return {
     status,
     answeredCount,
@@ -1089,7 +1089,7 @@ export function buildDreamCaseConclusion(
     kind: 'boundary',
     title: 'Giới hạn để tránh kết luận quá mức',
     detail: Number.isFinite(weakestExploratoryScore)
-      ? `Quy luật khám phá yếu nhất đang có ${weakestExploratoryScore}/100 điểm học thuật. Câu trả lời của bạn chỉ tăng độ phù hợp với ca này, không làm tăng điểm nghiên cứu và không biến giấc mơ thành dự báo hay chẩn đoán.`
+      ? `Lập luận khám phá yếu nhất đang có ${weakestExploratoryScore}/100 điểm. Câu trả lời Có/Không sẽ cập nhật trực tiếp điểm lập luận theo cơ chế xác nhận trường hợp, nhưng không tạo thêm nguồn nghiên cứu và không biến giấc mơ thành dự báo hay chẩn đoán.`
       : 'Không dùng nội dung giấc mơ đơn lẻ để dự báo tương lai, chẩn đoán tâm lý hoặc gán ý nghĩa cố định cho một hình ảnh.',
   });
 
@@ -1157,7 +1157,7 @@ export function buildCaseGroundedSynthesis(
       base = [
         base,
         `Đối chiếu khám phá từ tài liệu: chuỗi cảnh không chỉ nối quá khứ với hiện tại, mà còn ghép ${cueSummary} thành một diễn biến mới trong bối cảnh phi thực tế.`,
-        'Cấu trúc này tương đồng với mô tả về những liên kết lỏng giữa các mảnh ký ức trong giấc mơ hướng tới tương lai. Tuy nhiên, quy luật đang có bằng chứng yếu; các câu hỏi bên dưới phải xác nhận nguồn của những mảnh ghép, sự kiện sắp tới và việc chuẩn bị khi thức trước khi hướng này được giữ cho trường hợp cụ thể.',
+        'Cấu trúc này tương đồng với mô tả về những liên kết lỏng giữa các mảnh ký ức trong giấc mơ hướng tới tương lai. Tuy nhiên, lập luận đang có bằng chứng yếu; các câu hỏi bên dưới phải xác nhận nguồn của những mảnh ghép, sự kiện sắp tới và việc chuẩn bị khi thức trước khi hướng này được giữ cho trường hợp cụ thể.',
       ].filter(Boolean).join(' ');
     }
     const exploratoryAssessment = buildExploratoryCaseAssessment(hypotheses);
@@ -1780,7 +1780,7 @@ export function buildVerifiedMechanismFallbackNotes(
         cueSentence,
         caseApplicability?.answeredCount ? caseApplicability.conclusion : '',
         'Sự tương đồng này chỉ mở ra một hướng đối chiếu về nguồn các mảnh ký ức và việc chuẩn bị cho sự kiện sắp tới; nó không chứng minh giấc mơ làm tăng sáng tạo hoặc dự báo tương lai.',
-        'Quy luật hiện có điểm bằng chứng thấp và chưa đủ nguồn độc lập, nên chỉ được dùng như giả thuyết khám phá cho trường hợp này.',
+        'Lập luận hiện có điểm bằng chứng thấp và chưa đủ nguồn độc lập, nên chỉ được dùng như giả thuyết khám phá cho trường hợp này.',
       ].join(' ');
       dreamEvidence = firstDistinctNarrativeSentences(narrative, [
         'lớp học tiểu học cũ', 'bàn phím máy tính', 'Mặt Trăng', 'mảnh đồ chơi', 'cây cầu', 'đàn chim',

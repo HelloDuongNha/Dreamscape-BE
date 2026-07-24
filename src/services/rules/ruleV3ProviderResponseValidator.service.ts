@@ -10,15 +10,17 @@ import {
 export const LIMIT_JSON_SIZE = 100_000;
 export const LIMIT_CANDIDATES = 3;
 export const LIMIT_EVIDENCE_ITEMS = 5;
-export const LIMIT_CONDITION_ITEMS = 10;
-export const LIMIT_LIMITATION_ITEMS = 10;
-export const LIMIT_TAG_ITEMS = 15;
+export const LIMIT_CONDITION_ITEMS = 20;
+export const LIMIT_LIMITATION_ITEMS = 20;
+export const LIMIT_TAG_ITEMS = 20;
 
-export const LIMIT_LEN_STATEMENT = 5000;
-export const LIMIT_LEN_SUBJECT = 500;
-export const LIMIT_LEN_OUTCOME = 500;
-export const LIMIT_LEN_CONDITION = 500;
-export const LIMIT_LEN_LIMITATION = 500;
+// These limits are the persistence contract of KnowledgeRuleV3. Provider
+// validation must never accept a value that the model layer will reject later.
+export const LIMIT_LEN_STATEMENT = 1000;
+export const LIMIT_LEN_SUBJECT = 200;
+export const LIMIT_LEN_OUTCOME = 200;
+export const LIMIT_LEN_CONDITION = 100;
+export const LIMIT_LEN_LIMITATION = 100;
 export const LIMIT_LEN_TAG = 100;
 export const LIMIT_LEN_EVIDENCE_ID = 100;
 const LIMIT_LEN_LEGACY_PROPOSED_QUOTE = 1000;
@@ -33,7 +35,7 @@ export const OLLAMA_JSON_SCHEMA = {
       items: {
         type: 'object',
         properties: {
-          statement: { type: 'string' },
+          statement: { type: 'string', maxLength: LIMIT_LEN_STATEMENT },
           claimType: {
             type: 'string',
             enum: [
@@ -56,19 +58,22 @@ export const OLLAMA_JSON_SCHEMA = {
             type: 'string',
             enum: ['causal', 'associational', 'predictive', 'descriptive', 'interpretive', 'not_applicable']
           },
-          subject: { type: 'string' },
-          outcome: { type: 'string' },
+          subject: { type: 'string', maxLength: LIMIT_LEN_SUBJECT },
+          outcome: { type: 'string', maxLength: LIMIT_LEN_OUTCOME },
           conditions: {
             type: 'array',
-            items: { type: 'string' }
+            maxItems: LIMIT_CONDITION_ITEMS,
+            items: { type: 'string', maxLength: LIMIT_LEN_CONDITION }
           },
           limitations: {
             type: 'array',
-            items: { type: 'string' }
+            maxItems: LIMIT_LIMITATION_ITEMS,
+            items: { type: 'string', maxLength: LIMIT_LEN_LIMITATION }
           },
           dreamFeatureTags: {
             type: 'array',
-            items: { type: 'string' }
+            maxItems: LIMIT_TAG_ITEMS,
+            items: { type: 'string', maxLength: LIMIT_LEN_TAG }
           },
           evidence: {
             type: 'array',
@@ -114,7 +119,7 @@ export const GEMINI_JSON_SCHEMA = {
       items: {
         type: 'OBJECT',
         properties: {
-          statement: { type: 'STRING' },
+          statement: { type: 'STRING', maxLength: LIMIT_LEN_STATEMENT },
           claimType: {
             type: 'STRING',
             enum: [
@@ -137,19 +142,22 @@ export const GEMINI_JSON_SCHEMA = {
             type: 'STRING',
             enum: ['causal', 'associational', 'predictive', 'descriptive', 'interpretive', 'not_applicable']
           },
-          subject: { type: 'STRING' },
-          outcome: { type: 'STRING' },
+          subject: { type: 'STRING', maxLength: LIMIT_LEN_SUBJECT },
+          outcome: { type: 'STRING', maxLength: LIMIT_LEN_OUTCOME },
           conditions: {
             type: 'ARRAY',
-            items: { type: 'STRING' }
+            maxItems: LIMIT_CONDITION_ITEMS,
+            items: { type: 'STRING', maxLength: LIMIT_LEN_CONDITION }
           },
           limitations: {
             type: 'ARRAY',
-            items: { type: 'STRING' }
+            maxItems: LIMIT_LIMITATION_ITEMS,
+            items: { type: 'STRING', maxLength: LIMIT_LEN_LIMITATION }
           },
           dreamFeatureTags: {
             type: 'ARRAY',
-            items: { type: 'STRING' }
+            maxItems: LIMIT_TAG_ITEMS,
+            items: { type: 'STRING', maxLength: LIMIT_LEN_TAG }
           },
           evidence: {
             type: 'ARRAY',

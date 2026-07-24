@@ -255,7 +255,46 @@ export function directAnswerSuggestions(answer: string): string[] {
         'Tôi chưa chắc mình nên bắt đầu thế nào.',
       ];
     }
-    return ['Có, điều đó đúng với tôi.', 'Không, tôi không thấy như vậy.', 'Tôi chưa chắc.'];
+    if (/bạn\s+có\s+cảm\s+thấy/iu.test(finalQuestion)) {
+      return [
+        'Có, tôi có cảm thấy như vậy.',
+        'Không, tôi không cảm thấy như vậy.',
+        'Tôi chưa chắc mình có cảm thấy như vậy không.',
+      ];
+    }
+    if (/bạn\s+có\s+nhận\s+thấy/iu.test(finalQuestion)) {
+      return [
+        'Có, tôi có nhận thấy điều đó.',
+        'Không, tôi chưa nhận thấy điều đó.',
+        'Tôi chưa chắc mình có nhận thấy điều đó không.',
+      ];
+    }
+    if (/bạn\s+có\s+(?:nghĩ|cho\s+rằng)/iu.test(finalQuestion)) {
+      return [
+        'Có, tôi cũng nghĩ như vậy.',
+        'Không, tôi không nghĩ như vậy.',
+        'Tôi chưa chắc; tôi muốn xem xét thêm.',
+      ];
+    }
+    const hasClause = finalQuestion.match(/bạn\s+có\s+([\s\S]+?)(?:\s+không)?\?$/iu)?.[1]
+      ?.replace(/\bcủa\s+mình\b/giu, 'của tôi')
+      .replace(/\s+/gu, ' ')
+      .trim();
+    if (hasClause) {
+      const conciseClause = /một\s+việc\s+quan\s+trọng/iu.test(hasClause)
+        ? 'một việc quan trọng như vậy'
+        : /buổi\s+(?:họp|trình\s+bày)/iu.test(hasClause)
+          ? 'một buổi họp hoặc trình bày như vậy'
+          : hasClause.length <= 115
+            ? hasClause
+            : 'hoàn cảnh đó';
+      return [
+        `Có, tôi có ${conciseClause}.`,
+        `Không, tôi không có ${conciseClause}.`,
+        `Tôi chưa chắc mình có ${conciseClause} hay không.`,
+      ];
+    }
+    return ['Có.', 'Không.', 'Tôi chưa chắc.'];
   }
   if (/(?:would you like|do you want)/iu.test(finalQuestion)) {
     return ['Yes, I would like to try.', 'No, not right now.', 'I am not sure; help me take the first step.'];
@@ -357,6 +396,25 @@ function markUnsupportedInterpretations(answer: string): string {
   }).join('\n');
 }
 
+function ensureRuleBackedFinalQuestion(
+  answer: string,
+  verificationQuestions: Array<{
+    question: string;
+    citationIndex: number;
+  }>,
+  vietnamese: boolean,
+): string {
+  const selected = verificationQuestions.find((item) => item.question.trim());
+  if (!selected) return answer;
+  const withoutUnboundFinalQuestion = answer
+    .replace(/\n{2,}(?:[^\n]|\n(?!\n)){1,700}\?\s*$/u, '')
+    .trim();
+  const prefix = vietnamese
+    ? `Để kiểm tra cách lập luận [${selected.citationIndex}] áp dụng vào trường hợp này:`
+    : `To test whether argument [${selected.citationIndex}] applies to this case:`;
+  return `${withoutUnboundFinalQuestion}\n\n${prefix} ${selected.question.trim()}`;
+}
+
 export function compactUsedCitations(
   fullText: string,
   citations: OracleCitation[],
@@ -438,7 +496,11 @@ export function validateAcademicCitationSupport(text: string, citations: OracleC
       const markerStart = validated.indexOf(marker, searchFrom);
       if (markerStart < 0) break;
       const claim = citationClaimBefore(validated, markerStart);
-      const scope = `${citation.excerpt} ${citation.detail || ''}`;
+      const scope = [
+        citation.excerpt,
+        citation.detail || '',
+        ...(citation.ruleLinks || []).flatMap((rule) => [rule.statement, rule.quote]),
+      ].join(' ');
       const claimConcepts = conceptsIn(claim);
       const scopeConcepts = conceptsIn(scope);
       const covered = [...claimConcepts].filter((concept) => scopeConcepts.has(concept)).length;
@@ -553,7 +615,7 @@ export async function executeOracleRun(runId: Types.ObjectId): Promise<void> {
       : latestUserText;
     const grounding = executionMode === 'dream_analysis'
       ? await buildOracleGrounding(String(run.userId), groundingText)
-      : { citations: [], promptContext: '' };
+      : { citations: [], promptContext: '', verificationQuestions: [] };
     const adapter = await resolveOracleModelAdapter(run.userId);
     const model = adapter.modelOverride || (adapter.name === 'openai_compatible'
       ? String(process.env.ORACLE_EXTERNAL_MODEL || resolveOracleModel(executionMode))
@@ -625,6 +687,11 @@ export async function executeOracleRun(runId: Types.ObjectId): Promise<void> {
       if (groundingText === latestUserText) {
         fullText = ensurePersonalContextCitation(fullText, grounding);
       }
+      fullText = ensureRuleBackedFinalQuestion(
+        fullText,
+        grounding.verificationQuestions,
+        /[ăâđêôơưà-ỹ]/iu.test(latestUserText),
+      );
     }
     const generatedSuggestions = finalized.suggestions.length
       ? finalized.suggestions

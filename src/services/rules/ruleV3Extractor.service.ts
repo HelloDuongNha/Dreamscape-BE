@@ -22,6 +22,17 @@ import {
   verifyRuleV3EvidenceAnchor,
   type RuleV3EvidenceAnchor
 } from './ruleV3EvidenceAnchor.service';
+import {
+  LIMIT_CONDITION_ITEMS,
+  LIMIT_LEN_CONDITION,
+  LIMIT_LEN_LIMITATION,
+  LIMIT_LEN_OUTCOME,
+  LIMIT_LEN_STATEMENT,
+  LIMIT_LEN_SUBJECT,
+  LIMIT_LEN_TAG,
+  LIMIT_LIMITATION_ITEMS,
+  LIMIT_TAG_ITEMS,
+} from './ruleV3ProviderResponseValidator.service';
 
 function sha256(text: string): string {
   return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
@@ -127,7 +138,8 @@ export async function extractRuleV3Candidates(
   },
   workUnitId: string,
   provider: RuleV3GenerationProvider,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  evidenceNeeds: RuleV3ProviderInput['evidenceNeeds'] = [],
 ): Promise<ExtractionDryRunResult> {
   const startTime = Date.now();
 
@@ -202,7 +214,8 @@ export async function extractRuleV3Candidates(
         evidenceId: anchor.evidenceId,
         chunkId: anchor.chunkId,
         exactQuote: anchor.exactQuote
-      }))
+      })),
+      evidenceNeeds,
     };
 
     const raw = await provider.generateCandidates(providerInput, abortSignal);
@@ -223,19 +236,19 @@ export async function extractRuleV3Candidates(
 
   // Safe messages lookup
   const safeMessageMap: Record<RuleV3CandidateRejectionCode, string> = {
-    language_mismatch: 'Ngôn ngữ của quy luật trích xuất không khớp với ngôn ngữ của tài liệu.',
+    language_mismatch: 'Ngôn ngữ của lập luận trích xuất không khớp với ngôn ngữ của tài liệu.',
     citation_missing: 'Trích dẫn nguyên văn không tìm thấy trong đoạn văn bản tương ứng.',
     citation_ambiguous: 'Trích dẫn nguyên văn bị trùng lặp hoặc mập mờ trong đoạn văn bản.',
     evidence_reference_invalid: 'Mô hình đã chọn một mã dẫn chứng không tồn tại trong lô văn bản.',
     chunk_outside_work_unit: 'Trích dẫn thuộc về đoạn văn bản nằm ngoài đơn vị xử lý hiện tại.',
     invalid_causal_elevation: 'Mối quan hệ liên kết (association) không được tự nâng cấp thành quan hệ nhân quả (causal).',
-    candidate_schema_invalid: 'Cấu trúc quy luật không đúng định dạng yêu cầu.',
-    no_verified_evidence: 'Quy luật không có trích dẫn nào được kiểm chứng khớp nguyên văn.',
+    candidate_schema_invalid: 'Cấu trúc lập luận không đúng định dạng yêu cầu.',
+    no_verified_evidence: 'Lập luận không có trích dẫn nào được kiểm chứng khớp nguyên văn.',
     document_navigation: 'Câu này chỉ điều hướng tới bảng, hình hoặc phần khác của tài liệu.',
     research_recommendation: 'Câu này là đề xuất nghiên cứu tiếp theo, không phải kết luận đã được chứng minh.',
     claim_type_evidence_mismatch: 'Loại quan hệ được gán không phù hợp với nội dung bằng chứng.',
     evidence_does_not_entail_claim: 'Không có một trích dẫn hỗ trợ nào tự nó chứng minh đầy đủ kết luận.',
-    generic_subject_or_outcome: 'Chủ thể hoặc kết quả quá chung chung để trở thành quy luật có thể sử dụng.',
+    generic_subject_or_outcome: 'Chủ thể hoặc kết quả quá chung chung để trở thành lập luận có thể sử dụng.',
     case_specific_narrative: 'Nội dung chỉ mô tả nhân vật, ca hoặc tình tiết riêng và chưa được tài liệu khái quát.',
     historical_or_biographical_fact: 'Nội dung là thông tin lịch sử hoặc tiểu sử, không phải kết luận tâm lý dùng cho phân tích giấc mơ.',
     generic_relation_wording: 'Nội dung chỉ nói hai khái niệm có liên hệ nhưng không có cơ chế, hướng hoặc điều kiện kiểm chứng.',
@@ -244,7 +257,7 @@ export async function extractRuleV3Candidates(
     unfalsifiable_prediction: 'Nội dung đưa ra dự báo hoặc tiên tri không có điều kiện kiểm chứng khoa học.',
     identity_stereotype: 'Nội dung gán đặc điểm tâm lý cho bản sắc con người và không an toàn để khái quát.',
     book_claim_lacks_generalizable_mechanism: 'Kết luận trong sách chưa nêu điều kiện hoặc cơ chế đủ khái quát để áp dụng cho trường hợp khác.',
-    non_operational_theory: 'Nội dung là hệ biểu tượng hoặc lý thuyết không có điều kiện quan sát để dùng như một quy luật Oracle.'
+    non_operational_theory: 'Nội dung là hệ biểu tượng hoặc lý thuyết không có điều kiện quan sát để dùng như một lập luận Oracle.'
   };
 
   const tempVerified: CitationVerifiedCandidate[] = [];
@@ -264,14 +277,15 @@ export async function extractRuleV3Candidates(
   // 5. Candidate Validation & Citation Verification
   for (const candidate of rawCandidates) {
     const exceedsPersistenceContract =
-      candidate.statement.length > 1000 ||
-      candidate.subject.length > 200 ||
-      candidate.outcome.length > 200 ||
-      candidate.conditions.length > 20 ||
-      candidate.limitations.length > 20 ||
-      candidate.dreamFeatureTags.length > 20 ||
-      [...candidate.conditions, ...candidate.limitations, ...candidate.dreamFeatureTags]
-        .some(item => item.length > 100);
+      candidate.statement.length > LIMIT_LEN_STATEMENT ||
+      candidate.subject.length > LIMIT_LEN_SUBJECT ||
+      candidate.outcome.length > LIMIT_LEN_OUTCOME ||
+      candidate.conditions.length > LIMIT_CONDITION_ITEMS ||
+      candidate.limitations.length > LIMIT_LIMITATION_ITEMS ||
+      candidate.dreamFeatureTags.length > LIMIT_TAG_ITEMS ||
+      candidate.conditions.some(item => item.length > LIMIT_LEN_CONDITION) ||
+      candidate.limitations.some(item => item.length > LIMIT_LEN_LIMITATION) ||
+      candidate.dreamFeatureTags.some(item => item.length > LIMIT_LEN_TAG);
     if (exceedsPersistenceContract) {
       rejectedCandidates.push({
         proposedStatement: candidate.statement.slice(0, 1000),

@@ -3,6 +3,7 @@ import authMiddleware, { isModerator } from '../middleware/authMiddleware';
 import {
   getPendingSources,
   reviewSource,
+  updateSourceContributionTitle,
   importFullText,
   buildChunks,
   uploadPdfMiddleware,
@@ -14,6 +15,8 @@ import {
   cacheContributionPdf,
   deleteContributionPdf,
   processUploadedPdfForContribution,
+  getUploadedPdfImportProgressForContribution,
+  cancelUploadedPdfImportForContribution,
   getSourcePreviewTranslation
 } from '../controllers/moderationController';
 
@@ -22,6 +25,7 @@ import {
   dryRunRuleV3Extraction,
   startFullRuleV3Extraction,
   getFullRuleV3ExtractionProgress,
+  cancelFullRuleV3Extraction,
   getRuleV3SourceAnalysisSummary,
   getRuleV3Candidates,
   getRuleV3CandidateDetail,
@@ -118,12 +122,15 @@ router.get('/oracle-evidence-gaps', authMiddleware, isModerator, listOracleEvide
  *         description: Contribution already reviewed or duplicate exists
  */
 router.patch('/sources/:id/status', authMiddleware, isModerator, reviewSource);
+router.patch('/sources/:id/title', authMiddleware, isModerator, updateSourceContributionTitle);
 router.get('/sources/:id/preview', authMiddleware, isModerator, getSourcePreview);
 router.post('/sources/:id/preview/translate', authMiddleware, isModerator, getSourcePreviewTranslation);
 
 router.get('/sources/:id/pdf-inline', authMiddleware, isModerator, getContributionPdfInline);
 router.post('/sources/:id/cache-original-pdf', authMiddleware, isModerator, cacheContributionPdf);
 router.post('/sources/:id/process-uploaded-pdf', authMiddleware, isModerator, processUploadedPdfForContribution);
+router.get('/sources/:id/pdf-import-progress', authMiddleware, isModerator, getUploadedPdfImportProgressForContribution);
+router.post('/sources/:id/pdf-import-cancel', authMiddleware, isModerator, cancelUploadedPdfImportForContribution);
 router.delete('/sources/:id/original-pdf', authMiddleware, isModerator, deleteContributionPdf);
 router.post('/sources/upload-pdf', authMiddleware, isModerator, uploadPdfMiddleware, uploadPdfFile);
 router.post('/sources/:id/import-fulltext', authMiddleware, isModerator, importFullText);
@@ -133,6 +140,7 @@ router.post('/sources/:id/rules-v3/work-units/:workUnitId/dry-run', authMiddlewa
 router.post('/sources/:id/rules-v3/extract', authMiddleware, isModerator, startFullRuleV3Extraction);
 router.get('/sources/:id/rules-v3/summary', authMiddleware, isModerator, getRuleV3SourceAnalysisSummary);
 router.get('/rules-v3/runs/:runId', authMiddleware, isModerator, getFullRuleV3ExtractionProgress);
+router.post('/rules-v3/runs/:runId/cancel', authMiddleware, isModerator, cancelFullRuleV3Extraction);
 router.get('/rules-v3/candidates', authMiddleware, isModerator, getRuleV3Candidates);
 router.get('/rules-v3/candidates/:id', authMiddleware, isModerator, getRuleV3CandidateDetail);
 router.post('/rules-v3/candidates/:id/merge', authMiddleware, isModerator, mergeRuleV3CandidateGroup);

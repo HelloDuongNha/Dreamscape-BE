@@ -1,13 +1,14 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
 
 export interface IAcademicRuleExtractionRunV3 extends Document {
+  attemptId?: string;
   academicSourceId: Types.ObjectId;
   sourceContentHash: string;
   extractionEngineVersion: string;
   generationModel: string;
   promptVersion: string;
   scoringFormulaVersion: string;
-  status: 'pending' | 'success' | 'failed';
+  status: 'pending' | 'success' | 'failed' | 'cancelled';
   currentStage: string;
   totalBatches: number;
   processedBatches: number;
@@ -20,7 +21,7 @@ export interface IAcademicRuleExtractionRunV3 extends Document {
   evidenceChunkCount: number;
   resultRuleIds: Types.ObjectId[];
   attemptHistory: Array<{
-    status: 'success' | 'failed';
+    status: 'success' | 'failed' | 'cancelled';
     startedAt: Date;
     finishedAt?: Date;
     durationMs?: number;
@@ -57,6 +58,12 @@ export interface IAcademicRuleExtractionRunV3 extends Document {
 
 const AcademicRuleExtractionRunV3Schema = new Schema<IAcademicRuleExtractionRunV3>(
   {
+    attemptId: {
+      type: String,
+      required: false,
+      trim: true,
+      index: true
+    },
     academicSourceId: {
       type: Schema.Types.ObjectId,
       ref: 'AcademicSource',
@@ -88,7 +95,7 @@ const AcademicRuleExtractionRunV3Schema = new Schema<IAcademicRuleExtractionRunV
     },
     status: {
       type: String,
-      enum: ['pending', 'success', 'failed'],
+      enum: ['pending', 'success', 'failed', 'cancelled'],
       required: true,
       default: 'pending',
       index: true
@@ -154,7 +161,7 @@ const AcademicRuleExtractionRunV3Schema = new Schema<IAcademicRuleExtractionRunV
     attemptHistory: {
       type: [{
         _id: false,
-        status: { type: String, enum: ['success', 'failed'], required: true },
+        status: { type: String, enum: ['success', 'failed', 'cancelled'], required: true },
         startedAt: { type: Date, required: true },
         finishedAt: { type: Date, required: false },
         durationMs: { type: Number, required: false, min: 0 },

@@ -26,6 +26,8 @@ export interface IKnowledgeRuleV3 extends Document {
   classifications: string[];
   dedupKey: string; // 64 lowercase hex characters
   evidenceScore: number;
+  sourceEvidenceScore?: number;
+  userValidationAdjustment?: number;
   certaintyTier: 'weak' | 'limited' | 'moderate' | 'strong' | 'mixed';
   supportingSourceCount: number;
   contradictingSourceCount: number;
@@ -213,6 +215,17 @@ const KnowledgeRuleV3Schema = new Schema<IKnowledgeRuleV3>(
        * this schema and is not being added in this patch.
        */
     },
+    sourceEvidenceScore: {
+      type: Number,
+      required: false,
+      min: 0,
+      max: 100
+    },
+    userValidationAdjustment: {
+      type: Number,
+      required: true,
+      default: 0
+    },
     certaintyTier: {
       type: String,
       enum: ['weak', 'limited', 'moderate', 'strong', 'mixed'],
@@ -271,7 +284,7 @@ const KnowledgeRuleV3Schema = new Schema<IKnowledgeRuleV3>(
       default: [],
       validate: {
         validator: (items: unknown[]) => items.length <= 12,
-        message: 'Một quy luật tổng hợp chỉ được chứa tối đa 12 mệnh đề nguyên tử.',
+        message: 'Một lập luận tổng hợp chỉ được chứa tối đa 12 mệnh đề nguyên tử.',
       },
     },
     mergedFromRuleIds: {

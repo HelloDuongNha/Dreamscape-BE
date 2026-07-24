@@ -333,26 +333,38 @@ export class OllamaServiceError extends Error {
 /**
  * Helper to fetch with timeout.
  */
-async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeoutMs: number,
+  externalSignal?: AbortSignal,
+): Promise<Response> {
+  if ((!Number.isFinite(timeoutMs) || timeoutMs <= 0) && !externalSignal) {
     return fetch(url, options);
   }
   const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
+  const id = Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+  const abortFromExternal = () => controller.abort();
+  externalSignal?.addEventListener('abort', abortFromExternal, { once: true });
 
   try {
     const response = await fetch(url, {
       ...options,
       signal: controller.signal,
     });
-    clearTimeout(id);
+    if (id) clearTimeout(id);
     return response;
   } catch (err: any) {
-    clearTimeout(id);
+    if (id) clearTimeout(id);
     if (err.name === 'AbortError') {
+      if (externalSignal?.aborted) throw err;
       throw new OllamaServiceError(`Ollama request timed out after ${timeoutMs}ms`, 503);
     }
     throw err;
+  } finally {
+    externalSignal?.removeEventListener('abort', abortFromExternal);
   }
 }
 
@@ -400,7 +412,7 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 /**
  * Generate structured analysis from the compacted context prompt.
  */
-export async function generateAnalysis(prompt: string): Promise<ILLMOutput> {
+export async function generateAnalysis(prompt: string, abortSignal?: AbortSignal): Promise<ILLMOutput> {
   const baseUrl = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
   const model = process.env.OLLAMA_MODEL || 'qwen2.5:14b';
   // Generation is a background job and must not be cancelled merely because a
@@ -426,7 +438,8 @@ export async function generateAnalysis(prompt: string): Promise<ILLMOutput> {
           },
         }),
       },
-      timeoutMs
+      timeoutMs,
+      abortSignal,
     );
 
     if (!response.ok) {
@@ -480,6 +493,7 @@ export async function generateAnalysis(prompt: string): Promise<ILLMOutput> {
 
     return parsedResult;
   } catch (err: any) {
+    if (abortSignal?.aborted || err?.name === 'AbortError') throw err;
     if (err instanceof OllamaServiceError) {
       throw err;
     }
