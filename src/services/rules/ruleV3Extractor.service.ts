@@ -139,7 +139,6 @@ export async function extractRuleV3Candidates(
   workUnitId: string,
   provider: RuleV3GenerationProvider,
   abortSignal?: AbortSignal,
-  evidenceNeeds: RuleV3ProviderInput['evidenceNeeds'] = [],
 ): Promise<ExtractionDryRunResult> {
   const startTime = Date.now();
 
@@ -215,7 +214,6 @@ export async function extractRuleV3Candidates(
         chunkId: anchor.chunkId,
         exactQuote: anchor.exactQuote
       })),
-      evidenceNeeds,
     };
 
     const raw = await provider.generateCandidates(providerInput, abortSignal);

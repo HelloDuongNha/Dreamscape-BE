@@ -425,6 +425,14 @@ export class DoclingReaderPolicyService {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, ' ')
       .trim();
+    const distributionNoticeSignals = [
+      /luu\s+y\s+gui.{0,24}ban\s+doc/u,
+      /d[ia]nh\s+dau.{0,30}rieng/u,
+      /chia\s+se/u,
+      /tren\s+mang/u,
+      /dieu\s+kien.{0,20}mua/u,
+      /suu\s+[tf]\s*am/u,
+    ].filter(pattern => pattern.test(folded)).length;
     // Distribution/watermark notices from scanned community copies are not
     // book content. Their OCR is often severely damaged and must not become
     // canonical reader prose or RAG material.
@@ -435,7 +443,8 @@ export class DoclingReaderPolicyService {
       (/(?:cam|oam)\s+on\s+ban/u.test(folded) && folded.includes('nhom')) ||
       (folded.includes('book') && folded.includes('danh dau') && folded.includes('cong khai')) ||
       (folded.includes('book') && folded.includes('chia se')) ||
-      (folded.startsWith('sach ') && /suu\s+[tf]am/u.test(folded))
+      (folded.startsWith('sach ') && /suu\s+[tf]am/u.test(folded)) ||
+      (text.length <= 700 && distributionNoticeSignals >= 2)
     ) return true;
     return false;
   }

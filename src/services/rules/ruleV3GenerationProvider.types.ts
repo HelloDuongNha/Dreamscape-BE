@@ -71,12 +71,6 @@ export interface RuleV3ProviderInput {
     chunkId: string;
     exactQuote: string;
   }>;
-  /** Unresolved Oracle claims that this source may help verify. These are search
-   * priorities only and never count as evidence. */
-  evidenceNeeds?: Array<{
-    gapId: string;
-    claim: string;
-  }>;
 }
 
 export interface RuleV3GenerationProvider {

@@ -329,6 +329,8 @@ export function assessRuleV3CandidateQuality(
   const supportText = evidence.filter(item => item.stance === 'supports').map(item => item.exactQuote || '').join('\n');
   const combinedText = [candidate.statement, candidate.subject, candidate.outcome, supportText].join('\n');
   const reasonCodes: RuleV3QualityReasonCode[] = [];
+  const theoreticalClaim = ['theoretical_proposition', 'review_synthesis', 'qualitative_theme']
+    .includes(candidate.claimType);
 
   if (NAVIGATION_PATTERNS.some(pattern => pattern.test(combinedText))) reasonCodes.push('document_navigation');
   if (RESEARCH_RECOMMENDATION_PATTERNS.some(pattern => pattern.test(candidate.statement))) reasonCodes.push('research_recommendation');
@@ -343,7 +345,9 @@ export function assessRuleV3CandidateQuality(
   }
   if (UNFALSIFIABLE_PREDICTION_PATTERNS.some(pattern => pattern.test(combinedText))) reasonCodes.push('unfalsifiable_prediction');
   if (IDENTITY_STEREOTYPE_PATTERNS.some(pattern => pattern.test(combinedText))) reasonCodes.push('identity_stereotype');
-  if (NON_OPERATIONAL_THEORY_PATTERNS.some(pattern => pattern.test(combinedText))) reasonCodes.push('non_operational_theory');
+  if (!theoreticalClaim && NON_OPERATIONAL_THEORY_PATTERNS.some(pattern => pattern.test(combinedText))) {
+    reasonCodes.push('non_operational_theory');
+  }
   if (GENERIC_RELATION_PATTERNS.some(pattern => pattern.test(candidate.statement))
     && !DIRECTIONAL_ANCHORS.test(combinedText)
     && !PREDICTION_ANCHORS.test(combinedText)
@@ -365,6 +369,7 @@ export function assessRuleV3CandidateQuality(
   const hasPsychologyAnchor = PSYCHOLOGY_ANCHORS.test(combinedText);
   if (!hasDreamAnchor && !hasSleepContext && !hasPsychologyAnchor) reasonCodes.push('not_applicable_to_dream_analysis');
   if (context.documentType === 'book_or_monograph'
+    && !theoreticalClaim
     && !hasSpecificRuleCondition(candidate.conditions)
     && !GENERALIZABLE_MECHANISM_PATTERNS.test(candidate.statement)) {
     reasonCodes.push('book_claim_lacks_generalizable_mechanism');

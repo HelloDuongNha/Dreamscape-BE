@@ -270,49 +270,10 @@ def _sort_easyocr_results_spatially(results):
 
     ordered = []
     for line in sorted(lines, key=lambda value: value["center_y"]):
-        visual_items = sorted(
-            line["items"],
-            key=lambda item: (item["left"], item["center_y"], item["sequence"]),
+        ordered.extend(
+            value["result"]
+            for value in sorted(line["items"], key=lambda item: (item["left"], item["center_y"], item["sequence"]))
         )
-        segments = []
-        for item in visual_items:
-            if not segments:
-                segments.append([item])
-                continue
-            previous = segments[-1][-1]
-            horizontal_gap = item["left"] - previous["right"]
-            split_threshold = max(40.0, max(item["height"], previous["height"]) * 2.5)
-            if horizontal_gap > split_threshold:
-                segments.append([item])
-            else:
-                segments[-1].append(item)
-
-        for segment in segments:
-            left = min(item["left"] for item in segment)
-            top = min(item["top"] for item in segment)
-            right = max(item["right"] for item in segment)
-            bottom = max(item["bottom"] for item in segment)
-            text = " ".join(
-                str(item["result"][1]).strip()
-                for item in segment
-                if str(item["result"][1]).strip()
-            )
-            confidence_values = [
-                float(item["result"][2])
-                for item in segment
-                if len(item["result"]) >= 3
-            ]
-            confidence = (
-                sum(confidence_values) / len(confidence_values)
-                if confidence_values
-                else 0.0
-            )
-            if text:
-                ordered.append((
-                    [[left, top], [right, top], [right, bottom], [left, bottom]],
-                    text,
-                    confidence,
-                ))
     ordered.extend(result for _, result in sorted(unpositioned))
     return ordered
 
@@ -325,9 +286,7 @@ def _install_easyocr_spatial_order_patch():
     original_readtext = easyocr.Reader.readtext
 
     def spatially_ordered_readtext(reader, *args, **kwargs):
-        ordered = _sort_easyocr_results_spatially(original_readtext(reader, *args, **kwargs))
-        image = args[0] if args else kwargs.get("image")
-        return _recognize_vietnamese_lines(image, ordered) if image is not None else ordered
+        return _sort_easyocr_results_spatially(original_readtext(reader, *args, **kwargs))
 
     spatially_ordered_readtext._dreamscape_spatial_order = True
     easyocr.Reader.readtext = spatially_ordered_readtext

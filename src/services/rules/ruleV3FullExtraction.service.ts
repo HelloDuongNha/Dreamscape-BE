@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import AcademicRuleExtractionRunV3 from '../../models/rulesV3/AcademicRuleExtractionRun';
 import KnowledgeRuleV3 from '../../models/rulesV3/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../../models/rulesV3/KnowledgeRuleEvidence';
+import OracleEvidenceGap from '../../models/OracleEvidenceGap';
 import { buildRuleV3PlanPreviewRaw } from './ruleV3PlanPreview.service';
 import { extractRuleV3Candidates } from './ruleV3Extractor.service';
 import { calculateSourceContentHash } from '../academic/reader/canonicalReaderIdentity.service';
@@ -11,10 +12,7 @@ import { logger } from '../infrastructure/logger';
 import { RULE_V3_SCORING_VERSION, scoreRuleV3 } from './ruleV3Scoring.service';
 import { classifyRuleV3Relationship } from './ruleV3Relationship.service';
 import { removeRuleV3SourceData, resolveRuleV3SourceAliases } from './ruleV3Lifecycle.service';
-import {
-  findOracleEvidenceNeedsForTexts,
-  linkOracleEvidenceGapCandidatesForRules,
-} from '../oracle/oracleEvidenceGap.service';
+import { linkOracleEvidenceGapCandidatesForRules } from '../oracle/oracleEvidenceGap.service';
 import {
   backupRuleV3TouchedRule,
   commitRuleV3MutationJournal,
@@ -227,19 +225,6 @@ async function executeRuleV3FullExtraction(
     }
 
     const chunkTextById = new Map(raw.chunks.map((chunk: any) => [String(chunk._id), String(chunk.text || '')]));
-    const evidenceNeeds = await findOracleEvidenceNeedsForTexts(
-      raw.evidencePlan.batches.flatMap((batch: any) =>
-        batch.chunks.map((chunk: any) => String(chunk.text || '')),
-      ),
-      8,
-      raw.profile.sourceLanguage,
-    ).catch((error) => {
-      logger.warn('Could not load Oracle evidence needs for Rule V3 extraction.', {
-        runId,
-        errorName: error instanceof Error ? error.name : 'Error',
-      });
-      return [];
-    });
     const merged = new Map<string, any>();
     let rawCount = 0;
     let rejectedCount = 0;
@@ -274,7 +259,6 @@ async function executeRuleV3FullExtraction(
           unit.workUnitId,
           provider,
           abortSignal,
-          evidenceNeeds.map(({ gapId, claim }) => ({ gapId, claim })),
         );
       } catch (error: any) {
         if (error?.message !== 'provider_schema_invalid') throw error;
@@ -617,6 +601,24 @@ export async function getRuleV3SourceSummary(inputId: string) {
   for (const row of statusRows) {
     if (row._id in counts) counts[row._id as keyof typeof counts] = row.count;
   }
+  const evidenceGapRows = ruleIds.length > 0
+    ? await OracleEvidenceGap.aggregate<{ _id: string; count: number }>([
+      {
+        $match: {
+          $or: [
+            { candidateRuleIds: { $in: ruleIds } },
+            { resolvedRuleIds: { $in: ruleIds } },
+          ],
+        },
+      },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ])
+    : [];
+  const evidenceGapMatches = { candidateFound: 0, resolved: 0 };
+  for (const row of evidenceGapRows) {
+    if (row._id === 'candidate_found') evidenceGapMatches.candidateFound = row.count;
+    if (row._id === 'resolved') evidenceGapMatches.resolved = row.count;
+  }
 
   const runDocuments = await AcademicRuleExtractionRunV3.find({ academicSourceId: { $in: sourceAliases } })
     .sort({ startedAt: -1 })
@@ -681,6 +683,7 @@ export async function getRuleV3SourceSummary(inputId: string) {
 
   return {
     counts,
+    evidenceGapMatches,
     totalRuleCount: counts.pending + counts.verified + counts.rejected + counts.retired,
     runHistory,
     latestRun: latestRun ? {
