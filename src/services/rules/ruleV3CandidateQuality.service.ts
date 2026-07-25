@@ -103,7 +103,6 @@ const GENERIC_RELATION_PATTERNS = [
   /(?:có|cho\s+thấy)\s+(?:một\s+)?(?:liên\s+hệ|liên\s+kết|mối\s+liên\s+hệ)\s+với/iu,
 ];
 
-const HUMAN_GENERALIZATION_ANCHORS = /\b(?:people|persons?|individuals?|participants?|patients?|dreamers?|humans?|con\s+người|cá\s+nhân|người\s+tham\s+gia|bệnh\s+nhân|người\s+mơ)\b/iu;
 const PSYCHOLOGY_ANCHORS = /(?:\b(?:psycholog(?:y|ical)|unconscious|subconscious|stress|anxiety|fear|attachment|coping|support|trauma|threat|behavior|emotion|memory|recall|cognition|self-regulation)\b|tâm\s+lý|vô\s+thức|tiềm\s+thức|căng\s+thẳng|lo\s+âu|sợ\s+hãi|gắn\s+bó|ứng\s+phó|hỗ\s+trợ|sang\s+chấn|đe\s+dọa|hành\s+vi|cảm\s+xúc|ký\s+ức|trí\s+nhớ|nhận\s+thức|tự\s+điều\s+chỉnh)/iu;
 const FIXED_SYMBOL_MAPPING_PATTERNS = [
   /(?:\bin\s+dreams?\b|trong\s+giấc\s+mơ).{0,100}(?:\brepresents?\b|\bsymboli[sz]es?\b|\bstands?\s+for\b|\bindicates?\b|đại\s+diện|tượng\s+trưng|ám\s+chỉ|biểu\s+thị)/iu,
@@ -327,6 +326,7 @@ export function assessRuleV3CandidateQuality(
   context: { documentType?: string } = {},
 ): RuleV3CandidateQualityResult {
   const supportText = evidence.filter(item => item.stance === 'supports').map(item => item.exactQuote || '').join('\n');
+  const proposedClaimText = [candidate.statement, candidate.subject, candidate.outcome].join('\n');
   const combinedText = [candidate.statement, candidate.subject, candidate.outcome, supportText].join('\n');
   const reasonCodes: RuleV3QualityReasonCode[] = [];
   const theoreticalClaim = ['theoretical_proposition', 'review_synthesis', 'qualitative_theme']
@@ -339,20 +339,19 @@ export function assessRuleV3CandidateQuality(
   }
   if (CASE_SPECIFIC_PATTERNS.some(pattern => pattern.test(combinedText))) reasonCodes.push('case_specific_narrative');
   if (HISTORICAL_FACT_PATTERNS.some(pattern => pattern.test(combinedText))) reasonCodes.push('historical_or_biographical_fact');
-  if (FIXED_SYMBOL_MAPPING_PATTERNS.some(pattern => pattern.test(combinedText))
+  if (FIXED_SYMBOL_MAPPING_PATTERNS.some(pattern => pattern.test(proposedClaimText))
     && !GENERIC_SYMBOL_SUBJECT.test(candidate.subject.trim())) {
     reasonCodes.push('fixed_symbol_dictionary');
   }
-  if (UNFALSIFIABLE_PREDICTION_PATTERNS.some(pattern => pattern.test(combinedText))) reasonCodes.push('unfalsifiable_prediction');
-  if (IDENTITY_STEREOTYPE_PATTERNS.some(pattern => pattern.test(combinedText))) reasonCodes.push('identity_stereotype');
+  if (UNFALSIFIABLE_PREDICTION_PATTERNS.some(pattern => pattern.test(proposedClaimText))) reasonCodes.push('unfalsifiable_prediction');
+  if (IDENTITY_STEREOTYPE_PATTERNS.some(pattern => pattern.test(proposedClaimText))) reasonCodes.push('identity_stereotype');
   if (!theoreticalClaim && NON_OPERATIONAL_THEORY_PATTERNS.some(pattern => pattern.test(combinedText))) {
     reasonCodes.push('non_operational_theory');
   }
   if (GENERIC_RELATION_PATTERNS.some(pattern => pattern.test(candidate.statement))
     && !DIRECTIONAL_ANCHORS.test(combinedText)
     && !PREDICTION_ANCHORS.test(combinedText)
-    && !INTERVENTION_ANCHORS.test(combinedText)
-    && !HUMAN_GENERALIZATION_ANCHORS.test(combinedText)) {
+    && !INTERVENTION_ANCHORS.test(combinedText)) {
     reasonCodes.push('generic_relation_wording');
   }
   if (hasClaimTypeMismatch(candidate, combinedText)) reasonCodes.push('claim_type_evidence_mismatch');

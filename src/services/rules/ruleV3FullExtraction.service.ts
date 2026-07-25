@@ -12,7 +12,10 @@ import { logger } from '../infrastructure/logger';
 import { RULE_V3_SCORING_VERSION, scoreRuleV3 } from './ruleV3Scoring.service';
 import { classifyRuleV3Relationship } from './ruleV3Relationship.service';
 import { removeRuleV3SourceData, resolveRuleV3SourceAliases } from './ruleV3Lifecycle.service';
-import { linkOracleEvidenceGapCandidatesForRules } from '../oracle/oracleEvidenceGap.service';
+import {
+  linkOracleEvidenceGapCandidatesForRules,
+  localizeOracleEvidenceClaim,
+} from '../oracle/oracleEvidenceGap.service';
 import {
   backupRuleV3TouchedRule,
   commitRuleV3MutationJournal,
@@ -619,6 +622,54 @@ export async function getRuleV3SourceSummary(inputId: string) {
     if (row._id === 'candidate_found') evidenceGapMatches.candidateFound = row.count;
     if (row._id === 'resolved') evidenceGapMatches.resolved = row.count;
   }
+  const sourceRuleIdSet = new Set(ruleIds.map(ruleId => String(ruleId)));
+  const evidenceGapDocuments = ruleIds.length > 0
+    ? await OracleEvidenceGap.find({
+      $or: [
+        { candidateRuleIds: { $in: ruleIds } },
+        { resolvedRuleIds: { $in: ruleIds } },
+      ],
+    })
+      .select('claim status occurrenceCount candidateRuleIds resolvedRuleIds updatedAt')
+      .sort({ status: 1, updatedAt: -1 })
+      .limit(100)
+      .lean()
+    : [];
+  const matchedRuleIds = [...new Set(evidenceGapDocuments.flatMap(gap => [
+    ...(gap.candidateRuleIds || []),
+    ...(gap.resolvedRuleIds || []),
+  ].map(ruleId => String(ruleId)).filter(ruleId => sourceRuleIdSet.has(ruleId))))];
+  const matchedRules = matchedRuleIds.length > 0
+    ? await KnowledgeRuleV3.find({ _id: { $in: matchedRuleIds } })
+      .select('ruleCode statement status evidenceScore')
+      .lean()
+    : [];
+  const matchedRuleById = new Map(matchedRules.map(rule => [String(rule._id), rule]));
+  const evidenceGapDetails = evidenceGapDocuments.map(gap => {
+    const resolvedIds = new Set((gap.resolvedRuleIds || []).map(ruleId => String(ruleId)));
+    const relevantRuleIds = [...new Set([
+      ...(gap.candidateRuleIds || []),
+      ...(gap.resolvedRuleIds || []),
+    ].map(ruleId => String(ruleId)).filter(ruleId => sourceRuleIdSet.has(ruleId)))];
+    return {
+      gapId: String(gap._id),
+      claim: gap.claim,
+      localizedClaim: localizeOracleEvidenceClaim(String(gap.claim || '')),
+      status: gap.status,
+      occurrenceCount: gap.occurrenceCount || 1,
+      rules: relevantRuleIds.flatMap(ruleId => {
+        const rule = matchedRuleById.get(ruleId);
+        return rule ? [{
+          ruleId,
+          ruleCode: rule.ruleCode,
+          statement: rule.statement,
+          status: rule.status,
+          evidenceScore: rule.evidenceScore,
+          resolutionRole: resolvedIds.has(ruleId) ? 'resolved' : 'candidate',
+        }] : [];
+      }),
+    };
+  }).filter(item => item.rules.length > 0);
 
   const runDocuments = await AcademicRuleExtractionRunV3.find({ academicSourceId: { $in: sourceAliases } })
     .sort({ startedAt: -1 })
@@ -684,6 +735,7 @@ export async function getRuleV3SourceSummary(inputId: string) {
   return {
     counts,
     evidenceGapMatches,
+    evidenceGapDetails,
     totalRuleCount: counts.pending + counts.verified + counts.rejected + counts.retired,
     runHistory,
     latestRun: latestRun ? {

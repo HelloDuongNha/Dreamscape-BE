@@ -41,12 +41,54 @@ function lexicalSimilarity(left: string, right: string): number {
   return shared / Math.min(a.size, b.size);
 }
 
+const BILINGUAL_EVIDENCE_CONCEPTS: Array<[string, RegExp]> = [
+  ['dream', /giấc mơ|trong mơ|mộng|dream|dreaming/iu],
+  ['sleep', /giấc ngủ|khi ngủ|tỉnh giấc|sleep|awakening/iu],
+  ['memory', /ký ức|trí nhớ|mảnh nhớ|thời thơ ấu|memory|memories|childhood/iu],
+  ['waking_experience', /khi thức|đời sống thức|trải nghiệm ban ngày|waking(?:-life)?|daytime experience/iu],
+  ['future', /tương lai|sắp tới|dự kiến|nhiệm vụ tương lai|future|prospective|anticipated|upcoming/iu],
+  ['anxiety', /lo âu|lo lắng|căng thẳng|áp lực|sợ hãi|anxiety|stress|pressure|fear/iu],
+  ['creativity', /sáng tạo|linh hoạt|ứng biến|tư duy phân kỳ|creative|flexib|improvis|divergent/iu],
+  ['problem_solving', /giải quyết vấn đề|phương án|giải pháp|problem.solving|solution|alternative/iu],
+  ['action_planning', /hành động|chuẩn bị|lập kế hoạch|action|prepar|planning/iu],
+  ['stress_reduction', /giảm căng thẳng|giải tỏa|nhẹ nhõm|tan biến|stress reduction|relief|decreas/iu],
+  ['work_project', /công việc|dự án|lịch họp|buổi trình bày|work|project|meeting|presentation/iu],
+  ['intrusion', /xâm lấn|mang.+vào giấc ngủ|không gian nghỉ ngơi|intrud|spillover|carry.+sleep/iu],
+  ['uncertainty', /bất trắc|thiếu ổn định|không chắc chắn|chưa rõ|uncertain|unstable|unknown/iu],
+  ['navigation', /hành trình|định hướng|đường đi|tàu|biển|journey|navigat|train|sea/iu],
+  ['technology', /công nghệ|kỹ thuật số|bàn phím|kỹ năng chuyên môn|technology|digital|keyboard|technical/iu],
+  ['presentation', /trình bày|thuyết phục|slide|khán giả|người nghe|presentation|audience/iu],
+  ['connection', /kết nối|cầu nối|gần gũi|chân thật|connect|bridge|authentic/iu],
+  ['surprise', /bất ngờ|ngoài dự kiến|vượt khỏi khuôn khổ|surpris|unexpected/iu],
+];
+
+function bilingualConceptSimilarity(left: string, right: string): number {
+  const concepts = (value: string) => new Set(
+    BILINGUAL_EVIDENCE_CONCEPTS
+      .filter(([, pattern]) => pattern.test(value))
+      .map(([concept]) => concept),
+  );
+  const a = concepts(cleanOracleEvidenceClaim(left));
+  const b = concepts(cleanOracleEvidenceClaim(right));
+  if (a.size < 2 || b.size < 2) return 0;
+  const shared = [...a].filter(concept => b.has(concept));
+  if (shared.length < 2) return 0;
+  const anchorShared = shared.some(concept => [
+    'memory', 'future', 'anxiety', 'creativity', 'problem_solving',
+    'action_planning', 'stress_reduction', 'work_project',
+  ].includes(concept));
+  if (!anchorShared) return 0;
+  const coverage = shared.length / Math.min(a.size, b.size);
+  return Math.min(0.68, 0.24 + coverage * 0.44);
+}
+
 export function evidenceGapRuleSimilarity(gapClaim: string, ruleText: string): number {
   const lexical = lexicalSimilarity(gapClaim, ruleText);
   const canonicalLexical = lexicalSimilarity(
     canonicalizeOracleEvidenceClaim(gapClaim),
     canonicalizeOracleEvidenceClaim(ruleText),
   );
+  const bilingualConcept = bilingualConceptSimilarity(gapClaim, ruleText);
   const gapCluster = oracleEvidenceClaimClusterKey(gapClaim);
   const ruleCluster = oracleEvidenceClaimClusterKey(ruleText);
   const gapHasSemanticCluster = gapCluster.includes('__');
@@ -55,13 +97,13 @@ export function evidenceGapRuleSimilarity(gapClaim: string, ruleText: string): n
     // Sibling concepts can share most words (for example, memory fragments in
     // dreams vs. memory plus future concerns) while asserting different
     // outcomes. Do not let lexical overlap link or resolve the wrong need.
-    return Math.min(0.24, Math.max(lexical, canonicalLexical));
+    return Math.min(0.24, Math.max(lexical, canonicalLexical, bilingualConcept));
   }
   // Cluster keys encode bilingual subject/relation/outcome concepts. Equality
   // is stronger than shared words, but remains below certainty: evidence and
   // approval gates still decide whether the gap can actually be resolved.
   const relationMatch = gapCluster && gapCluster === ruleCluster ? 0.72 : 0;
-  return Math.max(lexical, canonicalLexical, relationMatch);
+  return Math.max(lexical, canonicalLexical, bilingualConcept, relationMatch);
 }
 
 export async function findOracleEvidenceNeedsForTexts(
@@ -145,7 +187,7 @@ export function canonicalizeOracleEvidenceClaim(claim: string): string {
   const brain = /não bộ|brain/iu.test(value);
   const memory = /ký ức|trí nhớ|thời thơ ấu|memory|memories|childhood/iu.test(value);
   const future = /tương lai|sắp tới|trách nhiệm|nhiệm vụ hiện tại|future|prospective|upcoming/iu.test(value);
-  const anxiety = /lo lắng|căng thẳng|áp lực|anxiety|stress|pressure/iu.test(value);
+  const anxiety = /lo âu|lo lắng|căng thẳng|áp lực|anxiety|stress|pressure/iu.test(value);
   const creativity = /sáng tạo|linh hoạt|ứng biến|giải pháp|creative|flexib|improvis|solution/iu.test(value);
   const action = /hành động|chuẩn bị|lập kế hoạch|action|prepar|planning/iu.test(value);
   const reduction = /giảm|giải tỏa|tan biến|reduce|relief|decreas/iu.test(value);
@@ -181,7 +223,7 @@ export function oracleEvidenceClaimClusterKey(claim: string): string {
   const value = normalize(canonicalizeOracleEvidenceClaim(claim));
   const has = (...patterns: RegExp[]) => hasAny(value, patterns);
 
-  const anxiety = has(/lo lắng|căng thẳng|áp lực|sợ hãi|anxiety|stress|pressure|fear/iu);
+  const anxiety = has(/lo âu|lo lắng|căng thẳng|áp lực|sợ hãi|anxiety|stress|pressure|fear/iu);
   const creativity = has(/sáng tạo|linh hoạt|ứng biến|giải pháp|creative|flexib|improvis|solution/iu);
   const presentation = has(/trình bày|thuyết phục|slide|khán giả|người nghe|presentation|audience/iu);
   const uncertainty = has(/bất trắc|thiếu ổn định|không ổn định|chưa rõ|uncertain|unstable|unknown/iu);
@@ -255,6 +297,48 @@ export function localizeOracleEvidenceClaim(claim: string): LocalizedOracleEvide
       key,
       vi: 'Chuyển lo âu thành hành động hoặc kế hoạch cụ thể có thể liên quan đến việc giảm căng thẳng.',
       en: 'Turning anxiety into concrete action or planning may be associated with reduced stress.',
+    };
+  }
+  if (key === 'context:work-pressure__outcome:sleep-or-memory-intrusion') {
+    return {
+      key,
+      vi: 'Áp lực công việc có thể liên quan đến việc các mối bận tâm khi thức xuất hiện trong giấc ngủ hoặc nội dung giấc mơ.',
+      en: 'Work pressure may be associated with waking concerns carrying into sleep or dream content.',
+    };
+  }
+  if (key === 'metaphor:technical-navigation__outcome:project-uncertainty') {
+    return {
+      key,
+      vi: 'Hình ảnh điều hướng bằng công cụ kỹ thuật trong giấc mơ có thể liên quan đến cảm giác không chắc chắn về một dự án.',
+      en: 'Dream imagery of navigating with technical tools may be associated with uncertainty about a project.',
+    };
+  }
+  if (key === 'strategy:creative-flexible-presentation__outcome:audience-connection') {
+    return {
+      key,
+      vi: 'Cách trình bày sáng tạo và linh hoạt có thể liên quan đến khả năng kết nối tốt hơn với người nghe.',
+      en: 'Creative and flexible presentation strategies may be associated with stronger audience connection.',
+    };
+  }
+  if (key === 'mechanism:technical-and-creative-integration__outcome:problem-solving') {
+    return {
+      key,
+      vi: 'Việc kết hợp nguồn lực kỹ thuật và sáng tạo có thể liên quan đến khả năng giải quyết vấn đề.',
+      en: 'Combining technical and creative resources may be associated with problem solving.',
+    };
+  }
+  if (key === 'dream-affect:surprise__inference:anticipated-impact') {
+    return {
+      key,
+      vi: 'Cảm giác bất ngờ trong giấc mơ có thể liên quan đến việc dự kiến một kết quả hoặc tác động khác thường.',
+      en: 'Surprise in a dream may be associated with anticipating an unusual result or impact.',
+    };
+  }
+  if (key === 'metaphor:journey__subject:ongoing-work') {
+    return {
+      key,
+      vi: 'Hình ảnh hành trình trong giấc mơ có thể liên quan đến cách người mơ hình dung một công việc hoặc dự án đang diễn ra.',
+      en: 'Journey imagery in dreams may be associated with how an ongoing task or project is represented.',
     };
   }
   return { key, vi: cleanClaim, en: cleanClaim };
@@ -610,6 +694,70 @@ export async function reconcileOracleEvidenceGapsForRule(rule: {
       },
     );
   }
+}
+
+export interface OracleEvidenceGapRuleMatch {
+  gapId: string;
+  claim: LocalizedOracleEvidenceClaim;
+  status: 'unresolved' | 'candidate_found' | 'resolved';
+  occurrenceCount: number;
+  similarity: number;
+  linkedAsCandidate: boolean;
+  resolvedByRule: boolean;
+  resolutionReady: boolean;
+  blockers: Array<'approval' | 'score' | 'independent_sources' | 'similarity'>;
+}
+
+export async function getOracleEvidenceGapMatchesForRule(rule: {
+  _id: Types.ObjectId;
+  statement?: string;
+  subject?: string;
+  outcome?: string;
+  status?: string;
+  evidenceScore?: number;
+  supportingSourceCount?: number;
+}): Promise<OracleEvidenceGapRuleMatch[]> {
+  const ruleText = [rule.statement, rule.subject, rule.outcome].filter(Boolean).join(' ');
+  if (!ruleText) return [];
+  const gaps = await OracleEvidenceGap.find({
+    $or: [
+      { status: { $ne: 'resolved' } },
+      { resolvedRuleIds: rule._id },
+    ],
+  })
+    .sort({ updatedAt: -1 })
+    .select('_id claim status occurrenceCount candidateRuleIds resolvedRuleIds')
+    .lean();
+
+  return gaps
+    .map((gap) => {
+      if (!isResearchableOracleEvidenceClaim(String(gap.claim || ''))) return null;
+      const similarity = evidenceGapRuleSimilarity(String(gap.claim || ''), ruleText);
+      const linkedAsCandidate = (gap.candidateRuleIds || []).some(id => String(id) === String(rule._id));
+      const resolvedByRule = (gap.resolvedRuleIds || []).some(id => String(id) === String(rule._id));
+      if (!linkedAsCandidate && !resolvedByRule && similarity < 0.28) return null;
+      const blockers: OracleEvidenceGapRuleMatch['blockers'] = [];
+      if (rule.status !== 'verified') blockers.push('approval');
+      if (Number(rule.evidenceScore) < 60) blockers.push('score');
+      if (Number(rule.supportingSourceCount) < 2) blockers.push('independent_sources');
+      if (similarity < 0.5) blockers.push('similarity');
+      return {
+        gapId: String(gap._id),
+        claim: localizeOracleEvidenceClaim(String(gap.claim || '')),
+        status: gap.status,
+        occurrenceCount: Number(gap.occurrenceCount || 0),
+        similarity,
+        linkedAsCandidate,
+        resolvedByRule,
+        resolutionReady: resolvedByRule || blockers.length === 0,
+        blockers,
+      };
+    })
+    .filter((match): match is OracleEvidenceGapRuleMatch => Boolean(match))
+    .sort((left, right) => Number(right.resolvedByRule) - Number(left.resolvedByRule)
+      || Number(right.linkedAsCandidate) - Number(left.linkedAsCandidate)
+      || right.similarity - left.similarity)
+    .slice(0, 12);
 }
 
 export async function linkOracleEvidenceGapCandidatesForRules(rules: Array<{

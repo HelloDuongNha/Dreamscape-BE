@@ -1,4 +1,89 @@
 export class DoclingTextRepairService {
+  private static foldVietnameseToken(value: string): string {
+    return value
+      .normalize('NFD')
+      .replace(/\p{M}+/gu, '')
+      .replace(/đ/giu, match => match === 'Đ' ? 'D' : 'd')
+      .toLocaleLowerCase('vi');
+  }
+
+  private static restoreTokenCase(source: string, replacement: string): string {
+    if (source === source.toLocaleUpperCase('vi')) return replacement.toLocaleUpperCase('vi');
+    if (/^\p{Lu}/u.test(source)) {
+      return replacement.replace(/^\p{Ll}/u, letter => letter.toLocaleUpperCase('vi'));
+    }
+    return replacement;
+  }
+
+  /**
+   * Learns accent variants from the complete document instead of maintaining a
+   * growing list of book-specific replacements. A token is changed only when a
+   * dominant, correctly accented spelling with the same accent-free skeleton is
+   * repeatedly observed in the document and the neighbouring word supports it.
+   */
+  public static repairDocumentCorpus<T extends { text: string }>(blocks: T[]): T[] {
+    const tokenPattern = /\p{L}{2,}/gu;
+    const tokenRows = blocks.map(block => block.text.match(tokenPattern) || []);
+    const formCounts = new Map<string, Map<string, number>>();
+    const contextualCounts = new Map<string, number>();
+
+    for (const tokens of tokenRows) {
+      const normalized = tokens.map(token => token.toLocaleLowerCase('vi'));
+      normalized.forEach((token, index) => {
+        const skeleton = this.foldVietnameseToken(token);
+        const forms = formCounts.get(skeleton) || new Map<string, number>();
+        forms.set(token, (forms.get(token) || 0) + 1);
+        formCounts.set(skeleton, forms);
+        const left = index > 0 ? this.foldVietnameseToken(normalized[index - 1]) : '^';
+        const right = index + 1 < normalized.length ? this.foldVietnameseToken(normalized[index + 1]) : '$';
+        contextualCounts.set(`${left}|${token}|${right}`, (contextualCounts.get(`${left}|${token}|${right}`) || 0) + 1);
+        contextualCounts.set(`${left}|${token}|*`, (contextualCounts.get(`${left}|${token}|*`) || 0) + 1);
+        contextualCounts.set(`*|${token}|${right}`, (contextualCounts.get(`*|${token}|${right}`) || 0) + 1);
+      });
+    }
+
+    const preferredForms = new Map<string, { token: string; count: number; runnerUp: number }>();
+    for (const [skeleton, forms] of formCounts) {
+      if (forms.size < 2) continue;
+      const ranked = [...forms.entries()].sort((left, right) => right[1] - left[1]);
+      const [winner, count] = ranked[0];
+      const runnerUp = ranked[1]?.[1] || 0;
+      if (count >= 3 && count >= runnerUp * 1.5 && /[ăâêôơưđà-ỹ]/iu.test(winner)) {
+        preferredForms.set(skeleton, { token: winner, count, runnerUp });
+      }
+    }
+
+    return blocks.map((block, blockIndex) => {
+      const tokens = tokenRows[blockIndex];
+      let tokenIndex = 0;
+      const repaired = block.text.replace(tokenPattern, original => {
+        const currentIndex = tokenIndex++;
+        const lower = original.toLocaleLowerCase('vi');
+        const preferred = preferredForms.get(this.foldVietnameseToken(lower));
+        if (!preferred || preferred.token === lower) return original;
+
+        const left = currentIndex > 0 ? this.foldVietnameseToken(tokens[currentIndex - 1]) : '^';
+        const right = currentIndex + 1 < tokens.length ? this.foldVietnameseToken(tokens[currentIndex + 1]) : '$';
+        const originalContext = (contextualCounts.get(`${left}|${lower}|${right}`) || 0) * 3
+          + (contextualCounts.get(`${left}|${lower}|*`) || 0)
+          + (contextualCounts.get(`*|${lower}|${right}`) || 0);
+        const preferredContext = (contextualCounts.get(`${left}|${preferred.token}|${right}`) || 0) * 3
+          + (contextualCounts.get(`${left}|${preferred.token}|*`) || 0)
+          + (contextualCounts.get(`*|${preferred.token}|${right}`) || 0);
+
+        // Context prevents valid words such as “lân” in “lân cận” from being
+        // changed merely because “lần” is more frequent elsewhere.
+        const strongDocumentDominance = preferred.count >= 4
+          && preferred.count >= Math.max(1, preferred.runnerUp) * 3;
+        if (preferredContext === 0 || (preferredContext <= originalContext && !strongDocumentDominance)) {
+          return original;
+        }
+        return this.restoreTokenCase(original, preferred.token);
+      });
+      return repaired === block.text ? block : { ...block, text: repaired };
+    });
+  }
+
   public static repairText(input: string): string {
     let text = (input || '').normalize('NFC');
 

@@ -26,7 +26,10 @@ import {
 } from '../services/rules/ruleV3Relationship.service';
 import { classifyRuleV3VerificationKind, requiresAggregateRuleValidation } from '../services/rules/ruleV3DreamApplication.service';
 import { generateEmbedding } from '../services/infrastructure/llm.service';
-import { reconcileOracleEvidenceGapsForRule } from '../services/oracle/oracleEvidenceGap.service';
+import {
+  getOracleEvidenceGapMatchesForRule,
+  reconcileOracleEvidenceGapsForRule,
+} from '../services/oracle/oracleEvidenceGap.service';
 import { mergePendingRuleV3Group, RuleV3MergeError } from '../services/rules/ruleV3Merge.service';
 
 export interface RuleV3ControllerDependencies {
@@ -488,21 +491,9 @@ async function loadRuleV3SourceSummaries(sourceIds: string[]): Promise<Map<strin
 }
 
 function shortRuleLabel(rule: any): string {
-  const subject = cleanSourceMetadataText(rule.subject);
-  const outcome = cleanSourceMetadataText(rule.outcome);
-  if (!subject || !outcome) return cleanSourceMetadataText(rule.statement).slice(0, 140);
-  const isVietnamese = String(rule.sourceLanguage || '').toLowerCase() === 'vi';
-  const relation = isVietnamese
-    ? ({
-        prediction: 'có thể dự báo', intervention_effect: 'có thể tác động đến', moderation: 'điều chỉnh',
-        mediation: 'góp phần trung gian cho', null_finding: 'chưa cho thấy liên hệ với'
-      } as Record<string, string>)[rule.claimType] || 'có liên hệ với'
-    : ({
-        prediction: 'may predict', intervention_effect: 'may affect', moderation: 'moderates',
-        mediation: 'may mediate', null_finding: 'shows no established link with'
-      } as Record<string, string>)[rule.claimType] || 'is associated with';
-  const compact = `${subject} ${relation} ${outcome}`.replace(/\s+/g, ' ').trim();
-  return compact.length <= 140 ? compact : `${compact.slice(0, 137).trimEnd()}…`;
+  const statement = cleanSourceMetadataText(rule.statement);
+  if (!statement) return '';
+  return statement.length <= 180 ? statement : `${statement.slice(0, 177).trimEnd()}…`;
 }
 
 function buildProbeBlueprint(rule: any) {
@@ -983,6 +974,15 @@ export const getRuleV3CandidateDetail = async (req: Request, res: Response): Pro
   const sourceSummaries = await loadRuleV3SourceSummaries(evidence.map(item => String(item.sourceId)));
   const source = sourceSummaries.get(String(evidence[0]?.sourceId || ''));
   const candidate = mapRuleV3Candidate(rule, source, evidence);
+  const evidenceGapMatches = await getOracleEvidenceGapMatchesForRule({
+    _id: rule._id,
+    statement: rule.statement,
+    subject: rule.subject,
+    outcome: rule.outcome,
+    status: rule.status,
+    evidenceScore: rule.evidenceScore,
+    supportingSourceCount: rule.supportingSourceCount,
+  });
   const comparableRules = await KnowledgeRuleV3.find({
     _id: { $nin: feedbackRuleIds },
     sourceLanguage: rule.sourceLanguage,
@@ -1073,6 +1073,7 @@ export const getRuleV3CandidateDetail = async (req: Request, res: Response): Pro
     success: true,
     data: {
       candidate,
+      evidenceGapMatches,
       ruleRelationships,
       evidenceChunks: chunks.map((chunk: any) => ({
         chunkId: String(chunk._id),

@@ -40,6 +40,24 @@ assert.equal(
   DoclingTextRepairService.repairText('Anh ta ~không đi được nghĩa là anh ta không tiếp tục được nữa'),
   'Anh ta không đi được nghĩa là anh ta không tiếp tục được nữa',
 );
+assert.deepEqual(
+  DoclingTextRepairService.repairDocumentCorpus([
+    { text: 'DẪN NHẬP: JOHN FREEMAN' },
+    { text: 'Trong phần dẫn nhập, tác giả trình bày mục tiêu.' },
+    { text: 'Phần dẫn nhập giúp người đọc hiểu bối cảnh.' },
+    { text: 'Đây là một dẫn nhập ngắn.' },
+    { text: 'Sau đó là phần DÂN NHÂP bị nhận dạng sai.' },
+    { text: 'Kỳ lân vẫn đứng ở vùng lân cận.' },
+  ]),
+  [
+    { text: 'DẪN NHẬP: JOHN FREEMAN' },
+    { text: 'Trong phần dẫn nhập, tác giả trình bày mục tiêu.' },
+    { text: 'Phần dẫn nhập giúp người đọc hiểu bối cảnh.' },
+    { text: 'Đây là một dẫn nhập ngắn.' },
+    { text: 'Sau đó là phần DẪN NHẬP bị nhận dạng sai.' },
+    { text: 'Kỳ lân vẫn đứng ở vùng lân cận.' },
+  ],
+);
 assert.equal(
   DoclingTextRepairService.repairText(
     'Phát thanhTruyển hình; dáng tiếc; tẩm quan trọng; cú khăng khăng; tràn trê; kiến thức vể tâm lý học',

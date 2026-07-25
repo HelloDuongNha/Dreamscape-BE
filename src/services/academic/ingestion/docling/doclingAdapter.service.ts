@@ -330,7 +330,19 @@ export class DoclingAdapterService {
       });
     }
 
-    const normalizedBlocks = this.normalizeCanonicalFlow(blocks);
+    const normalizedBlocks = DoclingTextRepairService
+      .repairDocumentCorpus(this.normalizeCanonicalFlow(blocks))
+      .map((block) => {
+        if (block.blockType === 'table' || block.blockType === 'figure') return block;
+        const tag = block.blockType === 'title'
+          ? 'h1'
+          : block.blockType === 'heading'
+            ? 'h2'
+            : block.blockType === 'list_item'
+              ? 'li'
+              : 'p';
+        return { ...block, html: `<${tag}>${this.escapeHtml(block.text)}</${tag}>` };
+      });
     const discardedFurnitureCount = detectedPictureCount - acceptedFigureCount;
 
     const canonicalOutput: CanonicalBlocksOutput = {
