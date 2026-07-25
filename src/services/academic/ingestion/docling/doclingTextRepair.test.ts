@@ -30,6 +30,22 @@ assert.equal(
   DoclingTextRepairService.repairText('vị sư cẩu nguyện trước Mặt trời thẩn linh'),
   'vị sư cầu nguyện trước Mặt trời thần linh',
 );
+assert.equal(
+  DoclingTextRepairService.repairText(
+    'truyển hình có chiêu sâu; nhiêu ví dụ vể các vấn dê vốn quấy rây; gia dình từ đẩu',
+  ),
+  'truyền hình có chiều sâu; nhiều ví dụ về các vấn đề vốn quấy rầy; gia đình từ đầu',
+);
+assert.equal(
+  DoclingTextRepairService.repairText('Anh ta ~không đi được nghĩa là anh ta không tiếp tục được nữa'),
+  'Anh ta không đi được nghĩa là anh ta không tiếp tục được nữa',
+);
+assert.equal(
+  DoclingTextRepairService.repairText(
+    'Phát thanhTruyển hình; dáng tiếc; tẩm quan trọng; cú khăng khăng; tràn trê; kiến thức vể tâm lý học',
+  ),
+  'Phát thanh Truyền hình; đáng tiếc; tầm quan trọng; cứ khăng khăng; tràn trề; kiến thức về tâm lý học',
+);
 
 const canonical = DoclingAdapterService.mapToCanonicalBlocks({
   success: true,
@@ -65,4 +81,34 @@ assert.equal(canonical.canonicalOutput.blocks[0]?.text, "Taken from 'An Introduc
 assert.match(canonical.canonicalOutput.blocks[1]?.html || '', /Con người/u);
 assert.equal(canonical.canonicalOutput.blocks[1]?.tableData?.cells[0]?.text, 'Con người');
 
-console.log('DOCLING TEXT REPAIR: 10 PASSED, 0 FAILED');
+const crossPageFlow = DoclingAdapterService.mapToCanonicalBlocks({
+  success: true,
+  title: 'Cross-page fixture',
+  pageCount: 2,
+  duration: 1,
+  ocrUsed: true,
+  warnings: [],
+  referenceQualityDegraded: false,
+  items: [
+    {
+      id: 'page-1-tail',
+      type: 'paragraph',
+      text: 'Jung rất hài lòng không chỉ vì nhận được các lá thư (hộp thư',
+      pageNumber: 1,
+    },
+    {
+      id: 'page-2-head',
+      type: 'paragraph',
+      text: 'của ông lúc nào cũng đầy ắp) mà còn vì nhận được chúng từ những người.',
+      pageNumber: 2,
+    },
+  ],
+}, []);
+
+assert.equal(crossPageFlow.canonicalOutput.blocks.length, 1);
+assert.equal(
+  crossPageFlow.canonicalOutput.blocks[0]?.text,
+  'Jung rất hài lòng không chỉ vì nhận được các lá thư (hộp thư của ông lúc nào cũng đầy ắp) mà còn vì nhận được chúng từ những người.',
+);
+
+console.log('DOCLING TEXT REPAIR: 15 PASSED, 0 FAILED');

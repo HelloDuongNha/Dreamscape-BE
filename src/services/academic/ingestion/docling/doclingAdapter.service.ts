@@ -114,13 +114,21 @@ export class DoclingAdapterService {
 
       const next = blocks[i + 1];
       const samePage = next?.pageNumber === current.pageNumber;
+      const adjacentPage =
+        typeof current.pageNumber === 'number' &&
+        next?.pageNumber === current.pageNumber + 1;
       const looksLikeHardWrappedFragment =
         /[-\u00ad]\s*$/u.test(current.text) ||
         (current.text.trim().length < 180 && (next?.text.trim().length || 0) < 260);
+      const looksLikePageBreakContinuation =
+        adjacentPage &&
+        !/[.!?。！？:;"'”’\])}]$/.test(current.text.trim());
       if (
         next?.blockType === 'paragraph' &&
-        samePage &&
-        looksLikeHardWrappedFragment &&
+        (
+          (samePage && looksLikeHardWrappedFragment) ||
+          looksLikePageBreakContinuation
+        ) &&
         this.isSentenceContinuation(current.text, next.text)
       ) {
         current.text = this.joinContinuation(current.text, next.text);

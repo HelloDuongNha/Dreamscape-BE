@@ -432,7 +432,9 @@ export class DoclingReaderPolicyService {
       folded === 'luu y gui toi ban doc' ||
       folded.includes('thuviennotion') ||
       (folded.includes('ung ho nhom') && folded.includes('cam on')) ||
+      (/(?:cam|oam)\s+on\s+ban/u.test(folded) && folded.includes('nhom')) ||
       (folded.includes('book') && folded.includes('danh dau') && folded.includes('cong khai')) ||
+      (folded.includes('book') && folded.includes('chia se')) ||
       (folded.startsWith('sach ') && /suu\s+[tf]am/u.test(folded))
     ) return true;
     return false;

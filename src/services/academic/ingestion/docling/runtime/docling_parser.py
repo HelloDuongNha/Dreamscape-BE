@@ -8,10 +8,196 @@ import html as html_mod
 import hashlib
 import importlib.util
 import traceback
+import unicodedata
 
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import EasyOcrOptions, OcrMacOptions, PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
+
+
+_VIETOCR_PREDICTOR = None
+_VIETOCR_UNAVAILABLE = False
+_VIETNAMESE_TONE_MARKS = {"\u0300", "\u0301", "\u0303", "\u0309", "\u0323"}
+
+
+def _fold_vietnamese_token(value):
+    decomposed = unicodedata.normalize("NFD", value or "")
+    folded = "".join(char for char in decomposed if unicodedata.category(char) != "Mn")
+    return re.sub(r"[^a-z0-9]+", "", folded.replace("đ", "d").replace("Đ", "D").casefold())
+
+
+def _has_vietnamese_tone(value):
+    return any(char in _VIETNAMESE_TONE_MARKS for char in unicodedata.normalize("NFD", value or ""))
+
+
+def _split_token_punctuation(value):
+    match = re.match(r"^([^\wĐđ]*)(.*?)([^\wĐđ]*)$", value or "", re.UNICODE)
+    return match.groups() if match else ("", value or "", "")
+
+
+def _merge_easyocr_vietocr_text(easy_text, viet_text):
+    """
+    VietOCR is substantially better at restoring Vietnamese tones, while
+    EasyOCR sometimes preserves an already-correct tone that VietOCR changes
+    (for example ``vấn`` -> ``văn``). Keep an EasyOCR syllable when it already
+    contains a Vietnamese tone and both recognizers agree on its ASCII base;
+    otherwise prefer VietOCR's Vietnamese-specific recognition.
+    """
+    easy_tokens = (easy_text or "").split()
+    viet_tokens = (viet_text or "").split()
+    if not easy_tokens or len(easy_tokens) != len(viet_tokens):
+        return (viet_text or easy_text or "").strip()
+
+    merged = []
+    for easy_token, viet_token in zip(easy_tokens, viet_tokens):
+        easy_prefix, easy_core, easy_suffix = _split_token_punctuation(easy_token)
+        _, viet_core, _ = _split_token_punctuation(viet_token)
+        if not viet_core:
+            merged.append(easy_token)
+            continue
+
+        same_base = _fold_vietnamese_token(easy_core) == _fold_vietnamese_token(viet_core)
+        if _has_vietnamese_tone(easy_core) and same_base:
+            chosen_core = easy_core
+        else:
+            chosen_core = viet_core
+        merged.append(f"{easy_prefix}{chosen_core}{easy_suffix}")
+    return " ".join(merged)
+
+
+def _looks_like_vietnamese_ocr(results):
+    text = " ".join(
+        str(result[1])
+        for result in results
+        if isinstance(result, (list, tuple)) and len(result) >= 2
+    )
+    if not text:
+        return False
+    accent_count = len(re.findall(r"[ăâđêôơưà-ỹ]", text, re.IGNORECASE))
+    common_words = re.findall(
+        r"\b(?:và|của|những|không|được|người|một|này|trong|với|cho|các|"
+        r"nhưng|khi|đã|tôi|ông|bà|giấc|mơ)\b",
+        text,
+        re.IGNORECASE,
+    )
+    return accent_count >= 3 or len(common_words) >= 2
+
+
+def _vietocr_config(weights_path):
+    return {
+        "vocab": (
+            "aAàÀảẢãÃáÁạẠăĂằẰẳẲẵẴắẮặẶâÂầẦẩẨẫẪấẤậẬbBcCdDđĐ"
+            "eEèÈẻẺẽẼéÉẹẸêÊềỀểỂễỄếẾệỆfFgGhHiIìÌỉỈĩĨíÍịỊjJkKlLmMnN"
+            "oOòÒỏỎõÕóÓọỌôÔồỒổỔỗỖốỐộỘơƠờỜởỞỡỠớỚợỢpPqQrRsStT"
+            "uUùÙủỦũŨúÚụỤưƯừỪửỬữỮứỨựỰvVwWxXyYỳỲỷỶỹỸýÝỵỴzZ"
+            "0123456789!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ "
+        ),
+        "device": "cpu",
+        "seq_modeling": "transformer",
+        "transformer": {
+            "d_model": 256,
+            "nhead": 8,
+            "num_encoder_layers": 6,
+            "num_decoder_layers": 6,
+            "dim_feedforward": 2048,
+            "max_seq_length": 1024,
+            "pos_dropout": 0.1,
+            "trans_dropout": 0.1,
+        },
+        "dataset": {
+            "image_height": 32,
+            "image_min_width": 32,
+            "image_max_width": 512,
+        },
+        "predictor": {"beamsearch": False},
+        "weights": weights_path,
+        "backbone": "vgg19_bn",
+        "cnn": {
+            "pretrained": False,
+            "ss": [[2, 2], [2, 2], [2, 1], [2, 1], [1, 1]],
+            "ks": [[2, 2], [2, 2], [2, 1], [2, 1], [1, 1]],
+            "hidden": 256,
+        },
+        "quiet": True,
+    }
+
+
+def _get_vietocr_predictor():
+    global _VIETOCR_PREDICTOR, _VIETOCR_UNAVAILABLE
+    if _VIETOCR_PREDICTOR is not None:
+        return _VIETOCR_PREDICTOR
+    if _VIETOCR_UNAVAILABLE or os.environ.get("VIETOCR_ENABLED", "true").lower() == "false":
+        return None
+    if importlib.util.find_spec("vietocr") is None:
+        _VIETOCR_UNAVAILABLE = True
+        return None
+
+    try:
+        from vietocr.tool.predictor import Predictor
+
+        runtime_root = os.path.dirname(os.path.dirname(os.path.dirname(sys.executable)))
+        default_weights = os.path.join(runtime_root, "models", "vietocr", "vgg_transformer.pth")
+        weights_path = os.environ.get("VIETOCR_WEIGHTS_PATH", "").strip()
+        if not weights_path:
+            weights_path = default_weights if os.path.isfile(default_weights) else (
+                "https://vocr.vn/data/vietocr/vgg_transformer.pth"
+            )
+        _VIETOCR_PREDICTOR = Predictor(_vietocr_config(weights_path))
+        return _VIETOCR_PREDICTOR
+    except Exception as exc:
+        _VIETOCR_UNAVAILABLE = True
+        print(f"VietOCR unavailable; retaining EasyOCR text: {exc}", file=sys.stderr)
+        return None
+
+
+def _recognize_vietnamese_lines(image, ordered_results):
+    if not _looks_like_vietnamese_ocr(ordered_results):
+        return ordered_results
+    predictor = _get_vietocr_predictor()
+    if predictor is None:
+        return ordered_results
+
+    try:
+        import numpy as np
+        from PIL import Image
+
+        page_image = image if isinstance(image, Image.Image) else Image.fromarray(np.asarray(image))
+        page_image = page_image.convert("RGB")
+        crops = []
+        valid_indexes = []
+        for index, result in enumerate(ordered_results):
+            if not isinstance(result, (list, tuple)) or len(result) < 3:
+                continue
+            box = result[0]
+            xs = [float(point[0]) for point in box]
+            ys = [float(point[1]) for point in box]
+            left = max(0, int(min(xs)) - 4)
+            top = max(0, int(min(ys)) - 3)
+            right = min(page_image.width, int(max(xs)) + 5)
+            bottom = min(page_image.height, int(max(ys)) + 4)
+            if right - left < 8 or bottom - top < 8:
+                continue
+            crops.append(page_image.crop((left, top, right, bottom)))
+            valid_indexes.append(index)
+
+        if not crops:
+            return ordered_results
+        predictions, probabilities = predictor.predict_batch(crops, return_prob=True)
+        enriched = list(ordered_results)
+        for result_index, prediction, probability in zip(valid_indexes, predictions, probabilities):
+            original = ordered_results[result_index]
+            easy_text = str(original[1]).strip()
+            viet_text = str(prediction or "").strip()
+            confidence = float(probability or 0.0)
+            length_ratio = len(viet_text) / max(1, len(easy_text))
+            if not viet_text or confidence < 0.72 or not 0.65 <= length_ratio <= 1.45:
+                continue
+            merged_text = _merge_easyocr_vietocr_text(easy_text, viet_text)
+            enriched[result_index] = (original[0], merged_text, max(float(original[2]), confidence))
+        return enriched
+    except Exception as exc:
+        print(f"VietOCR line recognition failed; retaining EasyOCR text: {exc}", file=sys.stderr)
+        return ordered_results
 
 
 def _sort_easyocr_results_spatially(results):
@@ -84,10 +270,49 @@ def _sort_easyocr_results_spatially(results):
 
     ordered = []
     for line in sorted(lines, key=lambda value: value["center_y"]):
-        ordered.extend(
-            value["result"]
-            for value in sorted(line["items"], key=lambda item: (item["left"], item["center_y"], item["sequence"]))
+        visual_items = sorted(
+            line["items"],
+            key=lambda item: (item["left"], item["center_y"], item["sequence"]),
         )
+        segments = []
+        for item in visual_items:
+            if not segments:
+                segments.append([item])
+                continue
+            previous = segments[-1][-1]
+            horizontal_gap = item["left"] - previous["right"]
+            split_threshold = max(40.0, max(item["height"], previous["height"]) * 2.5)
+            if horizontal_gap > split_threshold:
+                segments.append([item])
+            else:
+                segments[-1].append(item)
+
+        for segment in segments:
+            left = min(item["left"] for item in segment)
+            top = min(item["top"] for item in segment)
+            right = max(item["right"] for item in segment)
+            bottom = max(item["bottom"] for item in segment)
+            text = " ".join(
+                str(item["result"][1]).strip()
+                for item in segment
+                if str(item["result"][1]).strip()
+            )
+            confidence_values = [
+                float(item["result"][2])
+                for item in segment
+                if len(item["result"]) >= 3
+            ]
+            confidence = (
+                sum(confidence_values) / len(confidence_values)
+                if confidence_values
+                else 0.0
+            )
+            if text:
+                ordered.append((
+                    [[left, top], [right, top], [right, bottom], [left, bottom]],
+                    text,
+                    confidence,
+                ))
     ordered.extend(result for _, result in sorted(unpositioned))
     return ordered
 
@@ -100,7 +325,9 @@ def _install_easyocr_spatial_order_patch():
     original_readtext = easyocr.Reader.readtext
 
     def spatially_ordered_readtext(reader, *args, **kwargs):
-        return _sort_easyocr_results_spatially(original_readtext(reader, *args, **kwargs))
+        ordered = _sort_easyocr_results_spatially(original_readtext(reader, *args, **kwargs))
+        image = args[0] if args else kwargs.get("image")
+        return _recognize_vietnamese_lines(image, ordered) if image is not None else ordered
 
     spatially_ordered_readtext._dreamscape_spatial_order = True
     easyocr.Reader.readtext = spatially_ordered_readtext

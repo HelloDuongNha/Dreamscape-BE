@@ -40,9 +40,37 @@ export class DoclingTextRepairService {
       .replace(/\bcẩu\s+nguyện\b/giu, 'cầu nguyện')
       .replace(/\bthẩn\s+linh\b/giu, 'thần linh')
       .replace(/\btruyên\s+(hình|tải|đạt|thống|thuyết)\b/giu, 'truyền $1')
-      .replace(/\bnhiêu\s+(người|lần|điều|ý nghĩa|hơn|năm|tháng|vấn đề)\b/giu, 'nhiều $1')
+      .replace(/\btruyển\s+(hình|tải|đạt|thống|thuyết)\b/giu, 'truyền $1')
+      .replace(
+        /\bnhiêu\s+(người|lần|điều|ý nghĩa|hơn|năm|tháng|vấn đề|ví dụ)(?=$|[^\p{L}])/giu,
+        'nhiều $1',
+      )
       .replace(/\bđiêu\s+(này|đó|gì|kiện|khoản)\b/giu, 'điều $1')
-      .replace(/\bgân\s+(như|đây|đó|nhà|gũi)\b/giu, 'gần $1');
+      .replace(/\bgân\s+(như|đây|đó|nhà|gũi)\b/giu, 'gần $1')
+      .replace(/\bphỏng\s+văn\b/giu, 'phỏng vấn')
+      .replace(/\bchiêu\s+sâu\b/giu, 'chiều sâu')
+      .replace(/\bvấn\s+dê(?=$|[^\p{L}])/giu, 'vấn đề')
+      .replace(/\bvể\s+(loại|các|những|việc|vấn đề|Jung)\b/giu, 'về $1')
+      .replace(/\bquấy\s+rây(?=$|[^\p{L}])/giu, 'quấy rầy')
+      .replace(/\bgia\s+dình\b/giu, 'gia đình')
+      .replace(/\b(khởi|từ|ban)\s+đẩu\b/giu, '$1 đầu')
+      .replace(/\btẩm\s+quan\s+trọng\b/giu, 'tầm quan trọng')
+      .replace(/\bđể\s+nghị\b/giu, 'đề nghị')
+      .replace(/\bdứng\b/giu, 'đứng')
+      .replace(/\bdúng\s+(mực|là|như)\b/giu, 'đúng $1')
+      .replace(/\bthành\s+phẩn\b/giu, 'thành phần')
+      .replace(/\bđẩy\s+(đủ|ắp)\b/giu, 'đầy $1')
+      .replace(/\btràn\s+trê(?=$|[^\p{L}])/giu, 'tràn trề')
+      .replace(/\bdáng\s+tiếc\b/giu, 'đáng tiếc')
+      .replace(/\bcú\s+khăng\s+khăng\b/giu, 'cứ khăng khăng')
+      .replace(/\bsở\s+di\b/giu, 'sở dĩ')
+      .replace(
+        /\bvể\s+(tâm\s+lý|cuộc\s+đời|giá\s+trị|phần)(?=$|[^\p{L}])/giu,
+        'về $1',
+      )
+      .replace(/\bnhiều\s+Ý\s+nghĩa\b/gu, 'nhiều ý nghĩa')
+      .replace(/\bPhát\s+thanhTruyển\s+hình\b/gu, 'Phát thanh Truyền hình')
+      .replace(/~\s*(?=(?:không|có|được|là|và|nhưng)\b)/giu, '');
 
     text = text.replace(/(^|\n)\s*['’"`-]\s*(?=\n|$)/gu, '$1');
     text = text.replace(/,\s*(\d{1,3})\s+(\d{1,3})(?=\s*(?:\n|$))/gu, ', $1–$2');

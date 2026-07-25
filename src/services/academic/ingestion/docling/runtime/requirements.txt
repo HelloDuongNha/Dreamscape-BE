@@ -2,4 +2,6 @@
 # which belongs to the legacy PyMuPDF parser runtime.
 docling==2.113.0
 easyocr==1.7.2
+vietocr==0.3.13
+setuptools<81
 ocrmac==1.0.1; sys_platform == "darwin"
