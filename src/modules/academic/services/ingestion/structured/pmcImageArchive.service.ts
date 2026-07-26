@@ -3,8 +3,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import zlib from 'zlib';
-import { fetchUrlWithSafeRedirects } from '../../../infrastructure/security/ssrfGuard';
-import { deleteAsset, uploadDocumentImage } from '../../../storage/cloudinaryStorage.service';
+import { fetchUrlWithSafeRedirects } from '../../../../../infrastructure/security/ssrfGuard';
+import { deleteAsset, uploadDocumentImage } from '../../../../../infrastructure/storage/cloudinaryStorage.service';
 
 export interface PmcArchiveImageResult {
   imageMap: Map<string, string>;

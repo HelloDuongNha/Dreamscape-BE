@@ -1,9 +1,9 @@
-import KnowledgeRuleV3 from '../../models/rulesV3/KnowledgeRule';
-import KnowledgeRuleEvidenceV3 from '../../models/rulesV3/KnowledgeRuleEvidence';
-import AcademicChunk from '../../models/AcademicChunk';
-import AcademicSource from '../../models/AcademicSource';
-import SourceContribution from '../../models/SourceContribution';
-import { generateEmbedding } from '../infrastructure/llm.service';
+import KnowledgeRuleV3 from '../models/KnowledgeRule';
+import KnowledgeRuleEvidenceV3 from '../models/KnowledgeRuleEvidence';
+import AcademicChunk from '../../academic/models/AcademicChunk';
+import AcademicSource from '../../academic/models/AcademicSource';
+import SourceContribution from '../../academic/models/SourceContribution';
+import { generateEmbedding } from '../../../infrastructure/llm.service';
 import { classifyRuleV3DreamApplication } from './ruleV3DreamApplication.service';
 
 function cosine(a: number[], b: number[]): number {

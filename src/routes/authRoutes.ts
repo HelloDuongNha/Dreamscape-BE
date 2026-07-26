@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { register, login, logout, updateProfile, verifyOtp, forgotPassword, resetPassword, resendOtp, getSessions, revokeSession } from '../controllers/authController';
+import { register, login, logout, updateProfile, verifyOtp, forgotPassword, resetPassword, resendOtp, getSessions, revokeSession } from '../modules/identity/controllers/authController';
 import authMiddleware from '../middleware/authMiddleware';
 
 const router = Router();

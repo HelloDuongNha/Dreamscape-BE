@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
-import AcademicChunk from '../../../../models/AcademicChunk';
-import { generateEmbedding } from '../../../infrastructure/llm.service';
+import AcademicChunk from '../../../models/AcademicChunk';
+import { generateEmbedding } from '../../../../../infrastructure/llm.service';
 import { CanonicalBlock } from '../../types/canonical.types';
 
 export async function buildAndSaveRagChunks(

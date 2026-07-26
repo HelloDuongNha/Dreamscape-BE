@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
-import UserContributionStats from '../../models/UserContributionStats';
-import UserAchievement from '../../models/UserAchievement';
-import User from '../../models/User';
+import UserContributionStats from '../../../identity/models/UserContributionStats';
+import UserAchievement from '../../../identity/models/UserAchievement';
+import User from '../../../identity/models/User';
 
 const CONTRIBUTION_LEVELS = [
   { level: 1, minApproved: 1, name: 'Người góp nguồn đầu tiên', key: 'contrib_level_1' },

@@ -1,5 +1,5 @@
 import mongoose, { Document, Schema, Types } from 'mongoose';
-import type { OracleRunStatus } from '../services/oracle/oracle.types';
+import type { OracleRunStatus } from '../services/oracle.types';
 
 export interface IOracleRun extends Document {
   threadId: Types.ObjectId;

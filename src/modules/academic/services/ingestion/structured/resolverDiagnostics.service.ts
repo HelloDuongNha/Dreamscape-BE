@@ -1,5 +1,5 @@
 import { collectCandidates } from './candidateCollector.service';
-import { isUrlSafe } from '../../../infrastructure/security/ssrfGuard';
+import { isUrlSafe } from '../../../../../infrastructure/security/ssrfGuard';
 
 export interface ResolverCandidateDiagnostic {
   sourceType: string;

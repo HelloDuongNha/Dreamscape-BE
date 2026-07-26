@@ -5,11 +5,11 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import mongoose, { Types } from 'mongoose';
 
-import { isOracleFeatureEnabled } from '../../config/oracleConfig';
-import OracleThread from '../../models/OracleThread';
-import OracleTurn from '../../models/OracleTurn';
-import OracleRun from '../../models/OracleRun';
-import OracleRunEvent from '../../models/OracleRunEvent';
+import { isOracleFeatureEnabled } from '../../../config/oracleConfig';
+import OracleThread from '../models/OracleThread';
+import OracleTurn from '../models/OracleTurn';
+import OracleRun from '../models/OracleRun';
+import OracleRunEvent from '../models/OracleRunEvent';
 import {
   parseClientRequestId,
   parseOracleContent,
@@ -23,8 +23,8 @@ import {
   deleteOracleThread,
   getOracleThread,
   postOracleTurn,
-} from '../../controllers/oracleController';
-import oracleRoutes from '../../routes/oracleRoutes';
+} from '../controllers/oracleController';
+import oracleRoutes from '../../../routes/oracleRoutes';
 
 // Global assertion counters
 let behavioralAssertions = 0;
@@ -283,20 +283,20 @@ function restoreAllPatched() {
     assertBehavior(typesContent.includes('academicAccess'), 'OracleAccessScope contains academicAccess');
 
     // Read oracleController.ts source to prove ownership derives from req.user._id
-    const controllerPath = path.resolve(__dirname, '../../controllers/oracleController.ts');
+    const controllerPath = path.resolve(__dirname, '../controllers/oracleController.ts');
     const controllerContent = fs.readFileSync(controllerPath, 'utf8');
     assertBehavior(controllerContent.includes('req.user._id'), 'oracleController extracts requester identity from req.user._id');
     assertBehavior(!controllerContent.includes('req.body.userId'), 'oracleController never accepts userId from body for ownership');
     assertBehavior(!controllerContent.includes('req.query.userId'), 'oracleController never accepts userId from query for ownership');
 
     // Read OracleTurn.ts source to prove role enum has no 'system'
-    const turnModelPath = path.resolve(__dirname, '../../models/OracleTurn.ts');
+    const turnModelPath = path.resolve(__dirname, '../models/OracleTurn.ts');
     const turnModelContent = fs.readFileSync(turnModelPath, 'utf8');
     assertBehavior(!turnModelContent.includes("'system'"), 'OracleTurn model role enum never contains "system"');
     assertBehavior(turnModelContent.includes('OracleCitationSchema'), 'OracleTurn persists sanitized citation metadata');
     assertBehavior(turnModelContent.includes('suggestedPrompts'), 'OracleTurn persists follow-up suggestions');
 
-    const similarDreamPath = path.resolve(__dirname, '../dream/similarDreamRetrieval.service.ts');
+    const similarDreamPath = path.resolve(__dirname, '../../dream/services/similarDreamRetrieval.service.ts');
     const similarDreamContent = fs.readFileSync(similarDreamPath, 'utf8');
     assertBehavior(
       similarDreamContent.includes("$or: [{ userId: userObjectId }, { privacy: 'public', is_public: true }]"),
@@ -738,7 +738,7 @@ function restoreAllPatched() {
     assertBehavior(!nextCalled, 'next() is not called when feature flag is disabled');
 
     // Prove routes do not import human conversation code
-    const routesPath = path.resolve(__dirname, '../../routes/oracleRoutes.ts');
+    const routesPath = path.resolve(__dirname, '../../../routes/oracleRoutes.ts');
     const routesContent = fs.readFileSync(routesPath, 'utf8');
     assertBehavior(!routesContent.includes('Conversation'), 'oracleRoutes does not import Conversation model');
     assertBehavior(!routesContent.includes('Message'), 'oracleRoutes does not import Message model');

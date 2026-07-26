@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildCompositeProbeBlueprint } from '../../controllers/ruleV3ModerationController';
+import { buildCompositeProbeBlueprint } from '../controllers/ruleV3ModerationController';
 
 const blueprint = buildCompositeProbeBlueprint({
   isComposite: true,

@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
-import { logger } from '../infrastructure/logger';
-import DreamSymbol from '../../models/DreamSymbol';
-import { generateEmbedding } from '../infrastructure/llm.service';
+import { logger } from '../../../infrastructure/logger';
+import DreamSymbol from '../models/DreamSymbol';
+import { generateEmbedding } from '../../../infrastructure/llm.service';
 
 export interface IRetrievedSymbol {
   symbol: string;

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import DreamSymbolObservation from '../../models/DreamSymbolObservation';
+import DreamSymbolObservation from '../models/DreamSymbolObservation';
 import { buildObservedSymbolLookupCandidates, canonicalizeObservedSymbol } from './symbolObservation.service';
 
 assert.equal(canonicalizeObservedSymbol('bà'), 'grandmother');

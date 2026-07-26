@@ -7,10 +7,10 @@
  * Used by both sourceController (approved path) and moderationController (preview path).
  * Zero DB writes. Identical hash formula as the established canonical identity service.
  */
-import AcademicSource from '../../../models/AcademicSource';
-import AcademicDocument from '../../../models/AcademicDocument';
-import SourceContribution from '../../../models/SourceContribution';
-import AcademicChunk from '../../../models/AcademicChunk';
+import AcademicSource from '../../models/AcademicSource';
+import AcademicDocument from '../../models/AcademicDocument';
+import SourceContribution from '../../models/SourceContribution';
+import AcademicChunk from '../../models/AcademicChunk';
 import {
   calculateSourceContentHash,
   CanonicalBlockIdentityError,

@@ -1,8 +1,8 @@
 import crypto from 'node:crypto';
 import mongoose, { ClientSession, Types } from 'mongoose';
-import OracleThread from '../../models/OracleThread';
-import OracleTurn from '../../models/OracleTurn';
-import OracleRun, { IOracleRun } from '../../models/OracleRun';
+import OracleThread from '../models/OracleThread';
+import OracleTurn from '../models/OracleTurn';
+import OracleRun, { IOracleRun } from '../models/OracleRun';
 import {
   CreateOracleTurnInput,
   OracleContractError,

@@ -1,4 +1,4 @@
-import { classifyRuleV3VerificationKind } from '../rules/ruleV3DreamApplication.service';
+import { classifyRuleV3VerificationKind } from '../../rules_v3/services/ruleV3DreamApplication.service';
 
 export interface OracleLocalizedText {
   vi: string;

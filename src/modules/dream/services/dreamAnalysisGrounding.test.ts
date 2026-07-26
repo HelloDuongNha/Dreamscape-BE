@@ -44,7 +44,7 @@ import {
   resolveQuestionRuleIds,
   buildExploratoryCaseAssessment,
 } from './dreamAnalysisGrounding.service';
-import { requiresAggregateRuleValidation } from '../rules/ruleV3DreamApplication.service';
+import { requiresAggregateRuleValidation } from '../../rules_v3/services/ruleV3DreamApplication.service';
 
 assert.equal(requiresAggregateRuleValidation({
   claimType: 'review_synthesis',

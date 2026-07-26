@@ -18,7 +18,7 @@ import {
   getUploadedPdfImportProgressForContribution,
   cancelUploadedPdfImportForContribution,
   getSourcePreviewTranslation
-} from '../controllers/moderationController';
+} from '../modules/academic/controllers/moderationController';
 
 import {
   previewRuleV3Plan,
@@ -33,8 +33,8 @@ import {
   approveRuleV3Candidate,
   rejectRuleV3Candidate,
   bulkRuleV3Action
-} from '../controllers/ruleV3ModerationController';
-import { listOracleEvidenceGaps } from '../controllers/oracleEvidenceGapController';
+} from '../modules/rules_v3/controllers/ruleV3ModerationController';
+import { listOracleEvidenceGaps } from '../modules/oracle/controllers/oracleEvidenceGapController';
 
 const router = Router();
 

@@ -1,11 +1,11 @@
 import assert from 'assert';
 import { createRuleV3ModerationController, RuleV3ControllerDependencies, getProductionAvailabilityConfig } from './ruleV3ModerationController';
-import AcademicSource from '../models/AcademicSource';
-import SourceContribution from '../models/SourceContribution';
-import AcademicDocument from '../models/AcademicDocument';
-import AcademicSection from '../models/AcademicSection';
-import AcademicChunk from '../models/AcademicChunk';
-import { ProviderCandidate } from '../services/rules/ruleV3GenerationProvider.types';
+import AcademicSource from '../../academic/models/AcademicSource';
+import SourceContribution from '../../academic/models/SourceContribution';
+import AcademicDocument from '../../academic/models/AcademicDocument';
+import AcademicSection from '../../academic/models/AcademicSection';
+import AcademicChunk from '../../academic/models/AcademicChunk';
+import { ProviderCandidate } from '../services/ruleV3GenerationProvider.types';
 
 // Mock Express Request and Response
 class MockResponse {

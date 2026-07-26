@@ -11,10 +11,10 @@ import {
   assertReaderReplacementActive,
   recordReaderReplacementAssets,
 } from '../../reader/persistence/readerReplacement.service';
-import { fetchUrlWithSafeRedirects } from '../../../infrastructure/security/ssrfGuard';
-import { downloadOriginalPdfAsset } from '../../../storage/originalPdfStorage.service';
-import { deleteAsset } from '../../../storage/cloudinaryStorage.service';
-import AcademicChunk from '../../../../models/AcademicChunk';
+import { fetchUrlWithSafeRedirects } from '../../../../../infrastructure/security/ssrfGuard';
+import { downloadOriginalPdfAsset } from '../../storage/originalPdfStorage.service';
+import { deleteAsset } from '../../../../../infrastructure/storage/cloudinaryStorage.service';
+import AcademicChunk from '../../../models/AcademicChunk';
 import { resolvePmcArchiveImages } from './pmcImageArchive.service';
 import { ReaderQualityReport } from '../../types/canonical.types';
 import { buildResolverReport } from './resolverDiagnostics.service';

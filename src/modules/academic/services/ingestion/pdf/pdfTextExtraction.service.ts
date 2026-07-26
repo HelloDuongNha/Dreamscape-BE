@@ -1,10 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import mongoose from 'mongoose';
-import SourceContribution from '../../../../models/SourceContribution';
-import AcademicSource from '../../../../models/AcademicSource';
+import SourceContribution from '../../../models/SourceContribution';
+import AcademicSource from '../../../models/AcademicSource';
 import { parsePdf } from './legacy/PdfParser';
-import { downloadOriginalPdfAsset, hasStoredOriginalPdf } from '../../../storage/originalPdfStorage.service';
+import { downloadOriginalPdfAsset, hasStoredOriginalPdf } from '../../storage/originalPdfStorage.service';
 import { ExtractedDocument, ExtractedPage, ExtractedBlock } from '../../types/extractedDocument.types';
 import { probePdfTextLayer } from './pdfTextLayerProbe.service';
 

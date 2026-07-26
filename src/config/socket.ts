@@ -1,8 +1,8 @@
 import { Server as HTTPServer } from 'http';
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
-import Conversation from '../models/Conversation';
-import Message, { IMessage } from '../models/Message';
+import Conversation from '../modules/messaging/models/Conversation';
+import Message, { IMessage } from '../modules/messaging/models/Message';
 import { Types } from 'mongoose';
 
 // ─── Types ────────────────────────────────────────────────────────────────────

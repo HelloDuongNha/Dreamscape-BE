@@ -5,7 +5,7 @@ import {
   getMessages,
   searchOrCreateConversation,
   deleteConversation,
-} from '../controllers/conversationController';
+} from '../modules/messaging/controllers/conversationController';
 
 const router = Router();
 

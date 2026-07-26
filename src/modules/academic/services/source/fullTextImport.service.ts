@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { importSmartReaderForSource } from '../academic/ingestion/structured/smartReaderImport.service';
+import { importSmartReaderForSource } from '../ingestion/structured/smartReaderImport.service';
 
 export interface ImportResult {
   success: boolean;

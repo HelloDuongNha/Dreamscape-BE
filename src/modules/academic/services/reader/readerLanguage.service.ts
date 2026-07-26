@@ -1,4 +1,4 @@
-import { inferDocumentLanguage } from '../../rules/documentLanguage.service';
+import { inferDocumentLanguage } from '../../../rules_v3/services/documentLanguage.service';
 import { normalizeLanguageCode } from './canonicalReaderIdentity.service';
 
 type ReaderLanguageChunk = { text?: unknown };

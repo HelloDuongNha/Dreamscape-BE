@@ -1,21 +1,21 @@
 import crypto from 'crypto';
 import mongoose from 'mongoose';
-import AcademicRuleExtractionRunV3 from '../../models/rulesV3/AcademicRuleExtractionRun';
-import KnowledgeRuleV3 from '../../models/rulesV3/KnowledgeRule';
-import KnowledgeRuleEvidenceV3 from '../../models/rulesV3/KnowledgeRuleEvidence';
-import OracleEvidenceGap from '../../models/OracleEvidenceGap';
+import AcademicRuleExtractionRunV3 from '../models/AcademicRuleExtractionRun';
+import KnowledgeRuleV3 from '../models/KnowledgeRule';
+import KnowledgeRuleEvidenceV3 from '../models/KnowledgeRuleEvidence';
+import OracleEvidenceGap from '../../oracle/models/OracleEvidenceGap';
 import { buildRuleV3PlanPreviewRaw } from './ruleV3PlanPreview.service';
 import { extractRuleV3Candidates } from './ruleV3Extractor.service';
-import { calculateSourceContentHash } from '../academic/reader/canonicalReaderIdentity.service';
+import { calculateSourceContentHash } from '../../academic/services/reader/canonicalReaderIdentity.service';
 import type { RuleV3GenerationProvider } from './ruleV3GenerationProvider.types';
-import { logger } from '../infrastructure/logger';
+import { logger } from '../../../infrastructure/logger';
 import { RULE_V3_SCORING_VERSION, scoreRuleV3 } from './ruleV3Scoring.service';
 import { classifyRuleV3Relationship } from './ruleV3Relationship.service';
 import { removeRuleV3SourceData, resolveRuleV3SourceAliases } from './ruleV3Lifecycle.service';
 import {
   linkOracleEvidenceGapCandidatesForRules,
   localizeOracleEvidenceClaim,
-} from '../oracle/oracleEvidenceGap.service';
+} from '../../oracle/services/oracleEvidenceGap.service';
 import {
   backupRuleV3TouchedRule,
   commitRuleV3MutationJournal,

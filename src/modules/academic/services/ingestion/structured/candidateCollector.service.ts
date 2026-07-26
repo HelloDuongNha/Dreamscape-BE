@@ -1,5 +1,5 @@
 import { FullTextCandidate } from '../../types/canonical.types';
-import { isValidHttpUrl } from '../../../infrastructure/security/ssrfGuard';
+import { isValidHttpUrl } from '../../../../../infrastructure/security/ssrfGuard';
 
 export function collectCandidates(source: any): FullTextCandidate[] {
   const candidates: FullTextCandidate[] = [];

@@ -2,12 +2,12 @@ import mongoose from 'mongoose';
 import * as cheerio from 'cheerio';
 import { normalizeDoi, fetchUnpaywallMetadata } from './openAccess.service';
 import { sanitizeAcademicSourceData } from './sourceSanitizer';
-import { getAssetMetadata } from '../storage/cloudinaryStorage.service';
+import { getAssetMetadata } from '../../../../infrastructure/storage/cloudinaryStorage.service';
 import {
   isUrlSafe,
   isValidHttpUrl,
   fetchUrlWithSafeRedirects
-} from '../infrastructure/security/ssrfGuard';
+} from '../../../../infrastructure/security/ssrfGuard';
 
 export interface SourceImportResolverInput {
   doi?: string;

@@ -1,8 +1,8 @@
 import mongoose, { ClientSession } from 'mongoose';
-import AcademicSource from '../../models/AcademicSource';
-import AcademicRuleExtractionRunV3 from '../../models/rulesV3/AcademicRuleExtractionRun';
-import KnowledgeRuleV3 from '../../models/rulesV3/KnowledgeRule';
-import KnowledgeRuleEvidenceV3 from '../../models/rulesV3/KnowledgeRuleEvidence';
+import AcademicSource from '../../academic/models/AcademicSource';
+import AcademicRuleExtractionRunV3 from '../models/AcademicRuleExtractionRun';
+import KnowledgeRuleV3 from '../models/KnowledgeRule';
+import KnowledgeRuleEvidenceV3 from '../models/KnowledgeRuleEvidence';
 import { scoreRuleV3 } from './ruleV3Scoring.service';
 import { applyStoredValidationAdjustment } from './ruleV3ValidationScore.service';
 

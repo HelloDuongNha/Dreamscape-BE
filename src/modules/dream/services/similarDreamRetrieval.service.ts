@@ -1,8 +1,8 @@
 import mongoose from 'mongoose';
-import Dream from '../../models/Dream';
-import User from '../../models/User';
-import Comment from '../../models/Comment';
-import { generateEmbedding } from '../infrastructure/llm.service';
+import Dream from '../models/Dream';
+import User from '../../identity/models/User';
+import Comment from '../../social/models/Comment';
+import { generateEmbedding } from '../../../infrastructure/llm.service';
 
 export interface SimilarDreamMatch {
   dreamId: string;

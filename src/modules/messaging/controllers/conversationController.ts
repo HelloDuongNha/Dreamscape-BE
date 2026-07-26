@@ -2,7 +2,8 @@ import { Request, Response } from 'express';
 import { Types } from 'mongoose';
 import Conversation from '../models/Conversation';
 import Message from '../models/Message';
-import User from '../models/User';
+import User from '../../identity/models/User';
+import { searchMessaging } from '../services/messagingSearch.service';
 
 // ─── Helper: Public user projection ──────────────────────────────────────────
 
@@ -99,11 +100,19 @@ export const getMessages = async (req: Request, res: Response): Promise<void> =>
 export const searchOrCreateConversation = async (req: Request, res: Response): Promise<void> => {
   try {
     const myId = req.user!._id as Types.ObjectId;
-    const { username, targetUserId, open } = req.body as {
+    const { username, targetUserId, open, searchMode, query } = req.body as {
       username?:     string;
       targetUserId?: string;
       open?:         boolean;
+      searchMode?:   string;
+      query?:        string;
     };
+
+    if (searchMode === 'messaging') {
+      const searchResult = await searchMessaging(myId, String(query ?? ''));
+      res.status(200).json({ success: true, data: searchResult });
+      return;
+    }
 
     // ── Mode 2: Open/create conversation with targetUserId ───────────────────
     // Triggered when open=true AND targetUserId is present (username can be empty)
@@ -180,15 +189,11 @@ export const searchOrCreateConversation = async (req: Request, res: Response): P
     }
 
     if (!open || !targetUserId) {
-      const users = await User.find({
-        username: { $regex: new RegExp(username.trim(), 'i') },
-        _id:      { $ne: myId },   // exclude self
-      })
-        .select(USER_PUBLIC)
-        .limit(10)
-        .lean();
-
-      res.status(200).json({ success: true, data: users });
+      const scopedResults = await searchMessaging(myId, username);
+      res.status(200).json({
+        success: true,
+        data: scopedResults.conversations.map((result) => result.user),
+      });
       return;
     }
 

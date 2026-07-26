@@ -1,9 +1,9 @@
 import mongoose from 'mongoose';
-import SourceContribution from '../../../../../models/SourceContribution';
-import AcademicSource from '../../../../../models/AcademicSource';
+import SourceContribution from '../../../../models/SourceContribution';
+import AcademicSource from '../../../../models/AcademicSource';
 import { detectPdfMetadata, PdfMetadataDetectionResult } from './pdfMetadataDetector.service';
-import { resolveSourceImport } from '../../../../source/sourceImportResolver.service';
-import { normalizeDoi } from '../../../../source/openAccess.service';
+import { resolveSourceImport } from '../../../source/sourceImportResolver.service';
+import { normalizeDoi } from '../../../source/openAccess.service';
 import { ExtractedDocument } from '../../../types/extractedDocument.types';
 
 export interface MetadataEnrichmentResult {

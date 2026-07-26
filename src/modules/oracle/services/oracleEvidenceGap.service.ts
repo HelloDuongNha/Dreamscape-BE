@@ -1,10 +1,10 @@
 import { Types } from 'mongoose';
-import AcademicSource from '../../models/AcademicSource';
-import SourceContribution from '../../models/SourceContribution';
-import OracleEvidenceGap from '../../models/OracleEvidenceGap';
-import OracleTurn from '../../models/OracleTurn';
-import KnowledgeRuleEvidenceV3 from '../../models/rulesV3/KnowledgeRuleEvidence';
-import { inferDocumentLanguage } from '../rules/documentLanguage.service';
+import AcademicSource from '../../academic/models/AcademicSource';
+import SourceContribution from '../../academic/models/SourceContribution';
+import OracleEvidenceGap from '../models/OracleEvidenceGap';
+import OracleTurn from '../models/OracleTurn';
+import KnowledgeRuleEvidenceV3 from '../../rules_v3/models/KnowledgeRuleEvidence';
+import { inferDocumentLanguage } from '../../rules_v3/services/documentLanguage.service';
 import type { OracleCitation } from './oracle.types';
 
 function normalize(value: string): string {

@@ -14,14 +14,14 @@ import {
   streamOracleRunEvents,
   submitOracleCitationFeedback,
   updateOracleThread,
-} from '../controllers/oracleController';
+} from '../modules/oracle/controllers/oracleController';
 import {
   activateOracleCredentialController,
   createOracleCredential,
   deleteOracleCredential,
   listOracleCredentials,
   testOracleCredential,
-} from '../controllers/oracleCredentialController';
+} from '../modules/oracle/controllers/oracleCredentialController';
 
 const router = Router();
 

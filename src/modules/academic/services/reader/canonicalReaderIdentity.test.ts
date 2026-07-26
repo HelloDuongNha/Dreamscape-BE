@@ -10,13 +10,13 @@ import mongoose from 'mongoose';
 import crypto from 'node:crypto';
 
 // ── Model imports (for spy/block) ─────────────────────────────────────────────
-import AcademicSource from '../../../models/AcademicSource';
-import SourceContribution from '../../../models/SourceContribution';
-import AcademicDocument from '../../../models/AcademicDocument';
-import AcademicSection from '../../../models/AcademicSection';
-import AcademicChunk from '../../../models/AcademicChunk';
-import KnowledgeRuleV3 from '../../../models/rulesV3/KnowledgeRule';
-import KnowledgeRuleEvidenceV3 from '../../../models/rulesV3/KnowledgeRuleEvidence';
+import AcademicSource from '../../models/AcademicSource';
+import SourceContribution from '../../models/SourceContribution';
+import AcademicDocument from '../../models/AcademicDocument';
+import AcademicSection from '../../models/AcademicSection';
+import AcademicChunk from '../../models/AcademicChunk';
+import KnowledgeRuleV3 from '../../../rules_v3/models/KnowledgeRule';
+import KnowledgeRuleEvidenceV3 from '../../../rules_v3/models/KnowledgeRuleEvidence';
 
 // ── Service helpers ───────────────────────────────────────────────────────────
 import {
@@ -29,8 +29,8 @@ import {
 } from './canonicalReaderIdentity.service';
 
 // ── Controller endpoints under test ──────────────────────────────────────────
-import { getApprovedSourceRead } from '../../../controllers/sourceController';
-import { getSourcePreview } from '../../../controllers/moderationController';
+import { getApprovedSourceRead } from '../../controllers/sourceController';
+import { getSourcePreview } from '../../controllers/moderationController';
 
 // ── Write method names that must never be called by reader endpoints ──────────
 const WRITE_METHODS = [

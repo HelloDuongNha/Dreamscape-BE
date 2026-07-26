@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { Request, Response, NextFunction } from 'express';
-import User, { IUser } from '../models/User';
+import User, { IUser } from '../modules/identity/models/User';
 import { recordStreakAsync } from './streakMiddleware';
 
 // ─── Augment Express Request ──────────────────────────────────────────────────

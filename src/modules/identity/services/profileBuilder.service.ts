@@ -4,7 +4,7 @@ import {
   getLifePathKeywords,
   getHoraryBranch,
   ICulturalProfile,
-} from '../../data/culturalRules';
+} from '../../../data/culturalRules';
 
 /**
  * Interface representing a single score factor in Component B.

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getUserComments } from '../controllers/commentController';
+import { getUserComments } from '../modules/social/controllers/commentController';
 
 const router = Router();
 

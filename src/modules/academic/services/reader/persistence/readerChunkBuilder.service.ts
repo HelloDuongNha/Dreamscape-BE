@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
-import AcademicDocument from '../../../../models/AcademicDocument';
-import AcademicSection from '../../../../models/AcademicSection';
-import AcademicChunk from '../../../../models/AcademicChunk';
+import AcademicDocument from '../../../models/AcademicDocument';
+import AcademicSection from '../../../models/AcademicSection';
+import AcademicChunk from '../../../models/AcademicChunk';
 import { CanonicalBlock } from '../../types/canonical.types';
 import { buildAndSaveRagChunks } from './ragChunkBuilder.service';
 import {

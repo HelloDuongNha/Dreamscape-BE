@@ -2,11 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { uploadOriginalPdf } from './originalPdfStorage.service';
-import { deleteFirebasePdf } from './firebasePdfStorage.service';
+import { deleteFirebasePdf } from '../../../../infrastructure/storage/firebasePdfStorage.service';
 import {
   PDF_MAX_FILE_SIZE_BYTES,
   PDF_MAX_FILE_SIZE_LABEL,
-} from '../../config/pdfLimits';
+} from '../../../../config/pdfLimits';
 
 export interface ProcessPdfUploadResult {
   storageProvider: 'firebase';

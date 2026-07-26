@@ -1,9 +1,9 @@
 import mongoose from 'mongoose';
-import AcademicSource from '../../models/AcademicSource';
-import SourceContribution from '../../models/SourceContribution';
-import AcademicDocument from '../../models/AcademicDocument';
-import AcademicSection from '../../models/AcademicSection';
-import AcademicChunk from '../../models/AcademicChunk';
+import AcademicSource from '../../academic/models/AcademicSource';
+import SourceContribution from '../../academic/models/SourceContribution';
+import AcademicDocument from '../../academic/models/AcademicDocument';
+import AcademicSection from '../../academic/models/AcademicSection';
+import AcademicChunk from '../../academic/models/AcademicChunk';
 import { profileDocument, routeExtractionStrategy } from './documentProfiler.service';
 import { planEvidenceBatches } from './evidenceBatchPlanner.service';
 import { inferDocumentLanguage, normalizeDocumentLanguage } from './documentLanguage.service';

@@ -1,5 +1,5 @@
 import mongoose, { Document, Schema, Types } from 'mongoose';
-import type { OracleMode } from '../services/oracle/oracle.types';
+import type { OracleMode } from '../services/oracle.types';
 
 export interface IOracleThread extends Document {
   userId: Types.ObjectId;

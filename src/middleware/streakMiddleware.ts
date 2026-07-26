@@ -1,7 +1,7 @@
-import { IUser } from '../models/User';
-import User from '../models/User';
-import { calculateRank, checkAndAwardAchievements } from '../services/user/rank.service';
-import Dream from '../models/Dream';
+import { IUser } from '../modules/identity/models/User';
+import User from '../modules/identity/models/User';
+import { calculateRank, checkAndAwardAchievements } from '../modules/identity/services/rank.service';
+import Dream from '../modules/dream/models/Dream';
 
 // ─── Streak Tracker ───────────────────────────────────────────────────────────
 //
@@ -122,4 +122,3 @@ export function recordStreakAsync(user: IUser): void {
     }
   })();
 }
-

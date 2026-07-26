@@ -6,23 +6,23 @@ import AcademicSource from '../models/AcademicSource';
 import AcademicDocument from '../models/AcademicDocument';
 import AcademicSection from '../models/AcademicSection';
 import AcademicChunk from '../models/AcademicChunk';
-import { generateEmbedding } from '../services/infrastructure/llm.service';
-import { removeRuleV3SourceData } from '../services/rules/ruleV3Lifecycle.service';
-import { calculateSourceContentHash, deriveDocumentIdFromChunks, mapChunkToBlock, CanonicalBlockIdentityError } from '../services/academic/reader/canonicalReaderIdentity.service';
-import type { CanonicalReaderIdentity } from '../services/academic/reader/canonicalReaderIdentity.types';
-import { validateRequestShape, checkHttpBodyLimit } from '../services/academic/reader/readerTranslationValidator.service';
-import { translateReaderTargets } from '../services/academic/reader/canonicalReaderTranslation.service';
-import { resolveTranslationProvider } from '../services/academic/reader/readerTranslationProvider.registry';
-import { resolvePreviewContributionContext, loadTranslationChunks } from '../services/academic/reader/readerTranslationContext.service';
-import type { TranslationServiceDeps } from '../services/academic/reader/readerTranslation.types';
-import { getTranslationDeadlineMs } from '../config/translationConfig';
-import { resolveReaderLanguage } from '../services/academic/reader/readerLanguage.service';
+import { generateEmbedding } from '../../../infrastructure/llm.service';
+import { removeRuleV3SourceData } from '../../rules_v3/services/ruleV3Lifecycle.service';
+import { calculateSourceContentHash, deriveDocumentIdFromChunks, mapChunkToBlock, CanonicalBlockIdentityError } from '../services/reader/canonicalReaderIdentity.service';
+import type { CanonicalReaderIdentity } from '../services/reader/canonicalReaderIdentity.types';
+import { validateRequestShape, checkHttpBodyLimit } from '../services/reader/readerTranslationValidator.service';
+import { translateReaderTargets } from '../services/reader/canonicalReaderTranslation.service';
+import { resolveTranslationProvider } from '../services/reader/readerTranslationProvider.registry';
+import { resolvePreviewContributionContext, loadTranslationChunks } from '../services/reader/readerTranslationContext.service';
+import type { TranslationServiceDeps } from '../services/reader/readerTranslation.types';
+import { getTranslationDeadlineMs } from '../../../config/translationConfig';
+import { resolveReaderLanguage } from '../services/reader/readerLanguage.service';
 import {
   isUrlSafe,
   isValidHttpUrl,
   SsrfError,
   fetchUrlWithSafeRedirects
-} from '../services/infrastructure/security/ssrfGuard';
+} from '../../../infrastructure/security/ssrfGuard';
 import { PDFParse } from 'pdf-parse';
 import { spawn } from 'child_process';
 import fs from 'fs';
@@ -34,16 +34,16 @@ import {
   captureReaderRuleBackup,
   completeReaderReplacement,
   rollbackReaderReplacement,
-} from '../services/academic/reader/persistence/readerReplacement.service';
+} from '../services/reader/persistence/readerReplacement.service';
 import { resolveSourceImport } from '../services/source/sourceImportResolver.service';
 import { recordApproval, recordRejection } from '../services/contribution/contributionStats.service';
 import multer from 'multer';
 import {
   PDF_MAX_FILE_SIZE_BYTES,
   PDF_MAX_FILE_SIZE_LABEL,
-} from '../config/pdfLimits';
+} from '../../../config/pdfLimits';
 import { v2 as cloudinary } from 'cloudinary';
-import { deleteAsset } from '../services/storage/cloudinaryStorage.service';
+import { deleteAsset } from '../../../infrastructure/storage/cloudinaryStorage.service';
 import { sanitizeAcademicSourceData } from '../services/source/sourceSanitizer';
 import { processPdfUpload, toOriginalFileRecord, deleteProcessedPdfUpload } from '../services/storage/pdfUpload.service';
 import { cacheOriginalPdfForContribution } from '../services/storage/originalPdfAsset.service';
@@ -2402,8 +2402,8 @@ export const deleteContributionPdf = async (req: Request, res: Response): Promis
   }
 };
 
-import { cancelUploadedPdfImport, runUploadedPdfImport } from '../services/academic/ingestion/pdf/uploadedPdfImport.service';
-import { getPdfImportProgress } from '../services/academic/ingestion/pdf/pdfImportProgress.service';
+import { cancelUploadedPdfImport, runUploadedPdfImport } from '../services/ingestion/pdf/uploadedPdfImport.service';
+import { getPdfImportProgress } from '../services/ingestion/pdf/pdfImportProgress.service';
 
 export const getUploadedPdfImportProgressForContribution = async (req: Request, res: Response): Promise<void> => {
   try {

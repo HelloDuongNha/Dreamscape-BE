@@ -1,14 +1,14 @@
 import mongoose from 'mongoose';
-import { logger } from '../infrastructure/logger';
-import UserDreamProfile from '../../models/UserDreamProfile';
-import Dream from '../../models/Dream';
-import { generateAnalysis, ILLMOutput } from '../infrastructure/llm.service';
+import { logger } from '../../../infrastructure/logger';
+import UserDreamProfile from '../models/UserDreamProfile';
+import Dream from '../models/Dream';
+import { generateAnalysis, ILLMOutput } from '../../../infrastructure/llm.service';
 import { retrieveSymbolsHybrid, IRetrievedSymbol, isExplicitSleepContextClause } from './symbolRetrieval.service';
-import { retrieveApprovedRuleV3 } from '../rules/ruleV3Retrieval.service';
+import { retrieveApprovedRuleV3 } from '../../rules_v3/services/ruleV3Retrieval.service';
 import {
   canExplainPsychology,
   canGenerateContextQuestion,
-} from '../rules/ruleV3DreamApplication.service';
+} from '../../rules_v3/services/ruleV3DreamApplication.service';
 import { retrieveSimilarDreams, SimilarDreamMatch } from './similarDreamRetrieval.service';
 import {
   buildObservedSymbolLookupCandidates,

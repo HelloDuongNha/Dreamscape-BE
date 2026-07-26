@@ -4,36 +4,36 @@ import OracleThread from '../models/OracleThread';
 import OracleTurn from '../models/OracleTurn';
 import OracleRun from '../models/OracleRun';
 import OracleRunEvent from '../models/OracleRunEvent';
-import KnowledgeRuleV3 from '../models/rulesV3/KnowledgeRule';
-import KnowledgeRuleEvidenceV3 from '../models/rulesV3/KnowledgeRuleEvidence';
-import AcademicSource from '../models/AcademicSource';
-import { createOracleTurnRun } from '../services/oracle/oraclePersistence.service';
-import { OracleContractError } from '../services/oracle/oracle.types';
+import KnowledgeRuleV3 from '../../rules_v3/models/KnowledgeRule';
+import KnowledgeRuleEvidenceV3 from '../../rules_v3/models/KnowledgeRuleEvidence';
+import AcademicSource from '../../academic/models/AcademicSource';
+import { createOracleTurnRun } from '../services/oraclePersistence.service';
+import { OracleContractError } from '../services/oracle.types';
 import {
   parseClientRequestId,
   parseOracleContent,
   parseOracleMode,
   parseOracleObjectId,
-} from '../services/oracle/oracle.validation';
-import { ORACLE_RUN_EVENT_RETENTION_MS } from '../config/oracleConfig';
+} from '../services/oracle.validation';
+import { ORACLE_RUN_EVENT_RETENTION_MS } from '../../../config/oracleConfig';
 import {
   abortOracleRun,
   compactUsedCitations,
   executeOracleRun,
-} from '../services/oracle/oracleRun.service';
+} from '../services/oracleRun.service';
 import {
   buildRuleGroundedFallbackHypotheses,
   resolveQuestionRuleIds,
-} from '../services/dream/dreamAnalysisGrounding.service';
+} from '../../dream/services/dreamAnalysisGrounding.service';
 import {
   localizeOracleRuleStatement,
   localizeOracleVerificationQuestion,
-} from '../services/oracle/oracleRulePresentation.service';
+} from '../services/oracleRulePresentation.service';
 import {
   getCurrentRuleValidationAnswers,
   setRuleValidationFeedback,
-} from '../services/rules/ruleV3ValidationScore.service';
-import { logger } from '../services/infrastructure/logger';
+} from '../../rules_v3/services/ruleV3ValidationScore.service';
+import { logger } from '../../../infrastructure/logger';
 
 function requesterId(req: Request): Types.ObjectId {
   if (!req.user?._id) {

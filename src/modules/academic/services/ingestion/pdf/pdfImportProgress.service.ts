@@ -1,5 +1,5 @@
-import AcademicSource from '../../../../models/AcademicSource';
-import SourceContribution from '../../../../models/SourceContribution';
+import AcademicSource from '../../../models/AcademicSource';
+import SourceContribution from '../../../models/SourceContribution';
 
 export type PdfImportStage =
   | 'received'

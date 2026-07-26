@@ -3,7 +3,7 @@ import { Types } from 'mongoose';
 import OracleModelCredential, {
   type IOracleModelCredential,
   type OracleCredentialProvider,
-} from '../../models/OracleModelCredential';
+} from '../models/OracleModelCredential';
 import { OracleContractError } from './oracle.types';
 
 export interface OracleCredentialInput {

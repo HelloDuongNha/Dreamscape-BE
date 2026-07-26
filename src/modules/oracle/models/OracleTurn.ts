@@ -4,7 +4,7 @@ import type {
   OracleCitation,
   OracleTurnRole,
   OracleTurnStatus,
-} from '../services/oracle/oracle.types';
+} from '../services/oracle.types';
 
 export interface IOracleTurn extends Document {
   threadId: Types.ObjectId;

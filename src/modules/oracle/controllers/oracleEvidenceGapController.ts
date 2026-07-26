@@ -1,13 +1,13 @@
 import { Request, Response } from 'express';
 import OracleEvidenceGap from '../models/OracleEvidenceGap';
-import KnowledgeRuleV3 from '../models/rulesV3/KnowledgeRule';
+import KnowledgeRuleV3 from '../../rules_v3/models/KnowledgeRule';
 import {
   buildOracleEvidenceGapResearchBrief,
   canonicalizeOracleEvidenceClaim,
   isResearchableOracleEvidenceClaim,
   localizeOracleEvidenceClaim,
   oracleEvidenceClaimClusterKey,
-} from '../services/oracle/oracleEvidenceGap.service';
+} from '../services/oracleEvidenceGap.service';
 
 export async function listOracleEvidenceGaps(req: Request, res: Response): Promise<void> {
   const requestedStatus = String(req.query.status || 'active');

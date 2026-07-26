@@ -3,7 +3,7 @@ import path from 'path';
 import mongoose from 'mongoose';
 import AcademicSource from '../../models/AcademicSource';
 import SourceContribution from '../../models/SourceContribution';
-import { fetchUrlWithSafeRedirects } from '../infrastructure/security/ssrfGuard';
+import { fetchUrlWithSafeRedirects } from '../../../../infrastructure/security/ssrfGuard';
 import { processPdfUpload, toOriginalFileRecord } from './pdfUpload.service';
 import { deleteOriginalPdfAsset, hasStoredOriginalPdf } from './originalPdfStorage.service';
 

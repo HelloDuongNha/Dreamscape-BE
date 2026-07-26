@@ -1,5 +1,5 @@
 import nodemailer from 'nodemailer';
-import { getOtpEmailTemplate } from '../../templates/otpTemplate';
+import { getOtpEmailTemplate } from '../templates/otpTemplate';
 
 // Configure a secure transporter pool on port 465
 const transporter = nodemailer.createTransport({

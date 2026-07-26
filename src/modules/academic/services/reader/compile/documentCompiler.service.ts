@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
-import SourceContribution from '../../../../models/SourceContribution';
-import AcademicSource from '../../../../models/AcademicSource';
-import AcademicDocument from '../../../../models/AcademicDocument';
+import SourceContribution from '../../../models/SourceContribution';
+import AcademicSource from '../../../models/AcademicSource';
+import AcademicDocument from '../../../models/AcademicDocument';
 import { ExtractedDocument } from '../../types/extractedDocument.types';
 import { CanonicalBlock, BlockType, SemanticType } from '../../types/canonical.types';
 import { buildAndSaveSmartReaderData } from '../persistence/readerChunkBuilder.service';

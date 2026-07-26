@@ -1,36 +1,36 @@
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
-import { RuleV3GenerationProvider } from '../services/rules/ruleV3GenerationProvider.types';
-import { extractRuleV3Candidates } from '../services/rules/ruleV3Extractor.service';
-import { RuleV3OllamaProvider } from '../services/rules/providers/ruleV3OllamaProvider.service';
-import { RuleV3GeminiProvider } from '../services/rules/providers/ruleV3GeminiProvider.service';
-import { buildRuleV3PlanPreview, buildRuleV3PlanPreviewRaw } from '../services/rules/ruleV3PlanPreview.service';
+import { RuleV3GenerationProvider } from '../services/ruleV3GenerationProvider.types';
+import { extractRuleV3Candidates } from '../services/ruleV3Extractor.service';
+import { RuleV3OllamaProvider } from '../services/providers/ruleV3OllamaProvider.service';
+import { RuleV3GeminiProvider } from '../services/providers/ruleV3GeminiProvider.service';
+import { buildRuleV3PlanPreview, buildRuleV3PlanPreviewRaw } from '../services/ruleV3PlanPreview.service';
 import {
   getRuleV3FullRun,
   getRuleV3SourceSummary,
   startRuleV3FullExtraction,
   cancelRuleV3FullExtraction,
-} from '../services/rules/ruleV3FullExtraction.service';
-import KnowledgeRuleV3 from '../models/rulesV3/KnowledgeRule';
-import KnowledgeRuleEvidenceV3 from '../models/rulesV3/KnowledgeRuleEvidence';
-import AcademicChunk from '../models/AcademicChunk';
-import AcademicSource from '../models/AcademicSource';
-import SourceContribution from '../models/SourceContribution';
-import { RULE_V3_SCORING_VERSION, scoreRuleV3 } from '../services/rules/ruleV3Scoring.service';
-import { applyStoredValidationAdjustment } from '../services/rules/ruleV3ValidationScore.service';
+} from '../services/ruleV3FullExtraction.service';
+import KnowledgeRuleV3 from '../models/KnowledgeRule';
+import KnowledgeRuleEvidenceV3 from '../models/KnowledgeRuleEvidence';
+import AcademicChunk from '../../academic/models/AcademicChunk';
+import AcademicSource from '../../academic/models/AcademicSource';
+import SourceContribution from '../../academic/models/SourceContribution';
+import { RULE_V3_SCORING_VERSION, scoreRuleV3 } from '../services/ruleV3Scoring.service';
+import { applyStoredValidationAdjustment } from '../services/ruleV3ValidationScore.service';
 import {
   assessRuleV3MergeCompatibility,
   buildRuleV3MergeClusters,
   classifyRuleV3Relationship,
   type RuleV3MergeCluster,
-} from '../services/rules/ruleV3Relationship.service';
-import { classifyRuleV3VerificationKind, requiresAggregateRuleValidation } from '../services/rules/ruleV3DreamApplication.service';
-import { generateEmbedding } from '../services/infrastructure/llm.service';
+} from '../services/ruleV3Relationship.service';
+import { classifyRuleV3VerificationKind, requiresAggregateRuleValidation } from '../services/ruleV3DreamApplication.service';
+import { generateEmbedding } from '../../../infrastructure/llm.service';
 import {
   getOracleEvidenceGapMatchesForRule,
   reconcileOracleEvidenceGapsForRule,
-} from '../services/oracle/oracleEvidenceGap.service';
-import { mergePendingRuleV3Group, RuleV3MergeError } from '../services/rules/ruleV3Merge.service';
+} from '../../oracle/services/oracleEvidenceGap.service';
+import { mergePendingRuleV3Group, RuleV3MergeError } from '../services/ruleV3Merge.service';
 
 export interface RuleV3ControllerDependencies {
   planLoader: (id: string) => Promise<any>;

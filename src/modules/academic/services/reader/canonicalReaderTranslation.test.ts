@@ -40,22 +40,22 @@ import { EventEmitter } from 'node:events';
 import mongoose from 'mongoose';
 
 // ─── Route & Controller imports for boundary tests ──────────────────────────
-import sourceRouter from '../../../routes/sourceRoutes';
-import moderationRouter from '../../../routes/moderationRoutes';
-import { getApprovedSourceTranslation } from '../../../controllers/sourceController';
-import { getSourcePreviewTranslation } from '../../../controllers/moderationController';
+import sourceRouter from '../../../../routes/sourceRoutes';
+import moderationRouter from '../../../../routes/moderationRoutes';
+import { getApprovedSourceTranslation } from '../../controllers/sourceController';
+import { getSourcePreviewTranslation } from '../../controllers/moderationController';
 import { resolveApprovedSourceContext, resolvePreviewContributionContext } from './readerTranslationContext.service';
 import * as registry from './readerTranslationProvider.registry';
-import { parseTranslationDeadline, getTranslationDeadlineMs } from '../../../config/translationConfig';
-import authMiddleware, { isModerator } from '../../../middleware/authMiddleware';
+import { parseTranslationDeadline, getTranslationDeadlineMs } from '../../../../config/translationConfig';
+import authMiddleware, { isModerator } from '../../../../middleware/authMiddleware';
 import * as translationServiceModule from './canonicalReaderTranslation.service';
 
 // ─── Model imports (for write guards) ─────────────────────────────────────────
-import AcademicSource from '../../../models/AcademicSource';
-import SourceContribution from '../../../models/SourceContribution';
-import AcademicDocument from '../../../models/AcademicDocument';
-import AcademicSection from '../../../models/AcademicSection';
-import AcademicChunk from '../../../models/AcademicChunk';
+import AcademicSource from '../../models/AcademicSource';
+import SourceContribution from '../../models/SourceContribution';
+import AcademicDocument from '../../models/AcademicDocument';
+import AcademicSection from '../../models/AcademicSection';
+import AcademicChunk from '../../models/AcademicChunk';
 
 // ─── Service imports ──────────────────────────────────────────────────────────
 import { translateReaderTargets } from './canonicalReaderTranslation.service';

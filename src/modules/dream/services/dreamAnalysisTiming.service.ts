@@ -1,5 +1,5 @@
 import { Types } from 'mongoose';
-import Dream from '../../models/Dream';
+import Dream from '../models/Dream';
 
 function median(values: number[]): number | null {
   if (!values.length) return null;

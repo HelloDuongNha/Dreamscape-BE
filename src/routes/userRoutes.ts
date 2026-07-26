@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { getUserProfile, toggleFollow, getStreakCalendar, trackHeartbeat } from '../controllers/userController';
+import { getUserProfile, getStreakCalendar, trackHeartbeat } from '../modules/identity/controllers/userController';
+import { toggleFollow } from '../modules/social/controllers/followController';
 import authMiddleware from '../middleware/authMiddleware';
 
 const router = Router();
@@ -96,4 +97,3 @@ router.get('/:id', authMiddleware, getUserProfile);
 router.post('/:id/follow', authMiddleware, toggleFollow);
 
 export default router;
-

@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
-import AcademicSection from '../../../models/AcademicSection';
-import AcademicChunk from '../../../models/AcademicChunk';
-import { IAcademicDocument } from '../../../models/AcademicDocument';
+import AcademicSection from '../../models/AcademicSection';
+import AcademicChunk from '../../models/AcademicChunk';
+import { IAcademicDocument } from '../../models/AcademicDocument';
 import { ApiResponseSection } from './canonicalReaderIdentity.types';
 import { mapChunkToBlock } from './canonicalReaderIdentity.service';
 

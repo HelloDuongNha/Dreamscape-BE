@@ -1,10 +1,10 @@
 import mongoose from 'mongoose';
-import AcademicRuleExtractionRunV3 from '../../models/rulesV3/AcademicRuleExtractionRun';
-import KnowledgeRuleV3 from '../../models/rulesV3/KnowledgeRule';
-import KnowledgeRuleEvidenceV3 from '../../models/rulesV3/KnowledgeRuleEvidence';
-import RuleV3ReplacementBackupItem from '../../models/rulesV3/RuleV3ReplacementBackupItem';
-import RuleV3ReplacementJournal from '../../models/rulesV3/RuleV3ReplacementJournal';
-import { logger } from '../infrastructure/logger';
+import AcademicRuleExtractionRunV3 from '../models/AcademicRuleExtractionRun';
+import KnowledgeRuleV3 from '../models/KnowledgeRule';
+import KnowledgeRuleEvidenceV3 from '../models/KnowledgeRuleEvidence';
+import RuleV3ReplacementBackupItem from '../models/RuleV3ReplacementBackupItem';
+import RuleV3ReplacementJournal from '../models/RuleV3ReplacementJournal';
+import { logger } from '../../../infrastructure/logger';
 import { scoreRuleV3 } from './ruleV3Scoring.service';
 import { applyStoredValidationAdjustment } from './ruleV3ValidationScore.service';
 

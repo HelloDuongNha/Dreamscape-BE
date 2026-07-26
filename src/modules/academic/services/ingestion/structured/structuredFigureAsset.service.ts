@@ -2,8 +2,8 @@ import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { fetchUrlWithSafeRedirects } from '../../../infrastructure/security/ssrfGuard';
-import { uploadDocumentImage } from '../../../storage/cloudinaryStorage.service';
+import { fetchUrlWithSafeRedirects } from '../../../../../infrastructure/security/ssrfGuard';
+import { uploadDocumentImage } from '../../../../../infrastructure/storage/cloudinaryStorage.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

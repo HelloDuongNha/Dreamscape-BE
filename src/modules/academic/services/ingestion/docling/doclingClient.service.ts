@@ -6,7 +6,7 @@ import { DoclingExtractionResult, DoclingArtifactDescriptor } from '../../types/
 import {
   DOCLING_EXTRACTION_TIMEOUT_MS,
   DOCLING_OCR_TIMEOUT_MS,
-} from '../../../../config/pdfLimits';
+} from '../../../../../config/pdfLimits';
 
 // ─── Internal run result returned by extractPdf ───────────────────────────────
 export interface DoclingRunResult {

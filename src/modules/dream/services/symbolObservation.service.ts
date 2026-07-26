@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Types } from 'mongoose';
-import DreamSymbolObservation from '../../models/DreamSymbolObservation';
+import DreamSymbolObservation from '../models/DreamSymbolObservation';
 
 const CANONICAL_ALIASES: Array<{ key: string; aliases: RegExp }> = [
   { key: 'grandmother', aliases: /^(?:bà|bà ngoại|bà nội|grandmother|grandma)$/iu },

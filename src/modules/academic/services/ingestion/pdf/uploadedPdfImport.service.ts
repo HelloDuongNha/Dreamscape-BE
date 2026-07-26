@@ -1,11 +1,11 @@
 import mongoose from 'mongoose';
-import SourceContribution from '../../../../models/SourceContribution';
-import AcademicSource from '../../../../models/AcademicSource';
+import SourceContribution from '../../../models/SourceContribution';
+import AcademicSource from '../../../models/AcademicSource';
 import { extractPdfTextLayer } from './pdfTextExtraction.service';
 import { enrichPdfMetadata } from './metadata/pdfMetadataEnrichment.service';
 import { importSmartReaderForSource } from '../structured/smartReaderImport.service';
 import { runDoclingPdfImport } from '../docling/doclingImport.service';
-import { hasStoredOriginalPdf } from '../../../storage/originalPdfStorage.service';
+import { hasStoredOriginalPdf } from '../../storage/originalPdfStorage.service';
 import {
   estimatePdfImportSeconds,
   finishPdfImportProgress,
@@ -14,7 +14,7 @@ import {
   updatePdfImportProgress,
   cancelPdfImportProgress,
 } from './pdfImportProgress.service';
-import { deleteAsset } from '../../../storage/cloudinaryStorage.service';
+import { deleteAsset } from '../../../../../infrastructure/storage/cloudinaryStorage.service';
 import {
   beginReaderReplacement,
   captureReaderRuleBackup,
@@ -23,7 +23,7 @@ import {
   rollbackReaderReplacement,
   waitForReaderReplacementTerminal,
 } from '../../reader/persistence/readerReplacement.service';
-import { removeRuleV3SourceData } from '../../../rules/ruleV3Lifecycle.service';
+import { removeRuleV3SourceData } from '../../../../rules_v3/services/ruleV3Lifecycle.service';
 
 const activePdfImportControllers = new Map<string, AbortController>();
 const activePdfImportTasks = new Map<string, Promise<void>>();

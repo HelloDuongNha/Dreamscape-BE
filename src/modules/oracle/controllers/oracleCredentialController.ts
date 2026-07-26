@@ -1,14 +1,14 @@
 import { Request, Response } from 'express';
 import { Types } from 'mongoose';
 import OracleModelCredential from '../models/OracleModelCredential';
-import { OracleContractError } from '../services/oracle/oracle.types';
+import { OracleContractError } from '../services/oracle.types';
 import {
   activateOracleCredential,
   publicCredential,
   saveOracleCredential,
   verifyOracleCredential,
-} from '../services/oracle/oracleCredential.service';
-import { parseOracleObjectId } from '../services/oracle/oracle.validation';
+} from '../services/oracleCredential.service';
+import { parseOracleObjectId } from '../services/oracle.validation';
 
 function userId(req: Request): Types.ObjectId {
   if (!req.user?._id) throw new OracleContractError('oracle_not_found', 'Not found.');

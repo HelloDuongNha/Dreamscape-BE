@@ -3,11 +3,11 @@ import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import User from '../models/User';
 import Otp from '../models/Otp';
-import UserDreamProfile from '../models/UserDreamProfile';
-import { sendOtpEmail } from '../services/infrastructure/emailService';
-import { parseUserAgent } from '../services/user/userAgent.service';
-import { buildCulturalProfile, buildScoringProfile } from '../services/user/profileBuilder.service';
-import { logger } from '../services/infrastructure/logger';
+import UserDreamProfile from '../../dream/models/UserDreamProfile';
+import { sendOtpEmail } from '../../../infrastructure/emailService';
+import { parseUserAgent } from '../services/userAgent.service';
+import { buildCulturalProfile, buildScoringProfile } from '../services/profileBuilder.service';
+import { logger } from '../../../infrastructure/logger';
 
 // ─── Helper: Sign JWT ─────────────────────────────────────────────────────────
 

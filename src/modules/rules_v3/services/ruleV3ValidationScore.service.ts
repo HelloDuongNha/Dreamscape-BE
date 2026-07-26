@@ -1,9 +1,9 @@
 import { Types } from 'mongoose';
-import KnowledgeRuleV3 from '../../models/rulesV3/KnowledgeRule';
-import KnowledgeRuleEvidenceV3 from '../../models/rulesV3/KnowledgeRuleEvidence';
+import KnowledgeRuleV3 from '../models/KnowledgeRule';
+import KnowledgeRuleEvidenceV3 from '../models/KnowledgeRuleEvidence';
 import RuleValidationFeedback, {
   type IRuleValidationImpact,
-} from '../../models/RuleValidationFeedback';
+} from '../models/RuleValidationFeedback';
 
 export type RuleValidationAnswer = 'yes' | 'no' | 'unsure';
 

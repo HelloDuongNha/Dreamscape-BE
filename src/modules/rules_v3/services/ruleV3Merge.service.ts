@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
-import KnowledgeRuleV3 from '../../models/rulesV3/KnowledgeRule';
-import KnowledgeRuleEvidenceV3 from '../../models/rulesV3/KnowledgeRuleEvidence';
+import KnowledgeRuleV3 from '../models/KnowledgeRule';
+import KnowledgeRuleEvidenceV3 from '../models/KnowledgeRuleEvidence';
 import { assessRuleV3MergeCompatibility } from './ruleV3Relationship.service';
 import { classifyRuleV3VerificationKind } from './ruleV3DreamApplication.service';
 

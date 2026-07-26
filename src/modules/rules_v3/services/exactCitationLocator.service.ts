@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import AcademicChunk from '../../models/AcademicChunk';
+import AcademicChunk from '../../academic/models/AcademicChunk';
 
 export interface ExactCitationLocationSuccess {
   success: true;

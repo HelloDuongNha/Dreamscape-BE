@@ -11,7 +11,7 @@
     "verify:route-contract": "tsx scripts/verifyRouteContract.ts",
     "test:all-contracts": "tsx scripts/runAllContractTests.ts",
     "verify:refactor-baseline": "npm run typecheck && npm run verify:route-contract && npm run test:all-contracts",
-    "test:oracle-persistence": "tsx src/services/oracle/oraclePersistence.test.ts",
+    "test:oracle-persistence": "tsx src/modules/oracle/services/oraclePersistence.test.ts",
     "eval:rag": "tsx scripts/evaluateRagQuality.ts --offline",
     "eval:rag:online": "tsx scripts/evaluateRagQuality.ts --online",
     "repair:uploaded-pdf-sources": "ts-node scripts/repair_approved_pdf_sources.ts"

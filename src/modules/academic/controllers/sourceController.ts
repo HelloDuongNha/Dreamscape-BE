@@ -5,28 +5,28 @@ import AcademicSource from '../models/AcademicSource';
 import AcademicDocument from '../models/AcademicDocument';
 import AcademicSection from '../models/AcademicSection';
 import AcademicChunk from '../models/AcademicChunk';
-import { buildReaderResponse, ApiResponseSection } from '../services/academic/reader/readerResponseBuilder.service';
-import { calculateSourceContentHash, CanonicalBlockIdentityError } from '../services/academic/reader/canonicalReaderIdentity.service';
-import { CanonicalReaderIdentity } from '../services/academic/reader/canonicalReaderIdentity.types';
-import { validateRequestShape, checkHttpBodyLimit } from '../services/academic/reader/readerTranslationValidator.service';
-import { translateReaderTargets } from '../services/academic/reader/canonicalReaderTranslation.service';
-import { resolveTranslationProvider, TranslationProviderUnavailableError } from '../services/academic/reader/readerTranslationProvider.registry';
-import { resolveApprovedSourceContext, loadTranslationChunks } from '../services/academic/reader/readerTranslationContext.service';
-import type { TranslationServiceDeps } from '../services/academic/reader/readerTranslation.types';
-import { getTranslationDeadlineMs } from '../config/translationConfig';
-import { resolveReaderLanguage } from '../services/academic/reader/readerLanguage.service';
+import { buildReaderResponse, ApiResponseSection } from '../services/reader/readerResponseBuilder.service';
+import { calculateSourceContentHash, CanonicalBlockIdentityError } from '../services/reader/canonicalReaderIdentity.service';
+import { CanonicalReaderIdentity } from '../services/reader/canonicalReaderIdentity.types';
+import { validateRequestShape, checkHttpBodyLimit } from '../services/reader/readerTranslationValidator.service';
+import { translateReaderTargets } from '../services/reader/canonicalReaderTranslation.service';
+import { resolveTranslationProvider, TranslationProviderUnavailableError } from '../services/reader/readerTranslationProvider.registry';
+import { resolveApprovedSourceContext, loadTranslationChunks } from '../services/reader/readerTranslationContext.service';
+import type { TranslationServiceDeps } from '../services/reader/readerTranslation.types';
+import { getTranslationDeadlineMs } from '../../../config/translationConfig';
+import { resolveReaderLanguage } from '../services/reader/readerLanguage.service';
 import { normalizeDoi, fetchUnpaywallMetadata } from '../services/source/openAccess.service';
 import { incrementSubmitted } from '../services/contribution/contributionStats.service';
 import { resolveSourceImport } from '../services/source/sourceImportResolver.service';
-import { buildResolverReport } from '../services/academic/ingestion/structured/resolverDiagnostics.service';
-import { fetchUrlWithSafeRedirects, SsrfError } from '../services/infrastructure/security/ssrfGuard';
+import { buildResolverReport } from '../services/ingestion/structured/resolverDiagnostics.service';
+import { fetchUrlWithSafeRedirects, SsrfError } from '../../../infrastructure/security/ssrfGuard';
 import fs from 'fs';
 import { processPdfUpload, computeFileHash, toOriginalFileRecord, deleteProcessedPdfUpload } from '../services/storage/pdfUpload.service';
 import { deleteOriginalPdfAsset } from '../services/storage/originalPdfStorage.service';
-import { deleteAsset } from '../services/storage/cloudinaryStorage.service';
+import { deleteAsset } from '../../../infrastructure/storage/cloudinaryStorage.service';
 import { cacheOriginalPdfForSource } from '../services/storage/originalPdfAsset.service';
 import { PDFParse } from 'pdf-parse';
-import cloudinary from '../config/cloudinary';
+import cloudinary from '../../../config/cloudinary';
 import { pipeline } from 'stream/promises';
 import { createOriginalPdfReadStream, hasStoredOriginalPdf } from '../services/storage/originalPdfStorage.service';
 
@@ -1613,8 +1613,8 @@ export const deleteOriginalPdf = async (req: Request, res: Response): Promise<vo
   }
 };
 
-import { cancelUploadedPdfImport, runUploadedPdfImport } from '../services/academic/ingestion/pdf/uploadedPdfImport.service';
-import { getPdfImportProgress } from '../services/academic/ingestion/pdf/pdfImportProgress.service';
+import { cancelUploadedPdfImport, runUploadedPdfImport } from '../services/ingestion/pdf/uploadedPdfImport.service';
+import { getPdfImportProgress } from '../services/ingestion/pdf/pdfImportProgress.service';
 
 export const getUploadedPdfImportProgressForApprovedSource = async (req: Request, res: Response): Promise<void> => {
   try {

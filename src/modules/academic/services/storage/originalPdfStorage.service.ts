@@ -1,12 +1,12 @@
 import { Readable } from 'stream';
-import cloudinary from '../../config/cloudinary';
-import { deleteAsset, downloadCloudinaryRawAsset } from './cloudinaryStorage.service';
+import cloudinary from '../../../../config/cloudinary';
+import { deleteAsset, downloadCloudinaryRawAsset } from '../../../../infrastructure/storage/cloudinaryStorage.service';
 import {
   createFirebasePdfReadStream,
   deleteFirebasePdf,
   downloadFirebasePdf,
   uploadFirebasePdf,
-} from './firebasePdfStorage.service';
+} from '../../../../infrastructure/storage/firebasePdfStorage.service';
 
 export interface OriginalPdfReference {
   storageProvider?: 'firebase' | 'cloudinary' | 'local' | 'gridfs';

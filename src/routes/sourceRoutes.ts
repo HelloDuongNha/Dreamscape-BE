@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import authMiddleware, { isModerator } from '../middleware/authMiddleware';
-import { contributeSource, previewSource, getApprovedSources, getApprovedSourceById, getApprovedSourceRead, getApprovedSourceOriginalDocument, getApprovedSourcePdfInline, contributePdfSource, cacheOriginalPdf, uploadOriginalPdf, deleteOriginalPdf, processUploadedPdfForApprovedSource, getUploadedPdfImportProgressForApprovedSource, cancelUploadedPdfImportForApprovedSource, getApprovedSourceTranslation } from '../controllers/sourceController';
-import { uploadPdfMiddleware } from '../controllers/moderationController';
+import { contributeSource, previewSource, getApprovedSources, getApprovedSourceById, getApprovedSourceRead, getApprovedSourceOriginalDocument, getApprovedSourcePdfInline, contributePdfSource, cacheOriginalPdf, uploadOriginalPdf, deleteOriginalPdf, processUploadedPdfForApprovedSource, getUploadedPdfImportProgressForApprovedSource, cancelUploadedPdfImportForApprovedSource, getApprovedSourceTranslation } from '../modules/academic/controllers/sourceController';
+import { uploadPdfMiddleware } from '../modules/academic/controllers/moderationController';
 
 
 const router = Router();

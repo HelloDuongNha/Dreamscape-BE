@@ -1,15 +1,15 @@
 import { Request, Response } from 'express';
 import Dream, { IDream, IDreamAddition } from '../models/Dream';
-import Comment           from '../models/Comment';
+import Comment           from '../../social/models/Comment';
 import { Types }         from 'mongoose';
 import crypto            from 'crypto';
-import Notification      from '../models/Notification';
-import User              from '../models/User';
-import { calculateRank } from '../services/user/rank.service';
-import { runDreamAnalysis } from '../services/dream/analyze.service';
-import { OllamaServiceError } from '../services/infrastructure/llm.service';
-import { logger } from '../services/infrastructure/logger';
-import { retrieveSymbolsHybrid } from '../services/dream/symbolRetrieval.service';
+import Notification      from '../../social/models/Notification';
+import User              from '../../identity/models/User';
+import { calculateRank } from '../../identity/services/rank.service';
+import { runDreamAnalysis } from '../services/analyze.service';
+import { OllamaServiceError } from '../../../infrastructure/llm.service';
+import { logger } from '../../../infrastructure/logger';
+import { retrieveSymbolsHybrid } from '../services/symbolRetrieval.service';
 import {
   buildFeedbackChangeSet,
   buildFeedbackConclusion,
@@ -17,16 +17,16 @@ import {
   enrichScientificNotesForResponse,
   reconcileAlternateQuestionAfterFeedback,
   resolveQuestionRuleIds,
-} from '../services/dream/dreamAnalysisGrounding.service';
-import { materializeDreamSymbolObservations } from '../services/dream/symbolObservation.service';
-import { setRuleValidationFeedback } from '../services/rules/ruleV3ValidationScore.service';
-import { estimateDreamAnalysisSeconds } from '../services/dream/dreamAnalysisTiming.service';
+} from '../services/dreamAnalysisGrounding.service';
+import { materializeDreamSymbolObservations } from '../services/symbolObservation.service';
+import { setRuleValidationFeedback } from '../../rules_v3/services/ruleV3ValidationScore.service';
+import { estimateDreamAnalysisSeconds } from '../services/dreamAnalysisTiming.service';
 import {
   composeDreamNarrative,
   normalizedDreamContent,
   dreamContentHash,
   mapDreamResponse,
-} from '../services/dream/dreamNarrative.service';
+} from '../services/dreamNarrative.service';
 
 export { composeDreamNarrative };
 
@@ -560,7 +560,7 @@ export const toggleLike = async (req: Request, res: Response): Promise<void> => 
             ownerComments += d.comments_count ?? 0;
           }
 
-          const { checkAndAwardAchievements } = await import('../services/user/rank.service');
+          const { checkAndAwardAchievements } = await import('../../identity/services/rank.service');
           checkAndAwardAchievements(
             postOwner,
             ownerLikes,
@@ -662,7 +662,7 @@ export const addComment = async (req: Request, res: Response): Promise<void> => 
             ownerComments += d.comments_count ?? 0;
           }
 
-          const { checkAndAwardAchievements } = await import('../services/user/rank.service');
+          const { checkAndAwardAchievements } = await import('../../identity/services/rank.service');
           checkAndAwardAchievements(
             postOwner,
             ownerLikes,

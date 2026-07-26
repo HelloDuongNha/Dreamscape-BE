@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { locateCitationInText } from './exactCitationLocator.service';
-import KnowledgeRuleEvidenceV3 from '../../models/rulesV3/KnowledgeRuleEvidence';
-import KnowledgeRuleV3 from '../../models/rulesV3/KnowledgeRule';
+import KnowledgeRuleEvidenceV3 from '../models/KnowledgeRuleEvidence';
+import KnowledgeRuleV3 from '../models/KnowledgeRule';
 
 async function runTests() {
   console.log('--- STARTING PURE IN-MEMORY ASSERTIONS ---');

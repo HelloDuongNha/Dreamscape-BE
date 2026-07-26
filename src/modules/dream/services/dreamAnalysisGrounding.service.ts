@@ -2,7 +2,7 @@ import {
   canExplainPsychology,
   canGenerateContextQuestion,
   classifyRuleV3VerificationKind,
-} from '../rules/ruleV3DreamApplication.service';
+} from '../../rules_v3/services/ruleV3DreamApplication.service';
 
 const STOP_WORDS = new Set([
   'a', 'an', 'the', 'and', 'or', 'is', 'are', 'was', 'were', 'to', 'of', 'in', 'on', 'for', 'with',

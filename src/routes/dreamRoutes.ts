@@ -16,7 +16,7 @@ import {
   debugRag,
   saveHypothesisFeedback,
   cancelDreamAnalysis,
-} from '../controllers/dreamController';
+} from '../modules/dream/controllers/dreamController';
 import authMiddleware from '../middleware/authMiddleware';
 
 const router = Router();

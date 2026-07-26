@@ -1,17 +1,17 @@
 import mongoose from 'mongoose';
-import AcademicChunk from '../../../../models/AcademicChunk';
-import AcademicDocument from '../../../../models/AcademicDocument';
-import AcademicSection from '../../../../models/AcademicSection';
-import AcademicSource from '../../../../models/AcademicSource';
-import ReaderReplacementBackup from '../../../../models/ReaderReplacementBackup';
+import AcademicChunk from '../../../models/AcademicChunk';
+import AcademicDocument from '../../../models/AcademicDocument';
+import AcademicSection from '../../../models/AcademicSection';
+import AcademicSource from '../../../models/AcademicSource';
+import ReaderReplacementBackup from '../../../models/ReaderReplacementBackup';
 import ReaderReplacementRun, {
   ReaderReplacementTargetType,
-} from '../../../../models/ReaderReplacementRun';
-import SourceContribution from '../../../../models/SourceContribution';
-import { deleteAsset } from '../../../storage/cloudinaryStorage.service';
-import KnowledgeRuleV3 from '../../../../models/rulesV3/KnowledgeRule';
-import KnowledgeRuleEvidenceV3 from '../../../../models/rulesV3/KnowledgeRuleEvidence';
-import { resolveRuleV3SourceAliases } from '../../../rules/ruleV3Lifecycle.service';
+} from '../../../models/ReaderReplacementRun';
+import SourceContribution from '../../../models/SourceContribution';
+import { deleteAsset } from '../../../../../infrastructure/storage/cloudinaryStorage.service';
+import KnowledgeRuleV3 from '../../../../rules_v3/models/KnowledgeRule';
+import KnowledgeRuleEvidenceV3 from '../../../../rules_v3/models/KnowledgeRuleEvidence';
+import { resolveRuleV3SourceAliases } from '../../../../rules_v3/services/ruleV3Lifecycle.service';
 
 const SNAPSHOT_FIELDS = [
   'title', 'metadata', 'authors', 'pmcid', 'normalizedPmcid', 'pdfUrl', 'htmlUrl',
