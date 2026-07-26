@@ -1,102 +1,81 @@
-# Dream module final audit
+# Dream module audit
 
 Audit date: 2026-07-27
 
-## Verdict
+## Current verdict
 
-The module is behaviorally verified but is not structurally complete yet.
-`dreamController.ts`, `dreamAnalysisGrounding.service.ts`, and
-`analyze.service.ts` remain above the agreed size limits. They must be split
-before moving to the next module.
+The HTTP and lifecycle boundaries are complete and behaviorally verified.
+Two reasoning services remain above the agreed 300-line service limit, so the
+Dream module is not yet marked structurally complete.
 
 ## Inventory
 
 | Area | Files | Largest file | Purpose |
 | --- | ---: | ---: | --- |
-| Controllers | 9 | `dreamController.ts` — 1,036 lines | HTTP mapping and remaining legacy analysis/comment/feedback handlers |
+| Controllers | 12 | `dreamFeedback.controller.ts` — 200 lines | One HTTP capability per controller |
 | DTO | 7 | `dreamUpdate.dto.ts` — 69 lines | Request parsing and validation |
-| Models | 4 | `Dream.ts` — 236 lines | Dream, symbol and user-profile persistence |
-| Content services | 7 | `dreamUpdate.service.ts` — 125 lines | CRUD, narrative versions and AI policy |
-| Analysis execution | 6 | `dreamAnalysisQueue.service.ts` — 171 lines | Queue, timing, runtime abort state and reanalysis preparation |
-| Analysis retrieval | 9 | `similarDreamRetrieval.service.ts` — 197 lines | Symbol and similar-dream retrieval |
-| Analysis reasoning | 5 | `dreamAnalysisGrounding.service.ts` — 977 lines | Grounding, feedback reconciliation and evidence response shaping |
-| Analysis orchestration | 1 | `analyze.service.ts` — 931 lines | End-to-end RAG/LLM orchestration |
-| Engagement | 1 | `dreamLike.service.ts` — 104 lines | Like mutation, notification and rank update |
-| Module tests | 4 | `dreamAnalysisGrounding.test.ts` — 80 lines | Focused Dream contracts |
+| Models | 4 | `Dream.ts` — 236 lines | Dream, symbol and profile persistence |
+| Content services | 7 | `dreamUpdate.service.ts` — 125 lines | CRUD, versions and AI policy |
+| Analysis execution | 10 | `dreamAnalysisQueue.service.ts` — 171 lines | Queue, retry, rollback, recovery and runtime |
+| Analysis retrieval | 8 | `similarDreamRetrieval.service.ts` — 197 lines | Symbol and similar-dream retrieval |
+| Analysis grounding | 1 | `dreamAnalysisGrounding.service.ts` — 977 lines | Grounding, feedback and scientific-note shaping |
+| Analysis orchestration | 1 | `analyze.service.ts` — 931 lines | End-to-end RAG and LLM orchestration |
+| Engagement | 1 | `dreamLike.service.ts` — 104 lines | Like, notification and rank side effects |
 
-Total TypeScript lines under `src/modules/dream`: 6,082.
+Total non-test TypeScript lines under `src/modules/dream`: 5,932.
 
-## Remaining oversized boundaries
+## Completed boundaries
 
-### `controllers/dreamController.ts` — 1,036 lines
+- The old 1,036-line `dreamController.ts` no longer exists.
+- All 16 Dream routes keep the same method, path and middleware order.
+- Retry, cancellation, rollback, queue recovery and background execution no
+  longer depend on a controller.
+- Server startup imports recovery and execution services directly.
+- Create, comments, read, update, delete, privacy, likes, AI policy, direct
+  analysis, retry/cancel, diagnostics and feedback have separate controllers.
+- Pin restoration preserves both progress from the active run and original task
+  order after reload.
 
-Still owns:
+## Remaining extraction
 
-- create Dream;
-- comments;
-- direct analysis;
-- debug RAG;
-- rollback persistence;
-- background execution;
-- queue recovery;
-- retry and cancel;
-- hypothesis feedback.
+### Grounding
 
-Required split:
+Split `dreamAnalysisGrounding.service.ts` by existing capability, not by
+individual test case:
 
-```text
-dreamCreate.controller.ts
-dreamComment.controller.ts
-dreamAnalysis.controller.ts
-dreamFeedback.controller.ts
-dreamDebug.controller.ts
-analysis/execution/dreamAnalysisLifecycle.service.ts
-```
+1. text/title grounding;
+2. feedback revision and case conclusion;
+3. scientific-note construction and enrichment;
+4. contextual motif and personal-pattern projection.
 
-### `analysis/grounding/dreamAnalysisGrounding.service.ts` — 977 lines
+The current exported API must remain available through a small barrel service
+until callers are migrated.
 
-Still combines:
+### Orchestration
 
-- scientific-note response shaping;
-- hypothesis reconciliation;
-- feedback revision;
-- question/rule resolution;
-- evidence-needed handling.
+Split `analyze.service.ts` around stable data boundaries:
 
-Required split by exported capability, while preserving the current response
-contract.
+1. request/context preparation;
+2. retrieval plan execution;
+3. provider generation;
+4. deterministic result assembly and validation.
 
-### `analysis/orchestration/analyze.service.ts` — 931 lines
-
-Still combines orchestration with context assembly, progress reporting and
-result normalization. It needs extraction only after the controller lifecycle
-move, because background execution currently depends directly on its progress
-callback contract.
-
-## Naming and placement
-
-- `.controller.ts` is used for HTTP/controller boundaries.
-- `.service.ts` is used for executable business or infrastructure behavior.
-- `.contract.ts` is intentionally used for shared analysis input/output types.
-- `dreamAnalysisDispatch.controller.ts` is correctly named after the audit.
-- `dreamAnalysisRuntime.service.ts` correctly owns active abort controllers.
-- `dreamSymbolObservationSync.service.ts` correctly owns non-fatal secondary
-  symbol-index synchronization.
+`runDreamAnalysis` remains the public facade so progress callbacks, error
+mapping and background execution do not change.
 
 ## Verification status
 
-- TypeScript: passed.
+- Backend TypeScript: passed.
+- Frontend production build: passed.
 - Route contract: 98 feature routes + 1 health route preserved.
 - Contract suites: 26/26 passed.
-- No current audit result supports deleting a Dream file as unused.
+- EN–VI parity and side-effect suites: 14/14 passed.
 
-## Gate before the next module
+## Final gate
 
-Do not mark Dream complete until:
+Do not move to the next module until:
 
-1. `dreamController.ts` is below 200 lines or removed.
-2. each service is below 300 lines, except an explicitly documented data-only
-   prompt/contract file;
-3. startup recovery imports an execution service, not a controller;
-4. all 16 Dream route contracts remain unchanged;
-5. retry, cancel, queue recovery, feedback and comment UI checks pass.
+1. both remaining reasoning services are below 300 lines;
+2. `dreamFeedback.controller.ts` is at or below 200 lines;
+3. retry/cancel/queue UI checks pass after a real page reload;
+4. all verification results above remain green.

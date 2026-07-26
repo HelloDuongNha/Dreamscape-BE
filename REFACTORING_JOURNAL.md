@@ -768,3 +768,77 @@ analysis completion / feedback
 
 - Backend TypeScript: passed.
 - No route or response contract changed.
+
+## R13 — Dream analysis rollback and runner extraction
+
+### Before
+
+- `dreamController.ts` contained rollback persistence and the full background
+  runner.
+- `server.ts` and dispatch code depended on the controller for execution.
+
+### After
+
+```text
+analysis/execution/
+├── dreamAnalysisRollback.service.ts
+└── dreamAnalysisRunner.service.ts
+```
+
+- Rollback is now a 96-line execution service.
+- Background analysis is now a 166-line execution service.
+- `server.ts` imports the runner and recovery from execution services.
+- Dispatch imports the runner from the same execution boundary.
+- `dreamController.ts` dropped from 993 to 742 lines.
+- Commit-fence, progress updates, notifications, rollback and abort cleanup
+  were moved without changing their logic.
+
+### Verification
+
+- Backend TypeScript: passed.
+- Route contract: 98 feature routes + 1 health route preserved.
+
+## R14 — Dream HTTP boundary completion and task restoration
+
+### Before
+
+- `dreamController.ts` still mixed create, comments, direct analysis, RAG
+  diagnostics, retry, cancellation and hypothesis feedback.
+- A cancelled run could retain 99% progress in the frontend task object when
+  retried.
+- Persisted pinned tasks did not retain their creation order. Parallel restore
+  requests could therefore reorder the pins after a reload.
+
+### After
+
+```text
+controllers/
+├── dreamCreate.controller.ts
+├── dreamComment.controller.ts
+├── dreamAnalyze.controller.ts
+├── dreamAnalysis.controller.ts
+├── dreamDebug.controller.ts
+└── dreamFeedback.controller.ts
+
+analysis/execution/
+└── dreamAnalysisRetry.service.ts
+```
+
+- Removed `dreamController.ts`; all 12 Dream controllers now have one HTTP
+  responsibility.
+- Retry preparation and queue submission live in an 80-line execution service.
+- Retry progress now accepts the persisted run progress instead of retaining a
+  stale percentage from the cancelled run.
+- Pinned task persistence now stores `createdAt`; parallel network restoration
+  is completed before tasks are recreated in their original order.
+- Notification ordering uses one deterministic MongoDB sort with `_id` as the
+  tie breaker.
+
+### Verification
+
+- Backend TypeScript: passed.
+- Frontend production build: passed.
+- Route contract: 98 feature routes + 1 health route preserved.
+- Dream routes: 16/16 unchanged.
+- Backend contract suites: 26/26 passed.
+- EN–VI parity and side-effect suites: 14/14 passed.

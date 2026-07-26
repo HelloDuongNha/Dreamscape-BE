@@ -10,7 +10,7 @@ export const getNotifications = async (req: Request, res: Response): Promise<voi
     const myId = req.user!._id;
 
     const notifications = await Notification.find({ recipientId: myId })
-      .sort({ timestamp: -1 })
+      .sort({ timestamp: -1, _id: -1 })
       .populate('senderId', 'username display_name avatar')
       .populate('postId', 'content') // optional but helpful
       .lean();

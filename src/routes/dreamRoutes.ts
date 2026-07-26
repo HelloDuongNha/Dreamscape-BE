@@ -1,14 +1,16 @@
 import { Router } from 'express';
+import { analyzeDream } from '../modules/dream/controllers/dreamAnalyze.controller';
+import { debugRag } from '../modules/dream/controllers/dreamDebug.controller';
+import { saveHypothesisFeedback } from '../modules/dream/controllers/dreamFeedback.controller';
+import { createDream } from '../modules/dream/controllers/dreamCreate.controller';
 import {
-  createDream,
   addComment,
   getComments,
-  analyzeDream,
+} from '../modules/dream/controllers/dreamComment.controller';
+import {
   analyzeDreamById,
-  debugRag,
-  saveHypothesisFeedback,
   cancelDreamAnalysis,
-} from '../modules/dream/controllers/dreamController';
+} from '../modules/dream/controllers/dreamAnalysis.controller';
 import { deleteDream } from '../modules/dream/controllers/dreamDelete.controller';
 import { updatePrivacy } from '../modules/dream/controllers/dreamPrivacy.controller';
 import { toggleLike } from '../modules/dream/controllers/dreamLike.controller';

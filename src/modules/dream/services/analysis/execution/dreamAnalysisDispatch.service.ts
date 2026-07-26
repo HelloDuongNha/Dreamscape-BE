@@ -1,6 +1,6 @@
 import type { PreparedDreamReanalysis } from './dreamReanalysisPreparation.service';
 import { enqueueDreamAnalysis } from './dreamAnalysisQueue.service';
-import { runBackgroundAnalysis } from '../../../controllers/dreamController';
+import { runBackgroundAnalysis } from './dreamAnalysisRunner.service';
 
 // Queue one prepared reanalysis through the shared per-user scheduler.
 export function dispatchPreparedDreamAnalysis(prepared: PreparedDreamReanalysis): void {
