@@ -1,3 +1,5 @@
+import { POST_DREAM_CONTINUATION_RULES } from './dreamContinuation.prompt';
+
 export interface DreamAnalysisPromptInput {
   dreamNarrative: string;
   wakingContext: string;
@@ -175,9 +177,12 @@ Reasoning and evidence rules:
 14. Cultural notes are ${input.culturalAnalysisAllowed
     ? 'allowed only for supplied, opted-in parameters and a named framework'
     : 'forbidden; return an empty array'}.
-15. creative_continuation is explicitly fictional and must preserve the final
-    scene and point of view. inspirationIndexes may reference only numbered
-    similar dreams and must be empty when none genuinely helps.
+15. creative_continuation must follow this contract:
+${POST_DREAM_CONTINUATION_RULES}
+    Similar dreams may influence narrative rhythm only. Do not import their
+    people, objects, locations, or events into this continuation.
+    inspirationIndexes may reference only numbered similar dreams and must be
+    empty when none genuinely helps.
 16. Respect the lowest confidence cap among applied rules. If evidence is
     insufficient, lower confidence and return fewer claims rather than adding
     generic filler.

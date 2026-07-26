@@ -10,6 +10,7 @@ import {
 import {
   analyzeDreamById,
   cancelDreamAnalysis,
+  regenerateDreamContinuation,
 } from '../modules/dream/controllers/dreamAnalysis.controller';
 import { deleteDream } from '../modules/dream/controllers/dreamDelete.controller';
 import { updatePrivacy } from '../modules/dream/controllers/dreamPrivacy.controller';
@@ -527,6 +528,7 @@ router.get('/:id', authMiddleware, getDream);
  */
 router.post('/analyze', authMiddleware, analyzeDream);
 router.post('/:id/analyze', authMiddleware, analyzeDreamById);
+router.post('/:id/continuation/regenerate', authMiddleware, regenerateDreamContinuation);
 router.post('/:id/analysis/cancel', authMiddleware, cancelDreamAnalysis);
 router.post('/:id/hypothesis-feedback', authMiddleware, saveHypothesisFeedback);
 

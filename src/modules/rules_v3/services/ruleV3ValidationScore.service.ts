@@ -233,6 +233,52 @@ export async function getCurrentRuleValidationAnswers(
   return new Map(rows.map((row) => [row.verificationKey, row.answer]));
 }
 
+export interface RuleValidationStats {
+  supports: number;
+  weakens: number;
+  unsure: number;
+  directResponses: number;
+  sharedQuoteResponses: number;
+  netAdjustment: number;
+}
+
+// Summarizes stored case feedback without treating it as academic evidence.
+export async function getRuleValidationStats(
+  ruleIds: string[],
+): Promise<Map<string, RuleValidationStats>> {
+  const ids = [...new Set(ruleIds.filter(Boolean))];
+  if (!ids.length) return new Map();
+  const rows = await RuleValidationFeedback.find({ 'impacts.ruleId': { $in: ids } })
+    .select('effect impacts')
+    .lean();
+  const stats = new Map<string, RuleValidationStats>();
+  for (const ruleId of ids) {
+    stats.set(ruleId, {
+      supports: 0,
+      weakens: 0,
+      unsure: 0,
+      directResponses: 0,
+      sharedQuoteResponses: 0,
+      netAdjustment: 0,
+    });
+  }
+  for (const row of rows) {
+    for (const impact of row.impacts || []) {
+      const current = stats.get(impact.ruleId);
+      if (!current) continue;
+      if (row.effect === 'supports') current.supports += 1;
+      else if (row.effect === 'weakens') current.weakens += 1;
+      else current.unsure += 1;
+      if (impact.relation === 'direct') current.directResponses += 1;
+      else current.sharedQuoteResponses += 1;
+      if (row.effect !== 'unresolved') {
+        current.netAdjustment += row.effect === 'supports' ? impact.weight : -impact.weight;
+      }
+    }
+  }
+  return stats;
+}
+
 export function applyStoredValidationAdjustment<T extends { evidenceScore: number }>(
   score: T,
   rule: { userValidationAdjustment?: number },

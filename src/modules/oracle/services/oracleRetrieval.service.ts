@@ -177,7 +177,6 @@ export async function buildOracleGrounding(
       detail: match.sameAuthor
         ? compact([
           `Own dream · ${match.similarity}% similar`,
-          match.matchedOn.join(', '),
           Number(match.duplicateCount) > 1
             ? `Represents ${match.duplicateCount} saved records with the same narrative`
             : '',
@@ -187,7 +186,6 @@ export async function buildOracleGrounding(
         ].filter(Boolean).join(' · '), 500)
         : compact([
           `Public dream · ${match.similarity}% similar`,
-          match.matchedOn.join(', '),
         ].filter(Boolean).join(' · '), 500),
     });
   }
@@ -204,7 +202,7 @@ export async function buildOracleGrounding(
       citationIndex: strongestOwnCitation.index,
       title: strongestOwnCitation.title,
       similarity: strongestOwnMatch.similarity,
-      exact: strongestOwnMatch.matchedOn.includes('Cùng nội dung'),
+      exact: strongestOwnMatch.similarity >= 100,
       duplicateCount: Math.max(1, Number(strongestOwnMatch.duplicateCount) || 1),
     }
     : undefined;

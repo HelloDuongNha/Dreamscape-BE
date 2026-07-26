@@ -17,7 +17,10 @@ import AcademicChunk from '../../academic/models/AcademicChunk';
 import AcademicSource from '../../academic/models/AcademicSource';
 import SourceContribution from '../../academic/models/SourceContribution';
 import { RULE_V3_SCORING_VERSION, scoreRuleV3 } from '../services/ruleV3Scoring.service';
-import { applyStoredValidationAdjustment } from '../services/ruleV3ValidationScore.service';
+import {
+  applyStoredValidationAdjustment,
+  getRuleValidationStats,
+} from '../services/ruleV3ValidationScore.service';
 import {
   assessRuleV3MergeCompatibility,
   buildRuleV3MergeClusters,
@@ -945,11 +948,15 @@ export const getRuleV3Candidates = async (req: Request, res: Response): Promise<
     questionKind: classifyRuleV3VerificationKind(rule),
     evidenceChunkIds: (evidenceByRule.get(String(rule._id)) || []).map(item => String(item.chunkId)),
   })));
+  const validationStats = await getRuleValidationStats(rules.map(rule => String(rule._id)));
   const data = rules.map(rule => {
     const ruleOwnerIds = [String(rule._id), ...(rule.compositeComponents || []).map((component: any) => String(component.sourceRuleId))];
     const ruleEvidence = ruleOwnerIds.flatMap(ownerId => evidenceByRule.get(ownerId) || []);
     const source = sourceSummaries.get(String(ruleEvidence[0]?.sourceId || sourceId || ''));
-    return mapRuleV3Candidate(rule, source, ruleEvidence, mergeClusters.get(String(rule._id)));
+    return {
+      ...mapRuleV3Candidate(rule, source, ruleEvidence, mergeClusters.get(String(rule._id))),
+      validationStats: validationStats.get(String(rule._id)),
+    };
   });
   res.status(200).json({ success: true, data });
 };
@@ -973,7 +980,11 @@ export const getRuleV3CandidateDetail = async (req: Request, res: Response): Pro
   const chunkMap = new Map(chunks.map(chunk => [String(chunk._id), chunk]));
   const sourceSummaries = await loadRuleV3SourceSummaries(evidence.map(item => String(item.sourceId)));
   const source = sourceSummaries.get(String(evidence[0]?.sourceId || ''));
-  const candidate = mapRuleV3Candidate(rule, source, evidence);
+  const validationStats = await getRuleValidationStats([String(rule._id)]);
+  const candidate = {
+    ...mapRuleV3Candidate(rule, source, evidence),
+    validationStats: validationStats.get(String(rule._id)),
+  };
   const evidenceGapMatches = await getOracleEvidenceGapMatchesForRule({
     _id: rule._id,
     statement: rule.statement,

@@ -181,6 +181,31 @@ export const saveHypothesisFeedback = async (req: Request, res: Response): Promi
       sourceId: String(matchedHypothesis.validationSourceId || '').trim() || undefined,
       exactQuote: String(matchedHypothesis.validationExactQuote || '').trim() || undefined,
     });
+    const scoreByRule = new Map(ruleScoreUpdates.map((item: any) => [String(item.ruleId), item]));
+    const updatedHypotheses = (refreshedAnalysis.real_life_hypotheses || []).map((item: any) => {
+      const candidateRuleIds = [...new Set([
+        item.ruleId,
+        ...(Array.isArray(item.ruleIds) ? item.ruleIds : []),
+      ].map(value => String(value || '').trim()).filter(Boolean))];
+      const score = candidateRuleIds
+        .map(candidateRuleId => scoreByRule.get(candidateRuleId))
+        .find(Boolean);
+      if (!score) return item;
+      return {
+        ...item,
+        ruleScore: score.score,
+        ruleScoreDelta: score.scoreDelta,
+        ruleVoteDelta: score.voteDelta,
+      };
+    });
+    refreshedAnalysis.real_life_hypotheses = updatedHypotheses;
+    dream.ai_result = refreshedAnalysis;
+    dream.markModified('ai_result');
+    if ((dream as any).aiAnalysis) {
+      (dream as any).aiAnalysis = refreshedAnalysis;
+      dream.markModified('aiAnalysis');
+    }
+    await dream.save();
     await syncDreamSymbolObservations(dream);
 
     res.status(200).json({

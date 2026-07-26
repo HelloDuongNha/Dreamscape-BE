@@ -98,7 +98,7 @@ export interface ILLMOutput {
     authorDisplayName: string;
     sameAuthor: boolean;
     similarity: number;
-    matchedOn: string[];
+    matchedOn?: string[];
   }[];
   creative_continuation?: {
     title: string;
@@ -110,7 +110,7 @@ export interface ILLMOutput {
       dreamId: string;
       title: string;
       similarity: number;
-      matchedOn: string[];
+      matchedOn?: string[];
     }>;
   };
   feedback_revision?: {
@@ -527,17 +527,16 @@ export async function generateEmbedding(text: string): Promise<number[]> {
   }
 }
 
-/**
- * Generate structured analysis from the compacted context prompt.
- */
-export async function generateAnalysis(prompt: string, abortSignal?: AbortSignal): Promise<ILLMOutput> {
+export async function generateStructuredJson<T>(
+  prompt: string,
+  abortSignal?: AbortSignal,
+  options: { temperature?: number; seed?: number } = {},
+): Promise<T> {
   const baseUrl = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
   const model = process.env.OLLAMA_MODEL || 'qwen2.5:14b';
-  // Generation is a background job and must not be cancelled merely because a
-  // local CPU model is slow. Operators may opt into a real deadline explicitly.
   const timeoutMs = parseInt(process.env.OLLAMA_ANALYSIS_TIMEOUT || '0', 10);
-  const temperature = Number(process.env.OLLAMA_DREAM_TEMPERATURE || '0');
-  const seed = parseInt(process.env.OLLAMA_DREAM_SEED || '42', 10);
+  const temperature = options.temperature ?? Number(process.env.OLLAMA_DREAM_TEMPERATURE || '0');
+  const seed = options.seed ?? parseInt(process.env.OLLAMA_DREAM_SEED || '42', 10);
 
   try {
     const response = await fetchWithTimeout(
@@ -569,21 +568,12 @@ export async function generateAnalysis(prompt: string, abortSignal?: AbortSignal
       throw new OllamaServiceError('Invalid response shape from Ollama generate endpoint', 502);
     }
 
-    let parsedResult: any;
     try {
-      parsedResult = JSON.parse(data.response);
+      return JSON.parse(data.response) as T;
     } catch (parseErr: any) {
       logger.error('Failed to parse LLM response string as JSON', parseErr);
       throw new OllamaServiceError('Ollama response is not valid JSON', 502);
     }
-
-    parsedResult = normalizeLLMOutputShape(parsedResult);
-
-    if (!validateLLMOutput(parsedResult)) {
-      throw new OllamaServiceError('Ollama response JSON does not conform to required output schema', 502);
-    }
-
-    return parsedResult;
   } catch (err: any) {
     if (abortSignal?.aborted || err?.name === 'AbortError') throw err;
     if (err instanceof OllamaServiceError) {
@@ -592,4 +582,17 @@ export async function generateAnalysis(prompt: string, abortSignal?: AbortSignal
     logger.error('Failed to generate analysis using Ollama', err);
     throw new OllamaServiceError(`Ollama connection error: ${err.message}`, 503);
   }
+}
+
+/**
+ * Generate structured analysis from the compacted context prompt.
+ */
+export async function generateAnalysis(prompt: string, abortSignal?: AbortSignal): Promise<ILLMOutput> {
+  const parsedResult = normalizeLLMOutputShape(
+    await generateStructuredJson<Record<string, unknown>>(prompt, abortSignal),
+  );
+  if (!validateLLMOutput(parsedResult)) {
+    throw new OllamaServiceError('Ollama response JSON does not conform to required output schema', 502);
+  }
+  return parsedResult;
 }

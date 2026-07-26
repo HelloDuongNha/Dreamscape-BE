@@ -34,7 +34,13 @@ function systemPrompt(mode: string): string {
       'A matching previously stored dream is useful longitudinal context, not an error and not a reason to warn or scold the user. Compare it constructively when relevant.',
     );
   } else if (mode === 'creative_continuation') {
-    shared.push('Continue the dream as creative fiction and clearly label it as imaginative, not scientific analysis.');
+    shared.push(
+      'Continue the dream as creative fiction and clearly label it as imaginative, not scientific analysis.',
+      'Treat the complete conversation as the story canon. Continue the latest dream scene or the latest creative continuation; do not restart from the original dream when the conversation has already moved beyond it.',
+      'Open with a brief, natural bridge in which the first-person narrator falls asleep again, tries to return to the dream, and finds themself back inside it. Vary the wording naturally instead of repeating a stock sentence.',
+      'Preserve established people, places, objects, unresolved events, point of view, and dream logic. Develop an existing unresolved detail. Add at most one new element and only when an existing event naturally introduces it; never jump to unrelated imagery merely to be surprising.',
+      'Write an engaging, causally coherent scene rather than analysis or advice. End with the narrator waking again and describe one new, specific feeling caused by this ending; do not repeat the previous waking reaction.',
+    );
   }
   return shared.join(' ');
 }

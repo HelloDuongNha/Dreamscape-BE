@@ -126,6 +126,21 @@ export function enrichScientificNotesForResponse(
     reasonForAsking: removeInternalAnalysisVocabulary(item.reasonForAsking),
     ifYesMeaning: removeInternalAnalysisVocabulary(item.ifYesMeaning),
     ifNoMeaning: removeInternalAnalysisVocabulary(item.ifNoMeaning),
+    ...(() => {
+      const linkedRuleIds = [...new Set<string>(
+        (item?.ruleIds || [item?.ruleId])
+          .map((id: unknown) => String(id || '').trim())
+          .filter(Boolean),
+      )];
+      const linkedRule = linkedRuleIds.map(id => ruleMap.get(id)).find(Boolean) as any;
+      const evidenceLink = evidenceLinks.find((link: any) =>
+        linkedRuleIds.includes(String(link?.ruleId || '').trim()));
+      return {
+        ...(evidenceLink?.sourceId ? { validationSourceId: String(evidenceLink.sourceId) } : {}),
+        ...(evidenceLink?.chunkPreview ? { validationExactQuote: String(evidenceLink.chunkPreview).replace(/\.\.\.$/u, '').trim() } : {}),
+        ...(Number.isFinite(Number(linkedRule?.evidenceScore)) ? { ruleScore: Number(linkedRule.evidenceScore) } : {}),
+      };
+    })(),
   }));
   const responseHypotheses = baseResponseHypotheses;
   const fallbackEmotion = deriveDreamEmotionTone(narrative);
@@ -174,8 +189,6 @@ export function enrichScientificNotesForResponse(
       const excerpt = normalizeGroundingText(item?.excerpt);
       return noteKey && excerpt && containsGroundedPhrase(excerpt, [noteKey]);
     });
-    const sameSequenceCount = similarOccurrences.filter((item: any) =>
-      (item?.matchedOn || []).includes('Cùng nội dung')).length;
     const confirmedContextCount = similarOccurrences.filter((item: any) =>
       (item?.confirmedContext || []).some((entry: any) => entry?.answer === 'yes')).length;
     return {
@@ -188,7 +201,7 @@ export function enrichScientificNotesForResponse(
       motifStats: {
         previousPersonalDreamCount: Math.max(0, Number(personalPattern?.occurrences) || 0),
         similarDreamCount: similarOccurrences.length,
-        sameSequenceCount,
+        sameSequenceCount: 0,
         confirmedContextCount,
         observedPersonalDreamCount: Math.max(0, Number(observedPattern?.personalDreamCount) || 0),
         observedPublicDreamCount: Math.max(0, Number(observedPattern?.publicDreamCount) || 0),
@@ -197,12 +210,12 @@ export function enrichScientificNotesForResponse(
     };
   }));
   const responseSymbolicNotes = applyFeedbackToSymbolicNotes(baseResponseSymbolicNotes, responseHypotheses);
-  const responseScientificNotes = deduplicateScientificNotes([...(Array.isArray(analysis.scientific_context_notes)
+  const baseScientificNotes = deduplicateScientificNotes([...(Array.isArray(analysis.scientific_context_notes)
     ? analysis.scientific_context_notes
     : []).flatMap((note: any) => {
     if (note?.ruleCode && note?.ruleStatement && Array.isArray(note?.evidenceQuotes) && note.evidenceQuotes.length > 0) {
       const linkedRule: any = ruleMap.get(String(note?.ruleId || '').trim());
-      return linkedRule && canExplainPsychology(linkedRule) ? [{
+      return linkedRule && (canExplainPsychology(linkedRule) || canGenerateContextQuestion(linkedRule)) ? [{
         ...note,
         note: removeInternalAnalysisVocabulary(note.note),
         boundary: removeInternalAnalysisVocabulary(note.boundary),
@@ -210,7 +223,7 @@ export function enrichScientificNotesForResponse(
     }
     const ruleId = String(note?.ruleId || '').trim();
     const rule: any = ruleMap.get(ruleId);
-    if (!rule || !canExplainPsychology(rule)) return [];
+    if (!rule || (!canExplainPsychology(rule) && !canGenerateContextQuestion(rule))) return [];
     const sources = note?.sources || [];
     const links = evidenceLinks.filter((link: any) => String(link?.ruleId || '') === ruleId);
     const evidenceQuotes = links.flatMap((link: any) => {
@@ -239,6 +252,42 @@ export function enrichScientificNotesForResponse(
       boundary: removeInternalAnalysisVocabulary(finalNote.boundary),
     }];
   })]);
+  const responseScientificNotes = deduplicateScientificNotes([
+    ...baseScientificNotes,
+    ...responseHypotheses.flatMap((hypothesis: any) => {
+      const linkedRuleIds = [...new Set<string>(
+        (hypothesis?.ruleIds || [hypothesis?.ruleId])
+          .map((id: unknown) => String(id || '').trim())
+          .filter(Boolean),
+      )];
+      const rule = linkedRuleIds.map(ruleId => ruleMap.get(ruleId)).find(Boolean) as any;
+      if (!rule || !canGenerateContextQuestion(rule)) return [];
+      if (baseScientificNotes.some((note: any) => linkedRuleIds.includes(String(note?.ruleId || '')))) return [];
+      const ruleId = String(rule?.ruleId || rule?._id || linkedRuleIds[0] || '').trim();
+      const links = evidenceLinks.filter((link: any) => String(link?.ruleId || '') === ruleId);
+      const sources = sourceByRule.get(ruleId) || [];
+      const evidenceQuotes = links.flatMap((link: any) => {
+        const chunkId = String(link?.chunkIds?.[0] || '').trim();
+        const quote = String(link?.chunkPreview || '').replace(/\.\.\.$/u, '').trim();
+        return chunkId && quote
+          ? [{ sourceId: String(link?.sourceId || ''), chunkId, quote }]
+          : [];
+      });
+      if (sources.length === 0 || evidenceQuotes.length === 0) return [];
+      return [{
+        ruleId,
+        ruleCode: String(rule?.ruleCode || '').trim(),
+        ruleStatement: String(rule?.ruleStatement || '').trim(),
+        insightTitle: buildScientificInsightTitle(rule),
+        note: removeInternalAnalysisVocabulary(String(rule?.ruleStatement || '').trim()),
+        boundary: 'Nguồn này hỗ trợ mối liên hệ chung. Việc mối liên hệ đó có phù hợp với giấc mơ của bạn được kiểm tra bằng câu hỏi xác nhận ở phía trên.',
+        sources,
+        evidenceQuotes,
+        academicEvidenceScore: Number(rule?.evidenceScore) || 0,
+        applicationTier: rule?.applicationTier || 'supported',
+      }];
+    }),
+  ]);
   const caseConclusion = buildDreamCaseConclusion(
     narrative,
     responseHypotheses,

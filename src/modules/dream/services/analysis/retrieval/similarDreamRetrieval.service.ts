@@ -12,7 +12,6 @@ export interface SimilarDreamMatch {
   authorDisplayName: string;
   sameAuthor: boolean;
   similarity: number;
-  matchedOn: string[];
   duplicateCount?: number;
   priorAnalysisSummary?: string;
   confirmedContext?: Array<{
@@ -140,11 +139,7 @@ export async function retrieveSimilarDreams(
       semantic,
       lexicalOverlap: item.lexical,
     });
-    const matchedOn: string[] = [];
-    if (item.exact) matchedOn.push('Cùng nội dung');
-    if (semantic >= 0.65) matchedOn.push('Cùng mạch ngữ nghĩa');
-    if (item.lexical >= 0.35) matchedOn.push('Nhiều chi tiết tương đồng');
-    return { ...item, semantic, score, matchedOn };
+    return { ...item, semantic, score };
   }).filter(item => item.exact || item.score >= 0.4)
     .sort((a, b) => b.score - a.score
       || Number(isSameAuthor(b.row, userId)) - Number(isSameAuthor(a.row, userId)))
@@ -185,7 +180,6 @@ export async function retrieveSimilarDreams(
         authorDisplayName: author?.display_name || author?.username || 'Người dùng DreamScape',
         sameAuthor: isSameAuthor(item.row, userId),
         similarity: Math.round(Math.min(1, item.score) * 100),
-        matchedOn: item.matchedOn,
         duplicateCount: item.duplicateCount,
         priorAnalysisSummary: compact(item.row.ai_result?.summary || '', 320) || undefined,
         ...(confirmedContext.length ? { confirmedContext } : {}),

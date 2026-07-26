@@ -71,7 +71,6 @@ export function buildDreamPromptContext(input: {
 PriorDream ${index + 1}:
 - Similarity: ${item.similarity}%
 - Same author: ${item.sameAuthor ? 'yes' : 'no'}
-- Matching signals: ${item.matchedOn.join(', ')}
 - Dream excerpt: ${item.excerpt}
 - Earlier analysis summary: ${item.priorAnalysisSummary || 'Unavailable'}
 - First-person confirmations from that dream: ${item.confirmedContext?.length ? item.confirmedContext.map(entry => `${entry.answer.toUpperCase()}: ${entry.question} — ${entry.interpretation}`).join(' | ') : 'None'}

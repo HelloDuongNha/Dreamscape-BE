@@ -243,7 +243,6 @@ function attachSimilarDreams(analysis: ILLMOutput, similarDreams: SimilarDreamMa
     authorDisplayName: item.authorDisplayName,
     sameAuthor: item.sameAuthor,
     similarity: item.similarity,
-    matchedOn: item.matchedOn,
   }));
   const creative = analysis.creative_continuation;
   if (!creative || typeof creative.title !== 'string' || typeof creative.continuation !== 'string'
@@ -262,7 +261,7 @@ function attachSimilarDreams(analysis: ILLMOutput, similarDreams: SimilarDreamMa
     : [];
   creative.inspirations = indexes.map(index => {
     const dream = similarDreams[index - 1];
-    return { dreamId: dream.dreamId, title: dream.title, similarity: dream.similarity, matchedOn: dream.matchedOn };
+    return { dreamId: dream.dreamId, title: dream.title, similarity: dream.similarity };
   });
   creative.inspirationIndexes = indexes;
   creative.disclaimer = 'Đây là một đoạn sáng tác tham khảo dựa trên mô-típ kể chuyện, không phải dự báo về giấc mơ tiếp theo và không phải kết luận tâm lý.';
