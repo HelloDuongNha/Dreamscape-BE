@@ -14,25 +14,25 @@ function median(values: number[]): number | null {
  * Dream analysis ETA.
  *
  * First run:
- *   55s setup/retrieval + 0.18s per normalized input character.
+ *   45s setup/retrieval + 0.06s per normalized input character. The prompt is
+ *   compacted before generation, so raw narrative length is only a baseline.
  *
  * Later runs:
- *   35% first-run heuristic + 65% median observed seconds/character from the
- *   user's eight latest completed analyses. The estimate is a schedule, never
- *   a timeout, and is bounded to 45 seconds–30 minutes.
+ *   30% baseline + 70% median processing seconds/character from the user's
+ *   latest completed runs. Queue waiting time is excluded from the samples.
  */
 export async function estimateDreamAnalysisSeconds(
   userId: string | Types.ObjectId,
   narrative: string,
 ): Promise<number> {
   const characterCount = Math.max(1, String(narrative || '').normalize('NFKC').trim().length);
-  const heuristicSeconds = 55 + characterCount * 0.18;
+  const heuristicSeconds = 45 + characterCount * 0.06;
   const history = await Dream.find({
     userId: new Types.ObjectId(String(userId)),
     ai_status: 'completed',
     'analysisMetadata.durationMs': { $gt: 0 },
   })
-    .select('content additions analysisMetadata.durationMs')
+    .select('content additions analysisMetadata.durationMs analysisMetadata.processingDurationMs')
     .sort({ 'analysisMetadata.generatedAt': -1, created_at: -1 })
     .limit(8)
     .lean();
@@ -42,7 +42,10 @@ export async function estimateDreamAnalysisSeconds(
       String(item.content || ''),
       ...(Array.isArray(item.additions) ? item.additions.map((entry: any) => String(entry.content || '')) : []),
     ].join('\n').normalize('NFKC').trim().length;
-    const durationSeconds = Number(item.analysisMetadata?.durationMs) / 1000;
+    // Legacy durationMs included queue waiting time; only use the new
+    // processing-only field for future estimates.
+    const durationMilliseconds = Number(item.analysisMetadata?.processingDurationMs);
+    const durationSeconds = durationMilliseconds / 1000;
     return previousLength > 0 && Number.isFinite(durationSeconds) && durationSeconds > 0
       ? [durationSeconds / previousLength]
       : [];
@@ -50,6 +53,6 @@ export async function estimateDreamAnalysisSeconds(
   const observedSecondsPerCharacter = median(observedRates);
   const estimated = observedSecondsPerCharacter === null
     ? heuristicSeconds
-    : heuristicSeconds * 0.35 + (35 + observedSecondsPerCharacter * characterCount) * 0.65;
+    : heuristicSeconds * 0.30 + (45 + observedSecondsPerCharacter * characterCount) * 0.70;
   return Math.max(45, Math.min(30 * 60, Math.round(estimated)));
 }

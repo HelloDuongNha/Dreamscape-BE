@@ -23,6 +23,16 @@ export const runBackgroundAnalysis = async (
   const analysisStartedAt = (queuedDream.analysisRun as any)?.startedAt
     ? new Date((queuedDream.analysisRun as any).startedAt)
     : new Date();
+  const processingStartedAt = new Date();
+  await Dream.updateOne(
+    { _id: dreamId, ai_status: 'pending', 'analysisRun.runId': runId },
+    {
+      $set: {
+        'analysisMetadata.processingStartedAt': processingStartedAt,
+        'analysisMetadata.lastProgressAt': processingStartedAt,
+      },
+    },
+  );
   const abortController = new AbortController();
   registerDreamAnalysisController(String(dreamId), runId, abortController);
 
@@ -41,6 +51,7 @@ export const runBackgroundAnalysis = async (
           'analysisMetadata.statusMessage': stage.message,
           'analysisMetadata.currentMiniStep': stage.miniStep || '',
           'analysisMetadata.startedAt': analysisStartedAt,
+          'analysisMetadata.processingStartedAt': processingStartedAt,
           'analysisMetadata.lastProgressAt': new Date(),
         };
         if (stage.resultSummary) {
@@ -68,7 +79,7 @@ export const runBackgroundAnalysis = async (
 
     const progressHistory = (pendingDream.analysisMetadata as any)?.stageResults || {};
     const estimatedDurationSeconds = Number((pendingDream.analysisMetadata as any)?.estimatedDurationSeconds) || null;
-    const durationMs = Date.now() - analysisStartedAt.getTime();
+    const durationMs = Date.now() - processingStartedAt.getTime();
     const completedMetadata = {
       strategyUsed,
       llmModel: process.env.OLLAMA_MODEL || 'qwen2.5:14b',
@@ -85,6 +96,7 @@ export const runBackgroundAnalysis = async (
       startedAt: analysisStartedAt,
       generatedAt: new Date(),
       durationMs,
+      processingDurationMs: durationMs,
       estimatedDurationSeconds,
       timingDeltaSeconds: estimatedDurationSeconds === null
         ? null

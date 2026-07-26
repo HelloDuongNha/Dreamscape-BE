@@ -842,3 +842,87 @@ analysis/execution/
 - Dream routes: 16/16 unchanged.
 - Backend contract suites: 26/26 passed.
 - EN–VI parity and side-effect suites: 14/14 passed.
+
+## R15 — Dream reasoning boundary completion
+
+### Before
+
+- `dreamAnalysisGrounding.service.ts` was a 977-line facade containing
+  contextual motifs, text grounding, feedback revision, case assessment and
+  scientific-note handling.
+- `analyze.service.ts` was a 931-line function containing profile loading,
+  retrieval, rule/evidence preparation, prompt compaction, model generation,
+  output validation and audit construction.
+
+### After
+
+```text
+analysis/grounding/
+├── contextualMotif.service.ts
+├── dreamCaseAssessment.service.ts
+├── dreamFeedbackRevision.service.ts
+├── dreamGroundingText.service.ts
+├── dreamAnalysisGrounding.service.ts
+└── scientificNote.service.ts
+
+analysis/orchestration/
+├── analyze.service.ts
+├── dreamAnalysisNormalization.service.ts
+├── dreamAnalysisOrchestration.types.ts
+├── dreamAnalysisOutput.service.ts
+├── dreamAnalysisProfile.service.ts
+├── dreamAnalysisPromptContext.service.ts
+├── dreamContextRetrieval.service.ts
+└── dreamRuleEvidence.service.ts
+```
+
+- The public grounding facade remains available for compatibility.
+- `runDreamAnalysis` remains the public orchestration facade at 262 lines.
+- Retrieval, evidence mapping, profile preparation and deterministic output
+  validation are now independently readable and each service stays below the
+  300-line target.
+- Prompts remain in the existing prompt module; no prompt wording or model
+  call behavior was changed.
+
+### Verification
+
+- Backend TypeScript: passed.
+- Route contract: 98 feature routes + 1 health route preserved.
+- Backend contract suites: 26/26 passed.
+- EN–VI parity and side-effect suites: 14/14 passed.
+
+## R16 — Dream ETA calibration and result presentation
+
+### Before
+
+- ETA history used `durationMs`, which included queue waiting time for older
+  runs and could make a copied dream appear to finish far earlier than its
+  estimate.
+- The initial result view displayed the preliminary case-boundary card before
+  the actual summary and analysis, making internal uncertainty the first thing
+  users saw.
+
+### After
+
+- The runner records `processingStartedAt` and `processingDurationMs`.
+- Future ETA samples use only processing-only durations; legacy queue-inclusive
+  durations are ignored.
+- The baseline is `45 + 0.06 × normalized narrative characters` seconds, then
+  blended with the median processing rate from valid recent runs:
+  `0.30 × baseline + 0.70 × (45 + medianSecondsPerCharacter × characters)`.
+- Queue time remains visible through the queued stage but is not treated as
+  model-processing time.
+- Preliminary case-boundary details are no longer displayed before the main
+  summary. They remain available after the case has been clarified by feedback.
+- If a valid contextual rule exists but the model omitted a usable question,
+  the output pipeline creates one grounded question from the reported waking
+  reaction and exact dream evidence.
+
+## R17 — Remove redundant case-conclusion presentation
+
+- The post-analysis screen no longer renders the `case_conclusion` card.
+- Feedback data is still persisted and used to revise the analysis, but the UI
+  now goes directly from the Oracle header to the summary, core analysis,
+  questions and evidence.
+- Removed the unused case-conclusion, concern-card, evidence-chain and
+  narrative-summary styles from `OracleAnalysisResult.vue`.
