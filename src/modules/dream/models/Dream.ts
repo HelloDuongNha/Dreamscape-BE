@@ -1,7 +1,15 @@
 import mongoose, { Document, Schema, Types } from 'mongoose';
 
 export interface IEditHistoryEntry {
+  version?: number;
   content: string;
+  additions?: IDreamAddition[];
+  ai_status?: 'pending' | 'sensing' | 'completed' | 'failed' | 'cancelled' | 'disabled';
+  ai_result?: Record<string, unknown> | null;
+  mood_tag?: string;
+  retrievedContext?: Record<string, any> | null;
+  analysisMetadata?: Record<string, any> | null;
+  realLifeHypothesesFeedback?: IDream['realLifeHypothesesFeedback'];
   editedAt: Date;
 }
 
@@ -22,11 +30,12 @@ export interface IDream extends Document {
   mood_tag: string;
   is_public: boolean;
   privacy: 'public' | 'private';
+  ai_analysis_enabled: boolean;
   likes: string[];
   likes_count: number;
   comments_count: number;
   created_at: Date;
-  ai_status: 'pending' | 'sensing' | 'completed' | 'failed' | 'cancelled';
+  ai_status: 'pending' | 'sensing' | 'completed' | 'failed' | 'cancelled' | 'disabled';
   ai_result: Record<string, unknown> | null;
   edit_history: IEditHistoryEntry[];
   additions: IDreamAddition[];
@@ -35,7 +44,7 @@ export interface IDream extends Document {
   analysisMetadata?: Record<string, any> | null;
   analysisRun?: {
     runId: string;
-    trigger: 'initial' | 'retry' | 'dream_addition' | 'addition_retry';
+    trigger: 'initial' | 'retry' | 'dream_addition' | 'addition_retry' | 'content_edit' | 'addition_edit' | 'ai_enable';
     startedAt: Date;
     previousStatus?: IDream['ai_status'] | null;
     targetAdditionSequences?: number[];
@@ -58,14 +67,6 @@ export interface IDream extends Document {
   }> | null;
 }
 
-const EditHistorySchema = new Schema<IEditHistoryEntry>(
-  {
-    content: { type: String, required: true },
-    editedAt: { type: Date, default: Date.now },
-  },
-  { _id: false }
-);
-
 const DreamAdditionSchema = new Schema<IDreamAddition>(
   {
     sequence: { type: Number, required: true, min: 1 },
@@ -78,6 +79,26 @@ const DreamAdditionSchema = new Schema<IDreamAddition>(
     },
     analysisRunId: { type: String, required: false },
     analyzedAt: { type: Date, required: false },
+  },
+  { _id: false }
+);
+
+const EditHistorySchema = new Schema<IEditHistoryEntry>(
+  {
+    version: { type: Number, required: false, min: 1 },
+    content: { type: String, required: true },
+    additions: { type: [DreamAdditionSchema], required: false, default: undefined },
+    ai_status: {
+      type: String,
+      enum: ['pending', 'sensing', 'completed', 'failed', 'cancelled', 'disabled'],
+      required: false,
+    },
+    ai_result: { type: Schema.Types.Mixed, required: false },
+    mood_tag: { type: String, required: false },
+    retrievedContext: { type: Schema.Types.Mixed, required: false },
+    analysisMetadata: { type: Schema.Types.Mixed, required: false },
+    realLifeHypothesesFeedback: { type: Schema.Types.Mixed, required: false },
+    editedAt: { type: Date, default: Date.now },
   },
   { _id: false }
 );
@@ -121,6 +142,10 @@ const DreamSchema = new Schema<IDream>(
       enum: ['public', 'private'],
       default: 'public',
     },
+    ai_analysis_enabled: {
+      type: Boolean,
+      default: true,
+    },
     likes: {
       type: [String],
       default: [],
@@ -141,7 +166,7 @@ const DreamSchema = new Schema<IDream>(
     },
     ai_status: {
       type: String,
-      enum: ['pending', 'sensing', 'completed', 'failed', 'cancelled'],
+      enum: ['pending', 'sensing', 'completed', 'failed', 'cancelled', 'disabled'],
       default: 'pending',
     },
     ai_result: {

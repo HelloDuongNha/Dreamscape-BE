@@ -3,6 +3,7 @@ import { logger } from './logger';
 export interface ILLMOutput {
   title: string;
   emotional_tone: string;
+  emotional_valence?: -2 | -1 | 0 | 1 | 2;
   emotional_tone_key?: 'urgent_conflicted' | 'anxious' | 'fearful' | 'sad' | 'calm' | 'mixed' | 'neutral';
   summary: string;
   scientific_context_notes: {
@@ -152,6 +153,21 @@ export function normalizeLLMOutputShape(data: any): any {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
 
   const normalized = { ...data };
+  const legacyValence: Record<string, -2 | -1 | 0 | 1 | 2> = {
+    fearful: -2,
+    sad: -2,
+    anxious: -1,
+    urgent_conflicted: -1,
+    neutral: 0,
+    mixed: 0,
+    calm: 1,
+  };
+  const requestedValence = Number(data.emotional_valence);
+  normalized.emotional_valence = Number.isInteger(requestedValence)
+    && requestedValence >= -2
+    && requestedValence <= 2
+    ? requestedValence
+    : (legacyValence[String(data.emotional_tone_key || '')] ?? 0);
   normalized.scientific_context_notes = Array.isArray(data.scientific_context_notes)
     ? data.scientific_context_notes.flatMap((item: any) => {
       if (!item || typeof item !== 'object'
@@ -253,6 +269,12 @@ export function validateLLMOutput(data: any): data is ILLMOutput {
   }
   if (typeof data.emotional_tone !== 'string') {
     logger.warn('LLM validation failed: emotional_tone is missing or not a string');
+    return false;
+  }
+  if (!Number.isInteger(data.emotional_valence)
+    || data.emotional_valence < -2
+    || data.emotional_valence > 2) {
+    logger.warn('LLM validation failed: emotional_valence must be an integer from -2 to 2');
     return false;
   }
   if (typeof data.summary !== 'string') {

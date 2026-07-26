@@ -3,7 +3,7 @@ import { logger } from '../../../../../infrastructure/logger';
 import UserDreamProfile from '../../../models/UserDreamProfile';
 import Dream from '../../../models/Dream';
 import { generateAnalysis, ILLMOutput } from '../../../../../infrastructure/llm.service';
-import { retrieveSymbolsHybrid, IRetrievedSymbol } from '../../symbolRetrieval.service';
+import { retrieveSymbolsHybrid, IRetrievedSymbol } from '../retrieval/symbolRetrieval.service';
 import { retrieveApprovedRuleV3 } from '../../../../rules_v3/services/ruleV3Retrieval.service';
 import {
   canExplainPsychology,
@@ -21,7 +21,6 @@ import {
   findNarrativeSentenceForSymbol,
   buildGroundedDreamTitle,
   attachRuleQuestionContext,
-  ensureSubstantiveCoreAnalysis,
   polishGeneratedDreamProse,
   buildVerifiedScientificNote,
   collectScientificDreamEvidence,
@@ -31,7 +30,6 @@ import {
   sanitizeInterpretiveThreads,
   buildGroundedMotifExplanation,
   sanitizeUnsupportedDreamClaims,
-  buildCaseGroundedSynthesis,
   ensureInterpretiveThreadCoverage,
   deriveDreamEmotionTone,
   removeInternalAnalysisVocabulary,
@@ -810,14 +808,8 @@ PriorDream ${index + 1}:
       aiAnalysis.practical_reflections,
     );
     aiAnalysis.summary = polishGeneratedDreamProse(aiAnalysis.summary);
-    aiAnalysis.core_analysis = polishGeneratedDreamProse(ensureSubstantiveCoreAnalysis(
+    aiAnalysis.core_analysis = polishGeneratedDreamProse(
       sanitizeUnsupportedDreamClaims(aiAnalysis.core_analysis),
-      aiAnalysis.interpretive_threads,
-    ));
-    aiAnalysis.core_analysis = buildCaseGroundedSynthesis(
-      dreamNarrative,
-      aiAnalysis.real_life_hypotheses || [],
-      aiAnalysis.core_analysis,
     );
     if (!aiAnalysis.emotional_tone_key || !aiAnalysis.emotional_tone) {
       const emotion = deriveDreamEmotionTone(dreamNarrative);

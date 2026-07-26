@@ -1,28 +1,28 @@
-import { generateEmbedding } from '../../../infrastructure/llm.service';
-import { logger } from '../../../infrastructure/logger';
-import DreamSymbol from '../models/DreamSymbol';
+import { generateEmbedding } from '../../../../../infrastructure/llm.service';
+import { logger } from '../../../../../infrastructure/logger';
+import DreamSymbol from '../../../models/DreamSymbol';
 import {
   extractDreamSegments as segmentDreamNarrative,
   isExplicitSleepContextClause as matchExplicitSleepContext,
   type DreamSegments,
-} from './analysis/segmentation/dreamSegmentation.service';
-import { rankSymbolCandidates } from './analysis/retrieval/symbolCandidateRanking.service';
+} from '../segmentation/dreamSegmentation.service';
+import { rankSymbolCandidates } from './symbolCandidateRanking.service';
 import {
   isStrictExactMatch as matchStrictSymbol,
   removeVietnameseDiacritics as foldVietnameseDiacritics,
-} from './analysis/retrieval/symbolMatching.service';
-import { prepareSymbolQuery } from './analysis/retrieval/symbolQuery.service';
+} from './symbolMatching.service';
+import { prepareSymbolQuery } from './symbolQuery.service';
 import type {
   RetrievedSymbol,
   SymbolVectorBackend,
-} from './analysis/retrieval/symbolRetrieval.types';
-import { getSymbolVectorScores } from './analysis/retrieval/symbolVectorSearch.service';
+} from './symbolRetrieval.types';
+import { getSymbolVectorScores } from './symbolVectorSearch.service';
 
 /**
- * Stable public facade for Dream and Oracle callers.
+ * Public entry point for Dream symbol retrieval.
  *
- * The implementation is split by capability under analysis/retrieval, while
- * this file preserves the existing import path and response contract.
+ * Segmentation, query preparation, vector lookup, and ranking remain separate
+ * capabilities; this service only coordinates them into one stable result.
  */
 export type IRetrievedSymbol = RetrievedSymbol;
 export type IDreamSegments = DreamSegments;

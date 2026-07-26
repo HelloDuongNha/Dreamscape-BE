@@ -1,11 +1,6 @@
 import { Router } from 'express';
 import {
   createDream,
-  updateDream,
-  appendDreamAddition,
-  deleteDream,
-  updatePrivacy,
-  toggleLike,
   addComment,
   getComments,
   analyzeDream,
@@ -14,6 +9,11 @@ import {
   saveHypothesisFeedback,
   cancelDreamAnalysis,
 } from '../modules/dream/controllers/dreamController';
+import { deleteDream } from '../modules/dream/controllers/dreamDelete.controller';
+import { updatePrivacy } from '../modules/dream/controllers/dreamPrivacy.controller';
+import { toggleLike } from '../modules/dream/controllers/dreamLike.controller';
+import { updateDream } from '../modules/dream/controllers/dreamUpdate.controller';
+import { updateDreamAiPolicy } from '../modules/dream/controllers/dreamAiPolicy.controller';
 import {
   getDream,
   getPublicFeed,
@@ -316,7 +316,7 @@ router.get('/user/:userId', getUserDreams);
  *         description: Unauthorized
  */
 router.put('/:id', authMiddleware, updateDream);
-router.post('/:id/additions', authMiddleware, appendDreamAddition);
+router.patch('/:id/ai-analysis', authMiddleware, updateDreamAiPolicy);
 
 // ─── DELETE /api/dreams/:id ───────────────────────────────────────────────────
 

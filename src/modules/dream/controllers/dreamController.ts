@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import Dream, { IDream, IDreamAddition } from '../models/Dream';
+import Dream, { IDream } from '../models/Dream';
 import Comment           from '../../social/models/Comment';
 import { Types }         from 'mongoose';
 import crypto            from 'crypto';
@@ -9,7 +9,7 @@ import { calculateRank } from '../../identity/services/rank.service';
 import { runDreamAnalysis } from '../services/analysis/orchestration/analyze.service';
 import { OllamaServiceError } from '../../../infrastructure/llm.service';
 import { logger } from '../../../infrastructure/logger';
-import { retrieveSymbolsHybrid } from '../services/symbolRetrieval.service';
+import { retrieveSymbolsHybrid } from '../services/analysis/retrieval/symbolRetrieval.service';
 import {
   buildFeedbackChangeSet,
   buildFeedbackConclusion,
@@ -18,42 +18,23 @@ import {
   reconcileAlternateQuestionAfterFeedback,
   resolveQuestionRuleIds,
 } from '../services/analysis/grounding/dreamAnalysisGrounding.service';
-import { materializeDreamSymbolObservations } from '../services/analysis/retrieval/symbolObservation.service';
 import { setRuleValidationFeedback } from '../../rules_v3/services/ruleV3ValidationScore.service';
 import { estimateDreamAnalysisSeconds } from '../services/analysis/execution/dreamAnalysisTiming.service';
 import {
   composeDreamNarrative,
-  normalizedDreamContent,
-  dreamContentHash,
   mapDreamResponse,
 } from '../services/content/dreamNarrative.service';
 import { parseCreateDreamRequest } from '../dto/dreamCreate.dto';
 import { createPendingDream } from '../services/content/dreamCreate.service';
 import { enqueueDreamAnalysis } from '../services/analysis/execution/dreamAnalysisQueue.service';
+import {
+  abortDreamAnalysisExecution,
+  clearDreamAnalysisController,
+  registerDreamAnalysisController,
+} from '../services/analysis/execution/dreamAnalysisRuntime.service';
+import { syncDreamSymbolObservations } from '../services/analysis/execution/dreamSymbolObservationSync.service';
 
 export { composeDreamNarrative };
-
-const activeDreamAnalysisControllers = new Map<string, AbortController>();
-
-async function syncDreamSymbolObservations(dream: any): Promise<void> {
-  try {
-    await materializeDreamSymbolObservations({
-      dreamId: new Types.ObjectId(String(dream._id)),
-      userId: new Types.ObjectId(String(dream.userId)),
-      isPublic: dream.privacy === 'public' || dream.is_public === true,
-      symbolicNotes: Array.isArray(dream.ai_result?.symbolic_notes)
-        ? dream.ai_result.symbolic_notes
-        : [],
-    });
-  } catch (error) {
-    // The primary analysis remains valid if the secondary observation index
-    // cannot be refreshed. The failure is visible in logs and can be replayed.
-    logger.warn('Could not refresh dream symbol observations.', {
-      dreamId: String(dream?._id || ''),
-      error: String(error),
-    });
-  }
-}
 
 // ─── POST /api/dreams ─────────────────────────────────────────────────────────
 
@@ -75,18 +56,20 @@ export const createDream = async (req: Request, res: Response): Promise<void> =>
       userId: req.user!._id as Types.ObjectId,
     });
 
-    enqueueDreamAnalysis({
-      dreamId: String(dream._id),
-      userId: String(req.user!._id),
-      runId: analysisRunId,
-      execute: () => runBackgroundAnalysis(
-        dream._id,
-        String(req.user!._id),
-        dream.content,
-        {},
-        analysisRunId,
-      ),
-    });
+    if (analysisRunId) {
+      enqueueDreamAnalysis({
+        dreamId: String(dream._id),
+        userId: String(req.user!._id),
+        runId: analysisRunId,
+        execute: () => runBackgroundAnalysis(
+          dream._id,
+          String(req.user!._id),
+          dream.content,
+          {},
+          analysisRunId,
+        ),
+      });
+    }
 
     res.status(201).json({
       success: true,
@@ -95,353 +78,6 @@ export const createDream = async (req: Request, res: Response): Promise<void> =>
     });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Failed to create dream.', error: err });
-  }
-};
-
-// ─── PUT /api/dreams/:id ──────────────────────────────────────────────────────
-
-/**
- * Edit a dream's content. Only the owner may edit.
- * Before saving the new content, the old content is pushed to edit_history
- * so the UI can display an "Edited" badge when edit_history.length > 0.
- */
-export const updateDream = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const myId    = req.user!._id as Types.ObjectId;
-    const dreamId = String(req.params.id);
-
-    if (!Types.ObjectId.isValid(dreamId)) {
-      res.status(400).json({ success: false, message: 'Invalid dreamId.' });
-      return;
-    }
-
-    const { content } = req.body as { content?: string };
-    if (!content || content.trim() === '') {
-      res.status(400).json({ success: false, message: 'content is required.' });
-      return;
-    }
-
-    const dream = await Dream.findOne({ _id: new Types.ObjectId(dreamId), userId: myId });
-
-    if (!dream) {
-      res.status(403).json({ success: false, message: 'Not found or access denied.' });
-      return;
-    }
-
-    // Archive the current content before overwriting
-    dream.edit_history.push({ content: dream.content, editedAt: new Date() });
-    dream.content = normalizedDreamContent(content);
-    dream.contentHash = dreamContentHash(dream.content);
-
-    await dream.save();
-
-    res.status(200).json({ success: true, message: 'Dream updated.', data: mapDreamResponse(dream) });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to update dream.', error: err });
-  }
-};
-
-// ─── POST /api/dreams/:id/additions ─────────────────────────────────────────
-
-/**
- * Append remembered details without rewriting the original report. The full
- * versioned narrative is then re-analysed and old answers are invalidated.
- */
-export const appendDreamAddition = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const dreamId = String(req.params.id);
-    const userId = req.user!._id as Types.ObjectId;
-    if (!Types.ObjectId.isValid(dreamId)) {
-      res.status(400).json({ success: false, message: 'ID giấc mơ không hợp lệ.' });
-      return;
-    }
-    const addition = normalizedDreamContent(String(req.body?.content || ''));
-    if (!addition) {
-      res.status(400).json({ success: false, message: 'Nội dung bổ sung là bắt buộc.' });
-      return;
-    }
-    if (addition.length > 2000) {
-      res.status(413).json({ success: false, message: 'Mỗi phần bổ sung không được vượt quá 2.000 ký tự.' });
-      return;
-    }
-    const dream = await Dream.findOne({ _id: new Types.ObjectId(dreamId), userId });
-    if (!dream) {
-      res.status(403).json({ success: false, message: 'Không tìm thấy giấc mơ hoặc bạn không có quyền bổ sung.' });
-      return;
-    }
-    if (dream.ai_status === 'pending') {
-      res.status(409).json({ success: false, message: 'Hãy chờ lần phân tích hiện tại hoàn tất trước khi bổ sung.' });
-      return;
-    }
-    const additions = Array.isArray(dream.additions) ? dream.additions : [];
-    if (additions.length >= 10) {
-      res.status(409).json({ success: false, message: 'Giấc mơ đã đạt giới hạn 10 phần bổ sung.' });
-      return;
-    }
-    const analysisRunId = crypto.randomUUID();
-    const nextAddition: IDreamAddition = {
-      sequence: additions.length + 1,
-      content: addition,
-      addedAt: new Date(),
-      analysisState: 'pending',
-      analysisRunId,
-    };
-    const targetAdditionSequences = [
-      ...additions
-        .filter(item => item.analysisState === 'unanalyzed' || item.analysisState === 'pending')
-        .map(item => item.sequence),
-      nextAddition.sequence,
-    ];
-    const completeNarrative = composeDreamNarrative(dream.content, [...additions, nextAddition]);
-    if (completeNarrative.length > 12000) {
-      res.status(413).json({ success: false, message: 'Tổng lời kể sau khi bổ sung không được vượt quá 12.000 ký tự.' });
-      return;
-    }
-
-    const previousStatus = dream.ai_status;
-    const previousAnalysisMetadata = dream.analysisMetadata
-      ? { ...(dream.analysisMetadata as Record<string, any>) }
-      : null;
-    for (const existingAddition of dream.additions) {
-      if (!targetAdditionSequences.includes(existingAddition.sequence)) continue;
-      existingAddition.analysisState = 'pending';
-      existingAddition.analysisRunId = analysisRunId;
-    }
-    dream.additions.push(nextAddition);
-    dream.contentHash = dreamContentHash(completeNarrative);
-    dream.ai_status = 'pending';
-    const analysisStartedAt = new Date();
-    const estimatedDurationSeconds = await estimateDreamAnalysisSeconds(userId, completeNarrative);
-    dream.analysisMetadata = {
-      currentStage: 'queued',
-      progress: 0,
-      statusMessage: 'Đã thêm lần phân tích lại vào hàng chờ.',
-      currentMiniStep: 'Tác vụ sẽ tự bắt đầu khi tới lượt.',
-      queuePosition: 1,
-      stageResults: {},
-      enqueuedAt: analysisStartedAt,
-      startedAt: analysisStartedAt,
-      lastProgressAt: analysisStartedAt,
-      trigger: 'dream_addition',
-      runId: analysisRunId,
-      additionCount: dream.additions.length,
-      estimatedDurationSeconds,
-    };
-    dream.analysisRun = {
-      runId: analysisRunId,
-      trigger: 'dream_addition',
-      startedAt: analysisStartedAt,
-      previousStatus,
-      targetAdditionSequences,
-    };
-    dream.analysisRollback = {
-      runId: analysisRunId,
-      previousStatus,
-      hadPreviousResult: previousStatus === 'completed' && Boolean(dream.ai_result),
-      previousAnalysisMetadata,
-    };
-    dream.markModified('analysisMetadata');
-    dream.markModified('analysisRun');
-    dream.markModified('analysisRollback');
-    dream.markModified('additions');
-    await dream.save();
-
-    enqueueDreamAnalysis({
-      dreamId: String(dream._id),
-      userId: String(userId),
-      runId: analysisRunId,
-      execute: () => runBackgroundAnalysis(
-        dream._id,
-        String(userId),
-        completeNarrative,
-        dream.sleepContext || {},
-        analysisRunId,
-      ),
-    });
-
-    res.status(202).json({
-      success: true,
-      message: 'Đã thêm chi tiết và bắt đầu phân tích lại.',
-      data: mapDreamResponse(dream),
-    });
-  } catch (err: any) {
-    res.status(500).json({ success: false, message: 'Không thể bổ sung nội dung giấc mơ.', error: err.message });
-  }
-};
-
-// ─── DELETE /api/dreams/:id ───────────────────────────────────────────────────
-
-/**
- * Permanently delete a dream. Only the owner may delete.
- */
-export const deleteDream = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const myId    = req.user!._id as Types.ObjectId;
-    const dreamId = String(req.params.id);
-
-    if (!Types.ObjectId.isValid(dreamId)) {
-      res.status(400).json({ success: false, message: 'Invalid dreamId.' });
-      return;
-    }
-
-    const result = await Dream.findOneAndDelete({ _id: new Types.ObjectId(dreamId), userId: myId });
-
-    if (!result) {
-      res.status(403).json({ success: false, message: 'Not found or access denied.' });
-      return;
-    }
-
-    // Cascade delete associated comments
-    await Comment.deleteMany({ dreamId: new Types.ObjectId(dreamId) });
-
-    // Cascade delete notifications linked to this dream
-    await Notification.deleteMany({ postId: new Types.ObjectId(dreamId) });
-
-    res.status(200).json({ success: true, message: 'Dream deleted.' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to delete dream.', error: err });
-  }
-};
-
-// ─── PATCH /api/dreams/:id/privacy ───────────────────────────────────────────
-
-/**
- * Update the privacy setting of a dream. Only the owner may change it.
- * Keeps `is_public` in sync with the `privacy` field.
- */
-export const updatePrivacy = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const myId    = req.user!._id as Types.ObjectId;
-    const dreamId = String(req.params.id);
-
-    if (!Types.ObjectId.isValid(dreamId)) {
-      res.status(400).json({ success: false, message: 'Invalid dreamId.' });
-      return;
-    }
-
-    const { privacy } = req.body as { privacy?: 'public' | 'private' };
-    if (!privacy || !['public', 'private'].includes(privacy)) {
-      res.status(400).json({ success: false, message: 'privacy must be "public" or "private".' });
-      return;
-    }
-
-    const dream = await Dream.findOneAndUpdate(
-      { _id: new Types.ObjectId(dreamId), userId: myId },
-      { $set: { privacy, is_public: privacy === 'public' } },
-      { new: true }
-    );
-
-    if (!dream) {
-      res.status(403).json({ success: false, message: 'Not found or access denied.' });
-      return;
-    }
-
-    res.status(200).json({ success: true, message: 'Privacy updated.', data: mapDreamResponse(dream) });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to update privacy.', error: err });
-  }
-};
-
-// ─── POST /api/dreams/:id/like ────────────────────────────────────────────────
-
-/**
- * Toggle like on a dream.
- * - If myId is NOT in likes[] → push it and increment likes_count.
- * - If myId IS  in likes[] → pull it and decrement likes_count.
- * Returns: { liked: boolean, likes_count: number, likes: string[] }
- */
-export const toggleLike = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const myId    = String(req.user!._id);
-    const dreamId = String(req.params.id);
-
-    if (!Types.ObjectId.isValid(dreamId)) {
-      res.status(400).json({ success: false, message: 'Invalid dreamId.' });
-      return;
-    }
-
-    const dream = await Dream.findById(new Types.ObjectId(dreamId));
-    if (!dream) {
-      res.status(404).json({ success: false, message: 'Dream not found.' });
-      return;
-    }
-    const populatedOwner: any = dream.userId;
-    const ownerId = String(populatedOwner?._id || populatedOwner);
-    const requesterId = String(req.user!._id);
-    if ((dream.privacy === 'private' || dream.is_public === false) && ownerId !== requesterId) {
-      res.status(403).json({ success: false, message: 'Bạn không có quyền xem giấc mơ này.' });
-      return;
-    }
-
-    const alreadyLiked = dream.likes.includes(myId);
-
-    if (alreadyLiked) {
-      // Unlike
-      dream.likes       = dream.likes.filter(id => id !== myId);
-      dream.likes_count = Math.max(0, dream.likes_count - 1);
-    } else {
-      // Like
-      dream.likes.push(myId);
-      dream.likes_count += 1;
-    }
-
-    await dream.save();
-
-    // Trigger Notification & socket emission if Like occurred (and not post owner)
-    if (!alreadyLiked && dream.userId.toString() !== myId) {
-      try {
-        const notif = await Notification.create({
-          recipientId: dream.userId,
-          senderId: new Types.ObjectId(myId),
-          type: 'like',
-          postId: dream._id,
-        });
-        await notif.populate('senderId', 'username display_name avatar');
-        const io = req.app.get('io');
-        if (io) {
-          io.to(dream.userId.toString()).emit('new_notification', notif);
-        }
-        // ── Rank points: post owner gains +10 for a like ──
-        const postOwner = await User.findById(dream.userId);
-        if (postOwner) {
-          postOwner.rankPoints  += 10;
-
-          // Count post owner's new total likes/comments to check milestones
-          const ownerDreams = await Dream.find({ userId: postOwner._id });
-          let ownerLikes = 0;
-          let ownerComments = 0;
-          for (const d of ownerDreams) {
-            ownerLikes += d.likes ? d.likes.length : 0;
-            ownerComments += d.comments_count ?? 0;
-          }
-
-          const { checkAndAwardAchievements } = await import('../../identity/services/rank.service');
-          checkAndAwardAchievements(
-            postOwner,
-            ownerLikes,
-            ownerComments,
-            ownerDreams.length,
-            postOwner.followers ? postOwner.followers.length : 0,
-            postOwner.following ? postOwner.following.length : 0,
-            postOwner.totalTimeOnline ?? 0
-          );
-
-          postOwner.currentRank  = calculateRank(postOwner.rankPoints, postOwner.achievements, postOwner.streakCount, postOwner.highestStreak);
-          await postOwner.save();
-        }
-      } catch (err) {
-        console.error('❌ Failed to trigger like notification:', err);
-      }
-    }
-
-    res.status(200).json({
-      success:     true,
-      liked:       !alreadyLiked,
-      likes_count: dream.likes_count,
-      likes:       dream.likes,
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to toggle like.', error: err });
   }
 };
 
@@ -771,7 +407,10 @@ async function rollbackDreamAnalysisRun(
   const targetSequences = Array.isArray(run.targetAdditionSequences)
     ? run.targetAdditionSequences.filter(Number.isInteger)
     : [];
-  const isAdditionRun = run.trigger === 'dream_addition' || run.trigger === 'addition_retry';
+  const isAdditionRun = run.trigger === 'dream_addition'
+    || run.trigger === 'addition_retry'
+    || run.trigger === 'content_edit'
+    || run.trigger === 'addition_edit';
   const hasPreviousAnalysis = rollback.runId === runId && rollback.hadPreviousResult;
   const previousMetadata = rollback.runId === runId && rollback.previousAnalysisMetadata
     ? { ...rollback.previousAnalysisMetadata }
@@ -859,9 +498,8 @@ export const runBackgroundAnalysis = async (
   const analysisStartedAt = (queuedDream.analysisRun as any)?.startedAt
     ? new Date((queuedDream.analysisRun as any).startedAt)
     : new Date();
-  const analysisKey = `${String(dreamId)}:${runId}`;
   const abortController = new AbortController();
-  activeDreamAnalysisControllers.set(analysisKey, abortController);
+  registerDreamAnalysisController(String(dreamId), runId, abortController);
 
   try {
     // Local models can legitimately take several minutes. Do not turn an estimate
@@ -998,9 +636,7 @@ export const runBackgroundAnalysis = async (
       logger.error(`Failed to mark dream ${dreamId} as failed:`, saveErr);
     }
   } finally {
-    if (activeDreamAnalysisControllers.get(analysisKey) === abortController) {
-      activeDreamAnalysisControllers.delete(analysisKey);
-    }
+    clearDreamAnalysisController(String(dreamId), runId, abortController);
   }
 };
 
@@ -1068,6 +704,13 @@ export const analyzeDreamById = async (req: Request, res: Response): Promise<voi
     // Verify ownership
     if (dream.userId.toString() !== req.user!._id.toString()) {
       res.status(403).json({ success: false, message: 'Access denied. You do not own this dream.' });
+      return;
+    }
+    if (dream.ai_analysis_enabled === false) {
+      res.status(409).json({
+        success: false,
+        message: 'Enable AI analysis for this post before requesting a reanalysis.',
+      });
       return;
     }
 
@@ -1182,7 +825,7 @@ export const cancelDreamAnalysis = async (req: Request, res: Response): Promise<
     return;
   }
 
-  activeDreamAnalysisControllers.get(`${dreamId}:${runId}`)?.abort();
+  abortDreamAnalysisExecution(dreamId, runId);
   const restoredDream = await rollbackDreamAnalysisRun(dreamId, runId, 'cancelled');
   if (!restoredDream) {
     res.status(409).json({ success: false, message: 'Dream analysis has already finished.' });

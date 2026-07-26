@@ -14,7 +14,7 @@ interface CreatePendingDreamInput extends CreateDreamRequestDto {
 
 export interface PendingDreamCreation {
   dream: IDream;
-  analysisRunId: string;
+  analysisRunId: string | null;
 }
 
 export async function createPendingDream(
@@ -22,12 +22,12 @@ export async function createPendingDream(
 ): Promise<PendingDreamCreation> {
   const normalizedContent = normalizedDreamContent(input.content);
   const contentHash = dreamContentHash(normalizedContent);
+  const aiAnalysisEnabled = input.aiAnalysisEnabled !== false;
   const analysisStartedAt = new Date();
-  const analysisRunId = crypto.randomUUID();
-  const estimatedDurationSeconds = await estimateDreamAnalysisSeconds(
-    input.userId,
-    normalizedContent,
-  );
+  const analysisRunId = aiAnalysisEnabled ? crypto.randomUUID() : null;
+  const estimatedDurationSeconds = aiAnalysisEnabled
+    ? await estimateDreamAnalysisSeconds(input.userId, normalizedContent)
+    : null;
 
   const dream = await Dream.create({
     userId: input.userId,
@@ -36,7 +36,10 @@ export async function createPendingDream(
     mood_tag: input.moodTag?.trim() ?? '',
     is_public: input.isPublic !== undefined ? input.isPublic : true,
     privacy: input.isPublic === false ? 'private' : 'public',
-    analysisMetadata: {
+    ai_analysis_enabled: aiAnalysisEnabled,
+    ai_status: aiAnalysisEnabled ? 'pending' : 'disabled',
+    ...(aiAnalysisEnabled && analysisRunId ? {
+      analysisMetadata: {
       currentStage: 'queued',
       progress: 0,
       statusMessage: 'Đã thêm vào hàng chờ phân tích.',
@@ -49,21 +52,28 @@ export async function createPendingDream(
       estimatedDurationSeconds,
       trigger: 'initial',
       runId: analysisRunId,
-    },
-    analysisRun: {
-      runId: analysisRunId,
-      trigger: 'initial',
-      startedAt: analysisStartedAt,
-      previousStatus: null,
-      targetAdditionSequences: [],
-    },
-    analysisRollback: {
-      runId: analysisRunId,
-      previousStatus: null,
-      hadPreviousResult: false,
-      previousAnalysisMetadata: null,
-    },
-    // ai_status and ai_result use schema defaults ('pending' and null).
+      },
+      analysisRun: {
+        runId: analysisRunId,
+        trigger: 'initial',
+        startedAt: analysisStartedAt,
+        previousStatus: null,
+        targetAdditionSequences: [],
+      },
+      analysisRollback: {
+        runId: analysisRunId,
+        previousStatus: null,
+        hadPreviousResult: false,
+        previousAnalysisMetadata: null,
+      },
+    } : {
+      analysisMetadata: {
+        currentStage: 'disabled',
+        progress: 0,
+        statusMessage: 'Bài viết này đã tắt AI phân tích.',
+        disabledAt: analysisStartedAt,
+      },
+    }),
   });
 
   return { dream, analysisRunId };

@@ -2,6 +2,7 @@ export interface CreateDreamRequestDto {
   content: string;
   moodTag?: string;
   isPublic?: boolean;
+  aiAnalysisEnabled?: boolean;
 }
 
 export type CreateDreamDtoResult =
@@ -9,10 +10,11 @@ export type CreateDreamDtoResult =
   | { ok: false; message: string };
 
 export function parseCreateDreamRequest(body: unknown): CreateDreamDtoResult {
-  const { content, mood_tag, is_public } = body as {
+  const { content, mood_tag, is_public, ai_analysis_enabled } = body as {
     content: string;
     mood_tag?: string;
     is_public?: boolean;
+    ai_analysis_enabled?: boolean;
   };
 
   if (!content || content.trim() === '') {
@@ -25,7 +27,7 @@ export function parseCreateDreamRequest(body: unknown): CreateDreamDtoResult {
       content,
       moodTag: mood_tag,
       isPublic: is_public,
+      aiAnalysisEnabled: ai_analysis_enabled !== false,
     },
   };
 }
-

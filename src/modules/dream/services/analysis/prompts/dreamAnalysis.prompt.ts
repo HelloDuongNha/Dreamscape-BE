@@ -72,8 +72,9 @@ ${input.contextualMotifs.length
 Required JSON shape:
 {
   "title": "string",
-  "emotional_tone": "string",
-  "summary": "string",
+  "emotional_tone": "a short, specific mood label in the user's language",
+  "emotional_valence": -2,
+  "summary": "two concise factual sentences, without interpretation",
   "scientific_context_notes": [
     {
       "ruleId": "string",
@@ -113,7 +114,7 @@ Required JSON shape:
     {
       "title": "string",
       "dreamEvidence": ["two or three exact quotes"],
-      "reasoning": "string",
+      "reasoning": "one cohesive explanation that adds insight beyond the quoted details",
       "alternativeExplanation": "string"
     }
   ],
@@ -127,7 +128,7 @@ Required JSON shape:
     "inspirationIndexes": [1]
   },
   "confidence": 0.0,
-  "core_analysis": "string",
+  "core_analysis": "one cohesive 180-320 word synthesis",
   "disclaimer": "string"
 }
 
@@ -148,24 +149,45 @@ Reasoning and evidence rules:
 7. Every hypothesis must concern one unknown observable fact, use a retrieved
    rule, cite exact narrative evidence and be answerable Có/Không/Chưa biết.
    Ask fewer questions when fewer are defensible; never fill a quota.
-8. Interpretive threads must connect at least two events in sequence and include
-   a credible alternative explanation. Do not list isolated symbol definitions.
+8. Return one or two interpretive threads. Each thread must connect at least
+   two events in sequence, explain why their combination matters, and include a
+   credible alternative explanation. Threads must develop a secondary angle
+   rather than repeat core_analysis or list isolated symbol definitions.
 9. Symbolic notes must quote motifs that actually occur in the narrative.
    Dictionary and personal history are context, not universal proof.
 10. Similar dreams are personal or public precedents, never scientific proof.
     Compare continuity and change without copying their interpretation.
 11. practical_reflections must be model-authored, low-risk and traceable to a
     hypothesis or observed sequence. Do not invent advice from a symbol alone.
-12. core_analysis must be cohesive, substantial and explain the sequence,
-    reported feelings and the most important unknown trigger without overstating.
-13. Cultural notes are ${input.culturalAnalysisAllowed
+12. core_analysis must read as one connected interpretation, not a catalogue of
+    symbols. Open with the strongest central pattern, then trace how the scene
+    changes from situation -> pressure -> blocked response -> waking feeling.
+    Explain what the combination contributes beyond paraphrasing the narrative,
+    connect the reported waking reaction when present, and identify the most
+    important unknown real-life trigger. Address the reader as "bạn"; never call
+    them "người nằm mơ".
+13. emotional_valence must be one integer: -2 strongly distressing, -1 uneasy
+    or negative, 0 genuinely mixed, 1 pleasant or hopeful, or 2 strongly
+    joyful/beautiful. Judge the experience reported by the dreamer, not whether
+    the interpretation sounds optimistic. emotional_tone must be a short label
+    specific to this dream. Do not use "unclear", "unknown", "neutral", or
+    their translations merely because a dream is unusual.
+14. Cultural notes are ${input.culturalAnalysisAllowed
     ? 'allowed only for supplied, opted-in parameters and a named framework'
     : 'forbidden; return an empty array'}.
-14. creative_continuation is explicitly fictional and must preserve the final
+15. creative_continuation is explicitly fictional and must preserve the final
     scene and point of view. inspirationIndexes may reference only numbered
     similar dreams and must be empty when none genuinely helps.
-15. Respect the lowest confidence cap among applied rules. If evidence is
+16. Respect the lowest confidence cap among applied rules. If evidence is
     insufficient, lower confidence and return fewer claims rather than adding
     generic filler.
+17. Do not write empty phrases such as "phản ánh những cảm xúc và suy nghĩ
+    không rõ ràng", "có thể là một thách thức", or merely rename a scene as an
+    emotion. Every interpretive sentence must show a concrete connection
+    between at least two supplied details or between a detail and a disclosed
+    waking reaction.
+18. State the uncertainty boundary once, naturally, near the end of
+    core_analysis. Do not repeat "không chắc", "cần xác nhận", or the dream
+    disclaimer in the summary, threads, and each symbolic note.
 `;
 }

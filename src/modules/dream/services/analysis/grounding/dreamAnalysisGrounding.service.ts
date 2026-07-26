@@ -84,12 +84,6 @@ export function sanitizeUnsupportedDreamClaims(value: unknown): string {
   return String(value || '').replace(/\s+/gu, ' ').trim();
 }
 
-export function isSubstantiveCoreAnalysis(value: unknown): boolean {
-  const text = String(value || '').trim();
-  const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
-  return text.length >= 320 && sentences.length >= 4;
-}
-
 export function isGroundedDreamTitle(title: unknown, narrative: string): boolean {
   const titleText = String(title || '').trim();
   if (titleText.length < 4 || titleText.length > 100) return false;
@@ -252,23 +246,6 @@ export function buildFeedbackChangeSet(before: any, after: any): {
   return { paths: Object.keys(fragments), fragments };
 }
 
-export function ensureSubstantiveCoreAnalysis(
-  core: unknown,
-  threads: any[],
-): string {
-  const original = String(core || '').trim();
-  if (isSubstantiveCoreAnalysis(original)) return original;
-  const uncertainty = 'Các mối nối này là giả thuyết phản tư dựa trên cấu trúc giấc mơ; hoàn cảnh thật chỉ được xác nhận qua câu trả lời của người kể.';
-  let result = [original, uncertainty].filter(Boolean).join(' ');
-  if (isSubstantiveCoreAnalysis(result)) return result;
-  for (const thread of (threads || []).slice(0, 2)) {
-    const reasoning = String(thread?.reasoning || '').trim();
-    if (reasoning) result = `${result} ${reasoning}`.trim();
-    if (isSubstantiveCoreAnalysis(result)) break;
-  }
-  return result;
-}
-
 export function polishGeneratedDreamProse(value: unknown): string {
   const text = String(value || '').replace(/\s+/gu, ' ').trim();
   if (!text) return text;
@@ -384,6 +361,7 @@ export function buildDreamCaseConclusion(
   _narrative: string,
   hypotheses: any[],
   scientificNotes: any[] = [],
+  centralAnalysis?: unknown,
 ): DreamCaseConclusion {
   const assessment = buildExploratoryCaseAssessment(hypotheses);
   const feedback = buildFeedbackAppliedAnalysis(hypotheses);
@@ -397,6 +375,11 @@ export function buildDreamCaseConclusion(
       ...(source?.doi ? { doi: String(source.doi) } : {}),
     }]))
     .values()].filter(source => source.sourceId || source.doi || source.title);
+  const centralSentences = polishGeneratedDreamProse(centralAnalysis)
+    .split(/(?<=[.!?])\s+/u)
+    .map(sentence => sentence.trim())
+    .filter(Boolean);
+  const preliminaryConclusion = centralSentences.slice(0, 2).join(' ');
 
   const evidenceBasis: DreamCaseConclusion['evidenceBasis'] = [{
     kind: 'confirmed_context',
@@ -419,12 +402,13 @@ export function buildDreamCaseConclusion(
     status: clarified ? 'clarified' : 'preliminary',
     headline: clarified ? 'Kết luận sau khi đối chiếu câu trả lời' : 'Kết luận ban đầu',
     conclusion: feedback?.interpretation
-      || 'Phân tích hiện dựa trên lời kể và các lập luận có nguồn; liên hệ với hoàn cảnh khi thức vẫn cần được người kể xác nhận.',
+      || preliminaryConclusion
+      || 'Các chi tiết trong lời kể tạo thành một hướng diễn giải ban đầu; hoàn cảnh ngoài đời vẫn do bạn xác nhận.',
     reasoning: assessment?.conclusion
       || 'Chưa có đủ câu trả lời để phân biệt dữ kiện đời thực với phần chỉ tồn tại trong câu chuyện của giấc mơ.',
     confidenceLabel: clarified
       ? 'Đã có dữ kiện trường hợp; vẫn giữ giới hạn của bằng chứng học thuật.'
-      : 'Tạm thời; còn phụ thuộc vào câu trả lời xác nhận.',
+      : 'Diễn giải phản tư dựa trên lời kể, không phải kết luận về hoàn cảnh ngoài đời.',
     confirmedFindings: feedback?.confirmedFacts || [],
     ruledOut: feedback?.rejectedDirections || [],
     recommendedNextStep: feedback?.unresolvedQuestions?.length
@@ -834,7 +818,12 @@ export function enrichScientificNotesForResponse(
       boundary: removeInternalAnalysisVocabulary(finalNote.boundary),
     }];
   })]);
-  const caseConclusion = buildDreamCaseConclusion(narrative, responseHypotheses, responseScientificNotes);
+  const caseConclusion = buildDreamCaseConclusion(
+    narrative,
+    responseHypotheses,
+    responseScientificNotes,
+    analysis.core_analysis,
+  );
 
   return {
     ...publicAnalysis,
