@@ -1,51 +1,14 @@
 import { createHash } from 'node:crypto';
 import { Types } from 'mongoose';
-import DreamSymbolObservation from '../models/DreamSymbolObservation';
-
-const CANONICAL_ALIASES: Array<{ key: string; aliases: RegExp }> = [
-  { key: 'grandmother', aliases: /^(?:bà|bà ngoại|bà nội|grandmother|grandma)$/iu },
-  { key: 'grandfather', aliases: /^(?:ông|ông ngoại|ông nội|grandfather|grandpa)$/iu },
-  { key: 'notebook', aliases: /^(?:cuốn sổ|quyển sổ|sổ tay|sổ|notebook)$/iu },
-  { key: 'bridge', aliases: /^(?:cây cầu|cầu|bridge)$/iu },
-  { key: 'door', aliases: /^(?:cánh cửa|cửa|door)$/iu },
-  { key: 'chase', aliases: /^(?:đuổi theo|bị đuổi|rượt đuổi|chase|chasing)$/iu },
-  { key: 'water', aliases: /^(?:dòng nước|mặt nước|nước|water)$/iu },
-  { key: 'school', aliases: /^(?:ngôi trường|trường cũ|trường học|school|old school)$/iu },
-];
+import DreamSymbolObservation from '../../../models/DreamSymbolObservation';
 
 export function canonicalizeObservedSymbol(value: unknown): string {
-  const normalized = String(value || '')
+  return String(value || '')
     .normalize('NFKC')
-    .toLocaleLowerCase('vi')
+    .toLocaleLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .replace(/\s+/gu, ' ')
     .trim();
-  return CANONICAL_ALIASES.find(item => item.aliases.test(normalized))?.key || normalized;
-}
-
-export function buildObservedSymbolLookupCandidates(narrative: string, limit = 400): string[] {
-  const tokens = String(narrative || '')
-    .normalize('NFKC')
-    .toLocaleLowerCase('vi')
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .split(/\s+/gu)
-    .filter(Boolean);
-  const ignored = new Set(['tôi', 'mình', 'bạn', 'một', 'những', 'các', 'và', 'là', 'có', 'không', 'trong', 'khi', 'sau', 'trước']);
-  const output: string[] = [];
-  const seen = new Set<string>();
-  for (let width = Math.min(4, tokens.length); width >= 1; width -= 1) {
-    for (let index = 0; index + width <= tokens.length; index += 1) {
-      const value = tokens.slice(index, index + width).join(' ');
-      if (value.length < 3 || (width === 1 && ignored.has(value))) continue;
-      const canonical = canonicalizeObservedSymbol(value);
-      if (!seen.has(canonical)) {
-        seen.add(canonical);
-        output.push(value);
-      }
-      if (output.length >= limit) return output;
-    }
-  }
-  return output;
 }
 
 export async function materializeDreamSymbolObservations(input: {
@@ -57,7 +20,7 @@ export async function materializeDreamSymbolObservations(input: {
   const notes = (input.symbolicNotes || []).flatMap((note, noteIndex) => {
     const displayLabel = String(note?.symbol || '').trim();
     const evidence = String(note?.dreamEvidence || '').trim();
-    const symbolKey = canonicalizeObservedSymbol(displayLabel);
+    const symbolKey = canonicalizeObservedSymbol(note?.dictionarySymbol || displayLabel);
     if (!displayLabel || !evidence || symbolKey.length < 2) return [];
     return [{ note, noteIndex, displayLabel, evidence, symbolKey }];
   });

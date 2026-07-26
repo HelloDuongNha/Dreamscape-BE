@@ -6,7 +6,7 @@ import crypto            from 'crypto';
 import Notification      from '../../social/models/Notification';
 import User              from '../../identity/models/User';
 import { calculateRank } from '../../identity/services/rank.service';
-import { runDreamAnalysis } from '../services/analyze.service';
+import { runDreamAnalysis } from '../services/analysis/orchestration/analyze.service';
 import { OllamaServiceError } from '../../../infrastructure/llm.service';
 import { logger } from '../../../infrastructure/logger';
 import { retrieveSymbolsHybrid } from '../services/symbolRetrieval.service';
@@ -17,53 +17,23 @@ import {
   enrichScientificNotesForResponse,
   reconcileAlternateQuestionAfterFeedback,
   resolveQuestionRuleIds,
-} from '../services/dreamAnalysisGrounding.service';
-import { materializeDreamSymbolObservations } from '../services/symbolObservation.service';
+} from '../services/analysis/grounding/dreamAnalysisGrounding.service';
+import { materializeDreamSymbolObservations } from '../services/analysis/retrieval/symbolObservation.service';
 import { setRuleValidationFeedback } from '../../rules_v3/services/ruleV3ValidationScore.service';
-import { estimateDreamAnalysisSeconds } from '../services/dreamAnalysisTiming.service';
+import { estimateDreamAnalysisSeconds } from '../services/analysis/execution/dreamAnalysisTiming.service';
 import {
   composeDreamNarrative,
   normalizedDreamContent,
   dreamContentHash,
   mapDreamResponse,
-} from '../services/dreamNarrative.service';
+} from '../services/content/dreamNarrative.service';
+import { parseCreateDreamRequest } from '../dto/dreamCreate.dto';
+import { createPendingDream } from '../services/content/dreamCreate.service';
+import { enqueueDreamAnalysis } from '../services/analysis/execution/dreamAnalysisQueue.service';
 
 export { composeDreamNarrative };
 
 const activeDreamAnalysisControllers = new Map<string, AbortController>();
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-/**
- * Standard paginated response wrapper returned by all feed endpoints.
- */
-interface PaginatedResponse {
-  success: boolean;
-  data: IDream[];
-  limit: number;
-  nextCursor: string | null; // ISO-8601 created_at of the last item, or null
-}
-
-// ─── Helper: Parse & Validate Pagination Params ───────────────────────────────
-
-function parsePaginationParams(query: Request['query']): {
-  limit: number;
-  cursor: Date | null;
-} {
-  const rawLimit = parseInt(String(query.limit ?? '10'), 10);
-  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 10;
-
-  const rawCursor = query.nextCursor;
-  let cursor: Date | null = null;
-  if (typeof rawCursor === 'string' && rawCursor.trim() !== '') {
-    const parsed = new Date(rawCursor);
-    cursor = isNaN(parsed.getTime()) ? null : parsed;
-  }
-
-  return { limit, cursor };
-}
-
-
 
 async function syncDreamSymbolObservations(dream: any): Promise<void> {
   try {
@@ -94,60 +64,28 @@ async function syncDreamSymbolObservations(dream: any): Promise<void> {
  */
 export const createDream = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { content, mood_tag, is_public } = req.body as {
-      content:   string;
-      mood_tag?: string;
-      is_public?: boolean;
-    };
-
-    if (!content || content.trim() === '') {
-      res.status(400).json({ success: false, message: 'Dream content is required.' });
+    const parsed = parseCreateDreamRequest(req.body);
+    if (!parsed.ok) {
+      res.status(400).json({ success: false, message: parsed.message });
       return;
     }
 
-    const normalizedContent = normalizedDreamContent(content);
-    const contentHash = dreamContentHash(normalizedContent);
-    const analysisStartedAt = new Date();
-    const analysisRunId = crypto.randomUUID();
-    const estimatedDurationSeconds = await estimateDreamAnalysisSeconds(req.user!._id as Types.ObjectId, normalizedContent);
-    const dream = await Dream.create({
-      userId:    req.user!._id as Types.ObjectId,
-      content:   normalizedContent,
-      contentHash,
-      mood_tag:  mood_tag?.trim() ?? '',
-      is_public: is_public !== undefined ? is_public : true,
-      privacy: is_public === false ? 'private' : 'public',
-      analysisMetadata: {
-        currentStage: 'preparing',
-        progress: 8,
-        statusMessage: 'Đang chuẩn bị hồ sơ và ngữ cảnh phân tích...',
-        currentMiniStep: 'Đang đọc hồ sơ và tách phần lời kể cần phân tích.',
-        stageResults: {},
-        startedAt: analysisStartedAt,
-        lastProgressAt: analysisStartedAt,
-        estimatedDurationSeconds,
-        trigger: 'initial',
-        runId: analysisRunId,
-      },
-      analysisRun: {
-        runId: analysisRunId,
-        trigger: 'initial',
-        startedAt: analysisStartedAt,
-        previousStatus: null,
-        targetAdditionSequences: [],
-      },
-      analysisRollback: {
-        runId: analysisRunId,
-        previousStatus: null,
-        hadPreviousResult: false,
-        previousAnalysisMetadata: null,
-      },
-      // ai_status and ai_result use schema defaults ('pending' and null)
+    const { dream, analysisRunId } = await createPendingDream({
+      ...parsed.value,
+      userId: req.user!._id as Types.ObjectId,
     });
 
-    // Kick off background analysis (never await this so the HTTP response is immediate)
-    setImmediate(() => {
-      runBackgroundAnalysis(dream._id, String(req.user!._id), dream.content, {}, analysisRunId);
+    enqueueDreamAnalysis({
+      dreamId: String(dream._id),
+      userId: String(req.user!._id),
+      runId: analysisRunId,
+      execute: () => runBackgroundAnalysis(
+        dream._id,
+        String(req.user!._id),
+        dream.content,
+        {},
+        analysisRunId,
+      ),
     });
 
     res.status(201).json({
@@ -157,100 +95,6 @@ export const createDream = async (req: Request, res: Response): Promise<void> =>
     });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Failed to create dream.', error: err });
-  }
-};
-
-// ─── GET /api/dreams ──────────────────────────────────────────────────────────
-
-/**
- * Global public feed — returns only is_public: true dreams.
- * Uses cursor-based pagination via the created_at timestamp to avoid the
- * performance degradation of offset/skip on large collections.
- *
- * Query params:
- *   limit      — max documents to return (default 10, max 100)
- *   nextCursor — ISO-8601 created_at of the last seen item; only docs
- *                OLDER than this cursor are returned ($lt comparison)
- */
-export const getPublicFeed = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { limit, cursor } = parsePaginationParams(req.query);
-
-    const filter: Record<string, unknown> = { is_public: true };
-    if (cursor) {
-      filter['created_at'] = { $lt: cursor };
-    }
-
-    const dreams = await Dream.find(filter)
-      .sort({ created_at: -1 })
-      .limit(limit)
-      .populate('userId', 'username display_name avatar')
-      .lean();
-
-    const nextCursor =
-      dreams.length === limit
-        ? (dreams[dreams.length - 1] as IDream).created_at.toISOString()
-        : null;
-
-    const response: PaginatedResponse = {
-      success: true,
-      data: dreams.map(mapDreamResponse) as unknown as IDream[],
-      limit,
-      nextCursor,
-    };
-
-    res.status(200).json(response);
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to fetch feed.', error: err });
-  }
-};
-
-// ─── GET /api/dreams/user/:userId ─────────────────────────────────────────────
-
-/**
- * Personal archive — returns all dreams (public + private) for a given userId.
- * Used by the Profile page. Same cursor-based pagination as the global feed.
- *
- * Path param:  userId — MongoDB ObjectId of the target user
- * Query params: limit, nextCursor (same semantics as getPublicFeed)
- */
-export const getUserDreams = async (req: Request, res: Response): Promise<void> => {
-  try {
-    const userId = String(req.params.userId);
-
-    if (!Types.ObjectId.isValid(userId)) {
-      res.status(400).json({ success: false, message: 'Invalid userId format.' });
-      return;
-    }
-
-    const { limit, cursor } = parsePaginationParams(req.query);
-
-    const filter: Record<string, unknown> = { userId: new Types.ObjectId(userId) };
-    if (cursor) {
-      filter['created_at'] = { $lt: cursor };
-    }
-
-    const dreams = await Dream.find(filter)
-      .sort({ created_at: -1 })
-      .limit(limit)
-      .populate('userId', 'username display_name avatar')
-      .lean();
-
-    const nextCursor =
-      dreams.length === limit
-        ? (dreams[dreams.length - 1] as IDream).created_at.toISOString()
-        : null;
-
-    const response: PaginatedResponse = {
-      success: true,
-      data: dreams.map(mapDreamResponse) as unknown as IDream[],
-      limit,
-      nextCursor,
-    };
-
-    res.status(200).json(response);
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to fetch user dreams.', error: err });
   }
 };
 
@@ -369,11 +213,13 @@ export const appendDreamAddition = async (req: Request, res: Response): Promise<
     const analysisStartedAt = new Date();
     const estimatedDurationSeconds = await estimateDreamAnalysisSeconds(userId, completeNarrative);
     dream.analysisMetadata = {
-      currentStage: 'preparing',
-      progress: 8,
-      statusMessage: 'Đang phân tích lại lời kể cùng phần bổ sung...',
-      currentMiniStep: 'Đang ghép nội dung gốc và các phần bổ sung theo đúng thứ tự.',
+      currentStage: 'queued',
+      progress: 0,
+      statusMessage: 'Đã thêm lần phân tích lại vào hàng chờ.',
+      currentMiniStep: 'Tác vụ sẽ tự bắt đầu khi tới lượt.',
+      queuePosition: 1,
       stageResults: {},
+      enqueuedAt: analysisStartedAt,
       startedAt: analysisStartedAt,
       lastProgressAt: analysisStartedAt,
       trigger: 'dream_addition',
@@ -400,8 +246,17 @@ export const appendDreamAddition = async (req: Request, res: Response): Promise<
     dream.markModified('additions');
     await dream.save();
 
-    setImmediate(() => {
-      runBackgroundAnalysis(dream._id, String(userId), completeNarrative, dream.sleepContext || {}, analysisRunId);
+    enqueueDreamAnalysis({
+      dreamId: String(dream._id),
+      userId: String(userId),
+      runId: analysisRunId,
+      execute: () => runBackgroundAnalysis(
+        dream._id,
+        String(userId),
+        completeNarrative,
+        dream.sleepContext || {},
+        analysisRunId,
+      ),
     });
 
     res.status(202).json({
@@ -713,30 +568,6 @@ export const getComments = async (req: Request, res: Response): Promise<void> =>
   }
 };
 
-// ─── GET /api/dreams/:id ──────────────────────────────────────────────────────────
-
-/**
- * Fetch a single dream by ID, populating the author user details.
- */
-export const getDream = async (req: Request, res: Promise<void> | any): Promise<void> => {
-  try {
-    const { id } = req.params;
-    if (!Types.ObjectId.isValid(id as string)) {
-      res.status(400).json({ success: false, message: 'Invalid dream ID.' });
-      return;
-    }
-    const dream = await Dream.findById(id).populate('userId', 'username display_name avatar');
-    if (!dream) {
-      res.status(404).json({ success: false, message: 'Dream not found.' });
-      return;
-    }
-    res.setHeader('Cache-Control', 'no-store');
-    res.status(200).json({ success: true, data: mapDreamResponse(dream) });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to fetch dream.', error: err });
-  }
-};
-
 /**
  * Analyze a user's dream using the RAG Orchestration Engine and Ollama.
  * Protected route - requires JWT.
@@ -945,6 +776,7 @@ async function rollbackDreamAnalysisRun(
   const previousMetadata = rollback.runId === runId && rollback.previousAnalysisMetadata
     ? { ...rollback.previousAnalysisMetadata }
     : {};
+  const failedAtStage = String((dream.analysisMetadata as any)?.currentStage || 'preparing');
 
   const update: Record<string, any> = {
     $set: {
@@ -961,6 +793,7 @@ async function rollbackDreamAnalysisRun(
         : {
             ...(dream.analysisMetadata || {}),
             currentStage: outcome,
+            ...(outcome === 'failed' ? { failedAtStage } : {}),
             statusMessage: outcome === 'cancelled'
               ? 'Đã hủy phân tích theo yêu cầu.'
               : 'Phân tích chưa hoàn tất. Bạn có thể thử lại.',
@@ -1172,6 +1005,49 @@ export const runBackgroundAnalysis = async (
 };
 
 /**
+ * Rebuilds the fair in-memory scheduler from persisted pending Dream runs.
+ * A process restart therefore delays a job instead of silently losing it.
+ */
+export async function recoverPendingDreamAnalysisQueue(): Promise<number> {
+  const pendingDreams = await Dream.find({
+    ai_status: 'pending',
+    'analysisRun.runId': { $exists: true, $ne: '' },
+  })
+    .select('_id userId content additions sleepContext analysisRun')
+    .sort({ created_at: 1 })
+    .lean();
+
+  let recovered = 0;
+  for (const dream of pendingDreams) {
+    const runId = String((dream as any)?.analysisRun?.runId || '').trim();
+    const userId = String((dream as any)?.userId || '').trim();
+    if (!runId || !userId) continue;
+
+    const scheduled = enqueueDreamAnalysis({
+      dreamId: String((dream as any)._id),
+      userId,
+      runId,
+      execute: () => runBackgroundAnalysis(
+        (dream as any)._id,
+        userId,
+        composeDreamNarrative(
+          String((dream as any).content || ''),
+          Array.isArray((dream as any).additions) ? (dream as any).additions : [],
+        ),
+        (dream as any).sleepContext || {},
+        runId,
+      ),
+    });
+    if (scheduled) recovered += 1;
+  }
+
+  if (recovered > 0) {
+    logger.info('Recovered pending Dream analysis jobs after startup.', { recovered });
+  }
+  return recovered;
+}
+
+/**
  * Retry analyzing an existing dream.
  * POST /api/dreams/:id/analyze
  */
@@ -1221,11 +1097,13 @@ export const analyzeDreamById = async (req: Request, res: Response): Promise<voi
       addition.analysisRunId = analysisRunId;
     }
     dream.analysisMetadata = {
-      currentStage: 'preparing',
-      progress: 8,
-      statusMessage: 'Đang chuẩn bị phân tích lại giấc mơ...',
-      currentMiniStep: 'Đang đọc lại toàn bộ lời kể và dữ liệu đã cung cấp.',
+      currentStage: 'queued',
+      progress: 0,
+      statusMessage: 'Đã thêm lần thử lại vào hàng chờ.',
+      currentMiniStep: 'Tác vụ sẽ tự bắt đầu khi tới lượt.',
+      queuePosition: 1,
       stageResults: {},
+      enqueuedAt: analysisStartedAt,
       startedAt: analysisStartedAt,
       lastProgressAt: analysisStartedAt,
       estimatedDurationSeconds,
@@ -1251,15 +1129,17 @@ export const analyzeDreamById = async (req: Request, res: Response): Promise<voi
     dream.markModified('additions');
     await dream.save();
 
-    // Start background analysis once
-    setImmediate(() => {
-      runBackgroundAnalysis(
+    enqueueDreamAnalysis({
+      dreamId: String(dream._id),
+      userId: String(req.user!._id),
+      runId: analysisRunId,
+      execute: () => runBackgroundAnalysis(
         dream._id,
         String(req.user!._id),
         completeNarrative,
         dream.sleepContext || {},
         analysisRunId,
-      );
+      ),
     });
 
     res.status(200).json({

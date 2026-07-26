@@ -1,8 +1,6 @@
 import { Router } from 'express';
 import {
   createDream,
-  getPublicFeed,
-  getUserDreams,
   updateDream,
   appendDreamAddition,
   deleteDream,
@@ -10,13 +8,17 @@ import {
   toggleLike,
   addComment,
   getComments,
-  getDream,
   analyzeDream,
   analyzeDreamById,
   debugRag,
   saveHypothesisFeedback,
   cancelDreamAnalysis,
 } from '../modules/dream/controllers/dreamController';
+import {
+  getDream,
+  getPublicFeed,
+  getUserDreams,
+} from '../modules/dream/controllers/dreamRead.controller';
 import authMiddleware from '../middleware/authMiddleware';
 
 const router = Router();

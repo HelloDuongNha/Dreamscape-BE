@@ -144,6 +144,102 @@ export interface ILLMOutput {
 }
 
 /**
+ * Normalizes recoverable local-model shape drift before strict validation.
+ * Invalid optional rows are removed independently; required narrative fields
+ * are never invented here and still fail the strict contract below.
+ */
+export function normalizeLLMOutputShape(data: any): any {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
+
+  const normalized = { ...data };
+  normalized.scientific_context_notes = Array.isArray(data.scientific_context_notes)
+    ? data.scientific_context_notes.flatMap((item: any) => {
+      if (!item || typeof item !== 'object'
+        || typeof item.ruleId !== 'string'
+        || typeof item.note !== 'string') return [];
+      const { sources: _sources, ...baseItem } = item;
+      const sources = Array.isArray(item.sources)
+        ? item.sources.filter((source: any) =>
+          source
+          && typeof source.sourceId === 'string'
+          && typeof source.title === 'string'
+          && Array.isArray(source.authors))
+        : undefined;
+      return [{
+        ...baseItem,
+        confidence: Math.min(1, Math.max(0, Number(item.confidence) || 0)),
+        ...(sources ? { sources } : {}),
+      }];
+    })
+    : [];
+
+  normalized.symbolic_notes = Array.isArray(data.symbolic_notes)
+    ? data.symbolic_notes.flatMap((item: any) => {
+      if (!item || typeof item !== 'object'
+        || typeof item.symbol !== 'string'
+        || typeof item.meaning !== 'string') return [];
+      const {
+        origin: _origin,
+        contextualTone: _contextualTone,
+        ...baseItem
+      } = item;
+      const origin = ['dictionary', 'contextual_observation'].includes(item.origin)
+        ? item.origin
+        : undefined;
+      const contextualTone = ['threatening', 'reassuring', 'ambivalent', 'neutral']
+        .includes(item.contextualTone)
+        ? item.contextualTone
+        : undefined;
+      return [{
+        ...baseItem,
+        relevance: Math.min(1, Math.max(0, Number(item.relevance) || 0)),
+        symbolValence: Number.isFinite(Number(item.symbolValence))
+          ? Number(item.symbolValence)
+          : 0,
+        ...(origin ? { origin } : {}),
+        ...(contextualTone ? { contextualTone } : {}),
+      }];
+    })
+    : [];
+
+  normalized.cultural_symbolic_notes = Array.isArray(data.cultural_symbolic_notes)
+    ? data.cultural_symbolic_notes.filter((item: any) =>
+      item
+      && typeof item.source === 'string'
+      && typeof item.note === 'string')
+    : [];
+
+  normalized.real_life_hypotheses = Array.isArray(data.real_life_hypotheses)
+    ? data.real_life_hypotheses.flatMap((item: any) => {
+      if (!item || typeof item !== 'object'
+        || typeof item.hypothesis !== 'string'
+        || typeof item.followUpQuestion !== 'string') return [];
+      const { questionType: _questionType, ...baseItem } = item;
+      return [{
+        ...baseItem,
+        evidenceFromDream: Array.isArray(item.evidenceFromDream)
+          ? item.evidenceFromDream.filter((entry: unknown) => typeof entry === 'string')
+          : [],
+        confidence: Math.min(1, Math.max(0, Number(item.confidence) || 0)),
+        needsUserConfirmation: item.needsUserConfirmation !== false,
+        ...(['past', 'present', 'future'].includes(item.questionType)
+          ? { questionType: item.questionType }
+          : {}),
+      }];
+    })
+    : [];
+
+  normalized.interpretive_threads = Array.isArray(data.interpretive_threads)
+    ? data.interpretive_threads
+    : [];
+  normalized.practical_reflections = Array.isArray(data.practical_reflections)
+    ? data.practical_reflections
+    : [];
+  normalized.confidence = Math.min(1, Math.max(0, Number(data.confidence) || 0));
+  return normalized;
+}
+
+/**
  * Validates the parsed JSON against the strict LLM schema.
  */
 export function validateLLMOutput(data: any): data is ILLMOutput {
@@ -459,33 +555,7 @@ export async function generateAnalysis(prompt: string, abortSignal?: AbortSignal
       throw new OllamaServiceError('Ollama response is not valid JSON', 502);
     }
 
-    // Pre-validation sanitization and clamping to resolve range issues
-    if (parsedResult && typeof parsedResult === 'object') {
-      if (parsedResult.confidence !== undefined) {
-        parsedResult.confidence = Math.min(1.0, Math.max(0.0, Number(parsedResult.confidence) || 0.0));
-      }
-      if (Array.isArray(parsedResult.scientific_context_notes)) {
-        parsedResult.scientific_context_notes.forEach((note: any) => {
-          if (note && note.confidence !== undefined) {
-            note.confidence = Math.min(1.0, Math.max(0.0, Number(note.confidence) || 0.0));
-          }
-        });
-      }
-      if (Array.isArray(parsedResult.symbolic_notes)) {
-        parsedResult.symbolic_notes.forEach((note: any) => {
-          if (note && note.relevance !== undefined) {
-            note.relevance = Math.min(1.0, Math.max(0.0, Number(note.relevance) || 0.0));
-          }
-        });
-      }
-      if (Array.isArray(parsedResult.real_life_hypotheses)) {
-        parsedResult.real_life_hypotheses.forEach((hyp: any) => {
-          if (hyp && hyp.confidence !== undefined) {
-            hyp.confidence = Math.min(1.0, Math.max(0.0, Number(hyp.confidence) || 0.0));
-          }
-        });
-      }
-    }
+    parsedResult = normalizeLLMOutputShape(parsedResult);
 
     if (!validateLLMOutput(parsedResult)) {
       throw new OllamaServiceError('Ollama response JSON does not conform to required output schema', 502);

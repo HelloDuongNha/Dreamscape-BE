@@ -22,10 +22,6 @@ import {
   executeOracleRun,
 } from '../services/oracleRun.service';
 import {
-  buildRuleGroundedFallbackHypotheses,
-  resolveQuestionRuleIds,
-} from '../../dream/services/dreamAnalysisGrounding.service';
-import {
   localizeOracleRuleStatement,
   localizeOracleVerificationQuestion,
 } from '../services/oracleRulePresentation.service';
@@ -564,31 +560,8 @@ export async function getOracleCitationDetails(req: Request, res: Response): Pro
         { 'compositeComponents.sourceRuleId': { $in: evidenceRuleIds } },
       ],
     }).lean();
-    const userTurn = turn.parentTurnId
-      ? await OracleTurn.findOne({ _id: turn.parentTurnId, userId, role: 'user' }).lean()
-      : null;
-    const narrative = userTurn?.contentBlocks.map((block) => block.text).join('\n') || '';
-    const ruleShapes = rules.map((rule) => ({
-      ...rule,
-      ruleId: String(rule._id),
-      ruleStatement: rule.statement,
-      factor: rule.subject,
-      outcome: rule.outcome,
-      applicationTier: Number(rule.evidenceScore) >= 60 && Number(rule.supportingSourceCount) >= 2
-        ? 'supported'
-        : 'exploratory',
-    }));
-    const questions = buildRuleGroundedFallbackHypotheses(ruleShapes, narrative);
     const questionByRuleId = new Map<string, any>();
-    for (const question of questions) {
-      for (const id of resolveQuestionRuleIds(question)) {
-        if (!questionByRuleId.has(id)) questionByRuleId.set(id, question);
-      }
-    }
-    const verificationKeys = questions
-      .map((question) => String(question.verificationKey || ''))
-      .filter(Boolean);
-    const currentAnswerByKey = await getCurrentRuleValidationAnswers(userId, verificationKeys);
+    const currentAnswerByKey = await getCurrentRuleValidationAnswers(userId, []);
     const links = await Promise.all(rules.map(async (rule) => {
       const ownerIds = [String(rule._id), ...(rule.compositeComponents || []).map((item) => String(item.sourceRuleId))];
       const linkedEvidence = evidence.find((item) => ownerIds.includes(String(item.ruleId)));

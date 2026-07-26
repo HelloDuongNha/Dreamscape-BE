@@ -296,7 +296,7 @@ function restoreAllPatched() {
     assertBehavior(turnModelContent.includes('OracleCitationSchema'), 'OracleTurn persists sanitized citation metadata');
     assertBehavior(turnModelContent.includes('suggestedPrompts'), 'OracleTurn persists follow-up suggestions');
 
-    const similarDreamPath = path.resolve(__dirname, '../../dream/services/similarDreamRetrieval.service.ts');
+    const similarDreamPath = path.resolve(__dirname, '../../dream/services/analysis/retrieval/similarDreamRetrieval.service.ts');
     const similarDreamContent = fs.readFileSync(similarDreamPath, 'utf8');
     assertBehavior(
       similarDreamContent.includes("$or: [{ userId: userObjectId }, { privacy: 'public', is_public: true }]"),

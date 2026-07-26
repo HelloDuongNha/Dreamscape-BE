@@ -1,11 +1,8 @@
 import type { OracleCitation } from './oracle.types';
-import { retrieveSimilarDreams } from '../../dream/services/similarDreamRetrieval.service';
+import { retrieveSimilarDreams } from '../../dream/services/analysis/retrieval/similarDreamRetrieval.service';
 import { retrieveApprovedRuleV3 } from '../../rules_v3/services/ruleV3Retrieval.service';
 import { logger } from '../../../infrastructure/logger';
-import {
-  buildRuleGroundedFallbackHypotheses,
-  resolveQuestionRuleIds,
-} from '../../dream/services/dreamAnalysisGrounding.service';
+import { resolveQuestionRuleIds } from '../../dream/services/analysis/grounding/dreamAnalysisGrounding.service';
 import {
   localizeOracleRuleStatement,
   localizeOracleVerificationQuestion,
@@ -67,11 +64,8 @@ export async function buildOracleGrounding(
   const rulesById = new Map(
     ruleResult.rules.map((rule: any) => [String(rule.ruleId || rule._id), rule]),
   );
-  const allVerificationQuestions = buildRuleGroundedFallbackHypotheses(ruleResult.rules, dreamText);
-  const currentAnswers = await getCurrentRuleValidationAnswers(
-    userId,
-    allVerificationQuestions.map((question) => String(question.verificationKey || '')),
-  );
+  const allVerificationQuestions: any[] = [];
+  const currentAnswers = await getCurrentRuleValidationAnswers(userId, []);
   const answeredVerificationKeys = new Set(currentAnswers.keys());
   const verificationQuestions = allVerificationQuestions
     .filter((question) => !answeredVerificationKeys.has(String(question.verificationKey || '')));

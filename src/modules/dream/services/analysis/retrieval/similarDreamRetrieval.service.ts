@@ -1,8 +1,8 @@
 import mongoose from 'mongoose';
-import Dream from '../models/Dream';
-import User from '../../identity/models/User';
-import Comment from '../../social/models/Comment';
-import { generateEmbedding } from '../../../infrastructure/llm.service';
+import Dream from '../../../models/Dream';
+import User from '../../../../identity/models/User';
+import Comment from '../../../../social/models/Comment';
+import { generateEmbedding } from '../../../../../infrastructure/llm.service';
 
 export interface SimilarDreamMatch {
   dreamId: string;
@@ -47,24 +47,6 @@ export function dreamLexicalOverlap(a: string, b: string): number {
   return overlap(tokens(a), tokens(b));
 }
 
-const FEATURE_PATTERNS: Array<[string, RegExp]> = [
-  ['ký ức hoặc sợ quên', /(?:quên|nhớ|ký\s*ức|trí\s*nhớ|sổ\s*trắng|forget|memory|blank\s+(?:book|page))/iu],
-  ['trường học hoặc đánh giá', /(?:trường|lớp|thi|kiểm\s*tra|thuyết\s*trình|school|class|exam|presentation)/iu],
-  ['người thân và tuổi thơ', /(?:bà\s*(?:ngoại|nội)?|ông\s*(?:ngoại|nội)?|cha|mẹ|gia\s*đình|tuổi\s*thơ|grandmother|grandfather|family|childhood)/iu],
-  ['bị đuổi hoặc chạy trốn', /(?:đuổi|chạy\s*trốn|bắt\s*kịp|pursu|chase|running\s+away)/iu],
-  ['nước hoặc ngập', /(?:nước|ngập|sông|biển|water|flood|river|sea)/iu],
-  ['cầu, cửa hoặc chuyển tiếp', /(?:cầu|cánh\s*cửa|ngưỡng|chuyển\s*tiếp|bridge|door|threshold|transition)/iu],
-  ['nhà hoặc nơi chốn cũ', /(?:nhà\s*cũ|trường\s*cũ|nơi\s*cũ|old\s+(?:house|home|school)|former\s+home)/iu],
-  ['áp lực hoặc lo âu', /(?:áp\s*lực|lo\s*âu|lo\s*lắng|căng\s*thẳng|sợ|pressure|anxiety|stress|fear)/iu],
-  ['mất mát hoặc tiếc nuối', /(?:mất|tiếc\s*nuối|đóng\s*lại|loss|regret|grief|closed)/iu],
-];
-
-export function extractDreamSimilarityFeatures(value: string): Set<string> {
-  const result = new Set<string>();
-  for (const [label, pattern] of FEATURE_PATTERNS) if (pattern.test(value)) result.add(label);
-  return result;
-}
-
 function cosine(a: number[], b: number[]): number {
   if (!a.length || a.length !== b.length) return -1;
   let dot = 0; let aa = 0; let bb = 0;
@@ -72,23 +54,15 @@ function cosine(a: number[], b: number[]): number {
   return aa && bb ? dot / Math.sqrt(aa * bb) : -1;
 }
 
-function featureOverlap(a: Set<string>, b: Set<string>): number {
-  if (!a.size || !b.size) return 0;
-  let shared = 0;
-  for (const item of a) if (b.has(item)) shared += 1;
-  return shared / Math.min(a.size, b.size);
-}
-
 export function scoreDreamSimilarity(input: {
   exact: boolean;
   semantic: number;
-  motifOverlap: number;
   lexicalOverlap: number;
 }): number {
   if (input.exact) return 1;
   return input.semantic >= 0
-    ? Math.max(0, input.semantic) * 0.6 + input.motifOverlap * 0.3 + input.lexicalOverlap * 0.1
-    : input.motifOverlap * 0.75 + input.lexicalOverlap * 0.25;
+    ? Math.max(0, input.semantic) * 0.85 + input.lexicalOverlap * 0.15
+    : input.lexicalOverlap;
 }
 
 function compact(value: string, max = 260): string {
@@ -122,12 +96,10 @@ export async function retrieveSimilarDreams(
 
   const queryNormalized = normalize(dreamText);
   const queryTokens = tokens(dreamText);
-  const queryFeatures = extractDreamSimilarityFeatures(dreamText);
   const rankedPrelim = rows.map(row => {
     const exact = normalize(row.content) === queryNormalized;
     const lexical = overlap(queryTokens, tokens(row.content));
-    const motifs = featureOverlap(queryFeatures, extractDreamSimilarityFeatures(row.content));
-    return { row, exact, lexical, motifs, preliminary: exact ? 1 : motifs * 0.7 + lexical * 0.3 };
+    return { row, exact, lexical, preliminary: exact ? 1 : lexical };
   }).sort((a, b) => b.preliminary - a.preliminary);
 
   // Repeated imports or test posts can contain the exact same narrative.
@@ -166,16 +138,14 @@ export async function retrieveSimilarDreams(
     const score = scoreDreamSimilarity({
       exact: item.exact,
       semantic,
-      motifOverlap: item.motifs,
       lexicalOverlap: item.lexical,
     });
     const matchedOn: string[] = [];
     if (item.exact) matchedOn.push('Cùng nội dung');
     if (semantic >= 0.65) matchedOn.push('Cùng mạch ngữ nghĩa');
-    if (item.motifs >= 0.5) matchedOn.push('Cùng tình tiết hoặc mô-típ');
     if (item.lexical >= 0.35) matchedOn.push('Nhiều chi tiết tương đồng');
     return { ...item, semantic, score, matchedOn };
-  }).filter(item => item.exact || (item.score >= 0.4 && (item.motifs >= 0.25 || item.lexical >= 0.18)))
+  }).filter(item => item.exact || item.score >= 0.4)
     .sort((a, b) => b.score - a.score
       || Number(isSameAuthor(b.row, userId)) - Number(isSameAuthor(a.row, userId)))
     .slice(0, limit);

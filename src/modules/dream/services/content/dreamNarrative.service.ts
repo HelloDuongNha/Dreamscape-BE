@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { enrichScientificNotesForResponse } from './dreamAnalysisGrounding.service';
+import { enrichScientificNotesForResponse } from '../analysis/grounding/dreamAnalysisGrounding.service';
 
 export function composeDreamNarrative(
   originalContent: string,

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { composeDreamNarrative } from './dreamNarrative.service';
+import { composeDreamNarrative } from '../content/dreamNarrative.service';
 
 assert.equal(composeDreamNarrative('Nội dung cũ.', []), 'Nội dung cũ.');
 assert.equal(

@@ -5,6 +5,7 @@ import connectDB from './config/db';
 import { initSocket } from './config/socket';
 import { recoverInterruptedReaderReplacements } from './modules/academic/services/reader/persistence/readerReplacement.service';
 import { recoverIncompleteRuleV3Replacements } from './modules/rules_v3/services/ruleV3ReplacementJournal.service';
+import { recoverPendingDreamAnalysisQueue } from './modules/dream/controllers/dreamController';
 
 const PORT = Number(process.env.PORT) || 5000;
 
@@ -13,6 +14,7 @@ const startServer = async (): Promise<void> => {
   await connectDB();
   await recoverInterruptedReaderReplacements();
   await recoverIncompleteRuleV3Replacements();
+  await recoverPendingDreamAnalysisQueue();
 
   // 2. Wrap Express app in a raw Node.js HTTP server so Socket.io can share it
   const httpServer = http.createServer(app);
