@@ -1,172 +1,38 @@
 import { spawn } from 'child_process';
-import path from 'path';
 import fs from 'fs';
-import os from 'os';
+import path from 'path';
 import { DoclingExtractionResult, DoclingArtifactDescriptor } from '../../types/docling.types';
 import {
   DOCLING_EXTRACTION_TIMEOUT_MS,
   DOCLING_OCR_TIMEOUT_MS,
 } from '../../../../../config/pdfLimits';
+import {
+  getDoclingPythonBin,
+  isDoclingAvailable,
+} from './doclingRuntime.service';
+import {
+  createDoclingRunCleanup,
+  createDoclingRunDirectory,
+  validateDoclingArtifactPath,
+} from './doclingWorkspace.service';
 
-// ─── Internal run result returned by extractPdf ───────────────────────────────
 export interface DoclingRunResult {
   result: DoclingExtractionResult;
-  /** Verified artifact descriptors, empty on failure */
   artifacts: DoclingArtifactDescriptor[];
-  /**
-   * Idempotent cleanup: removes the exact run directory created by this
-   * invocation. Safe to call multiple times. Never deletes outside the
-   * configured temp base or another run's directory.
-   */
   cleanup: () => Promise<void>;
 }
 
 export class DoclingClientService {
-  private static getPythonBin(): string | null {
-    return process.env.DOCLING_PYTHON_BIN || null;
-  }
-
-  private static getTempBase(): string {
-    return process.env.DOCLING_TEMP_DIR || os.tmpdir();
-  }
-
-  // ─── Availability check ──────────────────────────────────────────────────────
-  /**
-   * Returns true only when DOCLING_PYTHON_BIN points to an executable that can
-   * import the pinned docling package at runtime.
-   */
-  private static availabilityCache: { val: boolean; exp: number } | null = null;
-
   public static async isAvailable(): Promise<boolean> {
-    const now = Date.now();
-    if (this.availabilityCache && now < this.availabilityCache.exp) {
-      return this.availabilityCache.val;
-    }
-
-    const pythonBin = this.getPythonBin();
-    if (!pythonBin) {
-      this.availabilityCache = { val: false, exp: now + 5 * 60 * 1000 };
-      return false;
-    }
-    try {
-      await fs.promises.access(pythonBin, fs.constants.X_OK);
-    } catch {
-      this.availabilityCache = { val: false, exp: now + 5 * 60 * 1000 };
-      return false;
-    }
-
-    const result = await new Promise<boolean>((resolve) => {
-      const probe = spawn(pythonBin, ['-c', 'import docling']);
-      let resolved = false;
-
-      const timer = setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          probe.kill('SIGKILL');
-          resolve(false);
-        }
-      }, 5000); // 5 seconds bounded timeout
-
-      probe.on('error', () => {
-        clearTimeout(timer);
-        if (!resolved) {
-          resolved = true;
-          resolve(false);
-        }
-      });
-
-      probe.on('close', (code) => {
-        clearTimeout(timer);
-        if (!resolved) {
-          resolved = true;
-          resolve(code === 0);
-        }
-      });
-    });
-
-    this.availabilityCache = { val: result, exp: now + 5 * 60 * 1000 };
-    return result;
+    return isDoclingAvailable();
   }
 
-  // ─── Path containment helpers ─────────────────────────────────────────────────
-  /**
-   * Validates that realArtifactPath is strictly inside realRunDir.
-   * Rejects: escape via '..', absolute relative path, empty relative path,
-   * symbolic links, prefix-collision attacks.
-   */
-  private static validateArtifactPath(realRunDir: string, artifactPath: string): string | null {
-    // Resolve real path of artifact — this resolves symlinks
-    let realArtifact: string;
-    try {
-      realArtifact = fs.realpathSync(artifactPath);
-    } catch {
-      return null; // path does not exist or cannot be resolved
-    }
-
-    const rel = path.relative(realRunDir, realArtifact);
-
-    // Reject if empty (same as parent), starts with '..', or is absolute
-    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
-
-    // Reject symbolic links (realpathSync already resolved them; check lstat)
-    try {
-      const lstat = fs.lstatSync(artifactPath);
-      if (lstat.isSymbolicLink()) return null;
-    } catch {
-      return null;
-    }
-
-    // Must be a regular non-empty file
-    try {
-      const stat = fs.statSync(realArtifact);
-      if (!stat.isFile() || stat.size === 0) return null;
-    } catch {
-      return null;
-    }
-
-    // Must have a supported extension
-    const ext = path.extname(realArtifact).toLowerCase();
-    if (ext !== '.png' && ext !== '.jpg' && ext !== '.jpeg') return null;
-
-    return realArtifact;
-  }
-
-  // ─── Cleanup factory ──────────────────────────────────────────────────────────
-  /**
-   * Returns an idempotent cleanup function bound to exactRunDir.
-   * Will refuse to delete the temp base itself, its parent, or any path that
-   * is no longer inside the configured temp base.
-   */
-  private static makeCleanup(exactRunDir: string): () => Promise<void> {
-    let cleaned = false;
-    const tempBase = path.resolve(this.getTempBase());
-
-    return async () => {
-      if (cleaned) return;
-      cleaned = true;
-
-      try {
-        const realDir = fs.realpathSync(exactRunDir);
-        const relToBase = path.relative(tempBase, realDir);
-
-        // Refuse if the captured dir escapes the temp base or equals it
-        if (!relToBase || relToBase.startsWith('..') || path.isAbsolute(relToBase)) return;
-        if (realDir === tempBase || realDir === path.dirname(tempBase)) return;
-
-        await fs.promises.rm(realDir, { recursive: true, force: true });
-      } catch {
-        // Directory may already be gone — ignore
-      }
-    };
-  }
-
-  // ─── PDF extraction ───────────────────────────────────────────────────────────
   public static async extractPdf(
     pdfPath: string,
     doOcr: boolean = false,
     abortSignal?: AbortSignal,
   ): Promise<DoclingRunResult> {
-    const pythonBin = this.getPythonBin();
+    const pythonBin = getDoclingPythonBin();
     const noopCleanup = async () => {};
 
     if (!pythonBin) {
@@ -187,8 +53,7 @@ export class DoclingClientService {
 
     let runDir: string;
     try {
-      const tempBase = this.getTempBase();
-      runDir = fs.mkdtempSync(path.join(tempBase, 'docling-'));
+      runDir = createDoclingRunDirectory();
     } catch {
       return {
         result: {
@@ -203,7 +68,7 @@ export class DoclingClientService {
       };
     }
 
-    const cleanup = this.makeCleanup(runDir);
+    const cleanup = createDoclingRunCleanup(runDir);
 
     return new Promise<DoclingRunResult>((resolve) => {
       const bundledArtifactsPath = path.resolve(path.dirname(pythonBin), '..', '..', 'models');
@@ -349,7 +214,6 @@ export class DoclingClientService {
             return;
           }
 
-          // Validate all artifact paths
           const realRunDir = path.resolve(runDir);
           const artifacts: import('../../types/docling.types').DoclingArtifactDescriptor[] = [];
 
@@ -368,7 +232,7 @@ export class DoclingClientService {
               continue;
             }
 
-            const validReal = this.validateArtifactPath(realRunDir, item.filePath);
+            const validReal = validateDoclingArtifactPath(realRunDir, item.filePath);
             if (!validReal) {
               await fail('ARTIFACT_INVALID', 'An extracted image artifact failed validation.');
               return;

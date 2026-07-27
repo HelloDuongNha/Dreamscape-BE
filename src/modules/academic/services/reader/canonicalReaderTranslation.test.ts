@@ -43,7 +43,7 @@ import mongoose from 'mongoose';
 import sourceRouter from '../../../../routes/sourceRoutes';
 import moderationRouter from '../../../../routes/moderationRoutes';
 import { getApprovedSourceTranslation } from '../../controllers/approvedSourceTranslation.controller';
-import { getSourcePreviewTranslation } from '../../controllers/moderationController';
+import { getSourcePreviewTranslation } from '../../controllers/sourcePreviewTranslation.controller';
 import { resolveApprovedSourceContext, resolvePreviewContributionContext } from './readerTranslationContext.service';
 import * as registry from './readerTranslationProvider.registry';
 import { parseTranslationDeadline, getTranslationDeadlineMs } from '../../../../config/translationConfig';

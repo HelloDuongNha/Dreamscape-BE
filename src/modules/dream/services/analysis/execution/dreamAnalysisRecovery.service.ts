@@ -1,12 +1,13 @@
+import { Types } from 'mongoose';
 import Dream from '../../../models/Dream';
 import { enqueueDreamAnalysis } from './dreamAnalysisQueue.service';
 import { composeDreamNarrative } from '../../content/dreamNarrative.service';
 
 type BackgroundRunner = (
-  dreamId: unknown,
+  dreamId: Types.ObjectId | string,
   userId: string,
   content: string,
-  sleepContext: unknown,
+  sleepContext: Record<string, any>,
   runId: string,
 ) => Promise<void>;
 
@@ -21,18 +22,18 @@ export async function recoverPendingDreamAnalysisQueue(
 
   let recovered = 0;
   for (const dream of pendingDreams) {
-    const runId = String((dream as any)?.analysisRun?.runId || '').trim();
-    const userId = String((dream as any)?.userId || '').trim();
+    const runId = String(dream.analysisRun?.runId || '').trim();
+    const userId = String(dream.userId || '').trim();
     if (!runId || !userId) continue;
     if (enqueueDreamAnalysis({
-      dreamId: String((dream as any)._id),
+      dreamId: String(dream._id),
       userId,
       runId,
       execute: () => runBackgroundAnalysis(
-        (dream as any)._id,
+        dream._id,
         userId,
-        composeDreamNarrative(String((dream as any).content || ''), Array.isArray((dream as any).additions) ? (dream as any).additions : []),
-        (dream as any).sleepContext || {},
+        composeDreamNarrative(String(dream.content || ''), dream.additions || []),
+        dream.sleepContext || {},
         runId,
       ),
     })) recovered += 1;

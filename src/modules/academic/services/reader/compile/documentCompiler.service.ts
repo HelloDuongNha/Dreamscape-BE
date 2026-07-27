@@ -17,6 +17,12 @@ export interface CompileExtractedDocumentInput {
   sourceType?: string;
   replacementRunId?: string;
   abortSignal?: AbortSignal;
+  buildTiming?: {
+    startedAt?: number;
+    estimatedDurationSeconds?: number;
+    pageCount?: number;
+    ocrUsed?: boolean;
+  };
 }
 
 export interface CompileExtractedDocumentResult {
@@ -154,6 +160,7 @@ export async function compileExtractedDocument(
       input.sourceType || 'pdf',
       isContribution,
       { runId: input.replacementRunId, abortSignal: input.abortSignal },
+      input.buildTiming,
     );
 
     // 5. Calculate statistics using shared dynamic pageCount helper

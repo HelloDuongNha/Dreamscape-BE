@@ -7,6 +7,16 @@ verification results, and the UI checks required before the next phase starts.
 ## Global safety rules
 
 - Refactor one complete user-facing capability at a time.
+- Write each coordinator as a top-down pipeline whose calls expose the complete
+  business flow without requiring the reader to inspect implementation details.
+- Route each meaningful conditional branch through a named handler instead of
+  placing multiple workflows inside one `if/else` block.
+- Keep one-use helpers below their coordinator; move a helper only when it owns
+  a distinct capability or is genuinely reused.
+- Handle invalid input, missing state, cancellation and terminal conditions
+  with early returns before the main success path.
+- Prefer explicit business types and names over `any`, nested type tricks or
+  abstractions created only to reduce line count.
 - Preserve routes, status codes, response fields, error messages, database
   write order, socket event names, and cancellation/rollback semantics.
 - DTO parsers initially reproduce existing coercion and defaults exactly.
@@ -1204,3 +1214,1011 @@ services/
 - Route contract: 99 feature routes + 1 health route preserved.
 - Full regression baseline: 26/26 contract files passed.
 - Post-edit backend and frontend impact scans: low aggregate risk.
+
+## A4 — Academic moderation and reader operations
+
+### Scope
+
+- Upload, stream, cache and remove a pending contribution's original PDF.
+- Build RAG chunks for a moderated source.
+- Delete a contribution or approved source with its derived data.
+- Import or replace a Smart Reader while preserving rollback behavior.
+- Load and translate the moderator's Smart Reader preview.
+
+### Before
+
+- `moderationController.ts` contained 1,810 lines and ten unrelated endpoint
+  families.
+- It retained dead PDF parsers, URL fetch helpers, storage imports and duplicate
+  comments after earlier functionality had moved elsewhere.
+- Reimport preflight treated only legacy Cloudinary files as stored PDFs, despite
+  current uploads using Firebase.
+- Approved and contribution import-job controllers repeated the same progress,
+  cancellation and execution code.
+
+### After
+
+```text
+controllers/
+├── contributionPdf.controller.ts
+├── moderationPdfUpload.controller.ts
+├── ragChunkBuild.controller.ts
+├── readerImport.controller.ts
+├── sourceDeletion.controller.ts
+├── sourcePreview.controller.ts
+└── sourcePreviewTranslation.controller.ts
+
+services/
+├── reader/ragChunkBuild.service.ts
+├── reader/ragChunkPlanning.service.ts
+├── reader/readerReimport.service.ts
+├── reader/sourcePreview.service.ts
+├── source/sourceDeletion.service.ts
+├── storage/contributionPdfDocument.service.ts
+├── storage/contributionPdfMutation.service.ts
+└── storage/moderationPdfUpload.service.ts
+```
+
+- `moderationController.ts` was removed; no compatibility wrapper remains.
+- Controllers are 26–105 lines. New services are 43–221 lines.
+- PDF import progress, cancel and process endpoints now share one internal
+  controller flow for both approved sources and pending contributions.
+- Reimport accepts the shared original-file abstraction, covering Firebase and
+  legacy Cloudinary assets without provider-specific eligibility logic.
+- Preview composition, translation transport, storage mutation, deletion and RAG
+  planning now have separate, named boundaries.
+
+### Locked behavior
+
+- Route paths, middleware order, response envelopes and public error codes remain
+  unchanged.
+- Reader replacement still stages new data, restores the previous reader on
+  failure or cancellation, and removes old derived Rule V3 data only after a
+  successful import.
+- Source deletion retains transaction fallback and only removes stored files
+  after database cleanup succeeds.
+- Canonical reader identity, block hashes and translation cancellation remain
+  byte-compatible with their existing contracts.
+- The response key `cloudinaryAssets` remains temporarily for API compatibility;
+  it now counts deleted stored original files regardless of provider.
+
+### Follow-up observations
+
+- `smartReaderImport.service.ts` (1,675 lines) is the next high-risk Academic
+  boundary: orchestration, parser selection, OCR cleanup and persistence remain
+  mixed.
+- `sourceImportResolver.service.ts`, `doclingReaderPolicy.service.ts`,
+  `originalPdfAsset.service.ts` and `htmlArticleParser.ts` still exceed the
+  service-size target and need capability-based extraction.
+- Several ingestion policies attach temporary flags through `as any`; these
+  should become an explicit intermediate type instead of accumulating hidden
+  object properties.
+- Legacy Cloudinary branches remain necessary for existing stored documents and
+  must not be deleted until migration data confirms they are unused.
+
+### UI acceptance checklist
+
+- Upload a PDF contribution, open its inline preview, cache it and delete it.
+- Start a pending contribution's Smart Reader import, reopen progress and cancel
+  it; confirm the previous reader remains available.
+- Reimport an approved Firebase-backed PDF and confirm the new reader replaces
+  the old one only after completion.
+- Open a pending source preview and switch reader pages/sections.
+- Translate selected preview blocks, then close the modal during translation to
+  confirm cancellation remains responsive.
+- Build RAG chunks and confirm the final chunk counts/status appear unchanged.
+- Delete both a pending contribution and an approved source.
+
+### Verification
+
+- Backend TypeScript: passed.
+- Route contract: 99 feature routes + 1 health route preserved.
+- Full regression baseline: 26/26 contract files passed.
+- Canonical Smart Reader identity: 213 assertions passed.
+- Git whitespace/error check: passed.
+
+## A5.1 — Reader source integrity and build provenance
+
+### Problem found
+
+- The “DOI / HTML / XML” action called a generic reimport pipeline that also
+  accepted an uploaded PDF.
+- When a structured source was blocked, the importer could silently select the
+  PDF parser, replace the current reader and still report the structured action
+  as successful.
+- The UI classified every PDF-like snapshot as “PDF · Docling”, even when the
+  actual engine was the older PDF parser.
+- Build duration lived only in a separate PDF timing history. The UI guessed
+  snapshot/timing pairs by nearby timestamps, so a build could show no duration
+  or inherit the wrong timing record.
+
+### Change
+
+- Added an explicit `structured_only` source policy to the shared import
+  contract.
+- DOI / HTML / XML endpoints now reject PDF candidates. A blocked or unavailable
+  structured source rolls back the replacement and keeps the existing reader.
+- The PDF pipeline may still try a structured source first, but only that
+  explicitly selected PDF workflow may continue to Docling fallback.
+- Reader snapshots now own their duration and optional estimate/page/OCR
+  provenance.
+- Snapshot persistence moved to
+  `reader/history/readerBuildHistory.service.ts`.
+- The history UI uses the real parser engine. Legacy PDF-parser builds are no
+  longer relabeled as Docling.
+- Repeated completion time, duration and reader-size fields were removed from
+  the expanded history content; the summary remains the single compact source
+  for those values.
+
+### Locked behavior
+
+- Existing readers remain protected by the replacement transaction and rollback
+  workflow.
+- Selecting “Rebuild from PDF (Docling)” still permits an intentional PDF
+  replacement.
+- Historical snapshots without recorded duration remain unchanged; duration is
+  never fabricated. Existing PDF timing samples are still used as a backward
+  compatibility fallback where an unambiguous match exists.
+- Reader chunk, section, canonical identity and Rule V3 contracts are unchanged.
+
+### UI acceptance checklist
+
+- On a PDF-backed source whose DOI host blocks access, choose “Re-import from
+  DOI / HTML / XML”. Confirm failure is reported and the existing PDF reader and
+  chunk count do not change.
+- Choose “Rebuild from PDF (Docling)” on the same source. Confirm it runs the PDF
+  workflow and the new history row says `PDF · Docling`.
+- Open reader-build history and confirm a new build has one completion time, one
+  size summary and a recorded duration.
+- Expand the row and confirm engine/source type are shown without repeating the
+  summary.
+- Switch English/Vietnamese and confirm the new history labels translate.
+
+### Verification
+
+- Backend TypeScript: passed.
+- Frontend production build: passed.
+- Route contract: 99 feature routes + 1 health route preserved.
+- Full regression baseline: 26/26 contract files passed.
+- Git whitespace/error checks: passed in both repositories.
+
+## A5.2 — Reader run history and source-selection boundary
+
+### Change
+
+- Reader build snapshots now record `success` or `failed`; failed attempts keep
+  their parser, source type, duration, failure code and safe failure message.
+- Failed PDF runs remain excluded from `pdfImportHistory`, because that history
+  is used only as successful processing-speed input for later estimates.
+- Reader and Argument history summaries now show only the run number, result
+  and duration. Dates moved into the expanded details.
+- Argument failures already persisted their sanitized error codes; the UI now
+  presents that existing reason in the same compact history structure.
+- Candidate grouping, structured-only policy enforcement, block
+  classification and deterministic source selection moved from the large
+  importer into `readerSourceSelection.service.ts`.
+- `smartReaderImport.service.ts` remains the orchestration entry point and
+  keeps its public `classifyBlock` export for compatibility.
+
+### Locked behavior
+
+- Existing successful history rows without `status` are treated as successful.
+- A failed attempt never replaces the current reader and never influences the
+  PDF duration estimator.
+- Source preference remains XML, clean publisher HTML, low-noise PDF, then the
+  same first-available fallback used before this extraction.
+
+### UI acceptance checklist
+
+- Open Reader builds and confirm the compact row no longer contains a date.
+- Expand a successful Reader build and confirm its completion time is shown.
+- Trigger a known blocked DOI / HTML / XML import and confirm a failed Reader
+  row appears with its reason while the previous reader remains unchanged.
+- Open Argument analysis runs and confirm compact rows omit the date; expand a
+  failed run and confirm its start time and stop reason are shown.
+
+## A5.3 — Structured candidate execution boundary
+
+### Change
+
+- Candidate download, temporary-file lifecycle, parser invocation,
+  normalization and quality diagnostics moved to
+  `readerCandidateExecution.service.ts`.
+- The executor keeps one ordered attempt log and reports whether any candidate
+  was blocked with HTTP 403.
+- `smartReaderImport.service.ts` now coordinates candidate collection,
+  execution, selection and persistence instead of implementing candidate I/O
+  inline.
+- Removed the unused synchronous Tesseract availability probe. Its result was
+  assigned but never read and had no effect on OCR or reader output.
+
+### Locked behavior
+
+- Candidate groups still run in the same order: PDF, XML, publisher HTML, then
+  generic HTML only when XML and publisher HTML both fail.
+- Uploaded PDFs still use the original-file storage adapter; network candidates
+  still use the SSRF-safe redirect fetcher.
+- Every temporary parser file is deleted in `finally`, including failed parser
+  attempts.
+- Parsing, normalization, quality scoring and candidate diagnostics use the
+  same services and fields as before.
+
+### UI acceptance checklist
+
+- Rebuild one uploaded PDF and confirm the resulting Reader content and history
+  engine remain Docling/PDF as expected.
+- Reimport one accessible DOI/XML source and confirm its structured reader is
+  selected.
+- Reimport one blocked source and confirm candidate failure details are
+  preserved and the old reader remains available.
+
+## A5.4 — Reader presentation, tables and figure ownership
+
+### Change
+
+- Reader HTML escaping and allow-list sanitization moved to
+  `readerHtml.service.ts`.
+- Linked Nature/Springer table retrieval, duplicate-table reconciliation and
+  final table markup moved to `readerTableProcessing.service.ts`.
+- Structured figure ownership conversion moved to
+  `readerFigureOwnership.service.ts`; the importer now passes blocks and the
+  transaction asset list instead of implementing uploads inline.
+- `smartReaderImport.service.ts` remains responsible for ordering these
+  capabilities and transactional reader persistence.
+
+### Locked behavior
+
+- Table links are fetched only for publisher/generic HTML sources and only when
+  structured table content is missing.
+- Duplicate tables retain the longer caption and prefer the latest available
+  table markup exactly as before.
+- Existing owned PMC figures are not uploaded again.
+- A successful figure upload preserves the existing caption/legend. Failed
+  uploads remove the external URL and retain the same caption-only fallback.
+- All generated table and figure markup passes through the same HTML allow-list.
+
+### UI acceptance checklist
+
+- Open a structured article with tables and confirm captions, table cells and
+  duplicate-table handling are unchanged.
+- Open a source with figures and confirm owned images still render.
+- Trigger a missing figure image and confirm the caption-only placeholder is
+  shown without persisting the publisher URL.
+
+## A5.5 — Figure reconciliation and image asset lifecycle
+
+### Change
+
+- Figure URL verification, retry classification, duplicate reconciliation and
+  final caption markup moved to `readerFigureReconciliation.service.ts`.
+- DOI-to-PMCID lookup, PMC page image mapping and Europe PMC archive recovery
+  moved to `readerPmcContext.service.ts`.
+- Persisted, used and obsolete reader-image asset tracking moved to
+  `readerImageAssetLifecycle.service.ts`.
+- `smartReaderImport.service.ts` is now 700 lines, down from 1,071 at the start
+  of this slice and 1,687 before the structured-import refactor.
+
+### Locked behavior
+
+- Image URLs still pass through the SSRF-safe fetcher and the same binary/SVG
+  checks before appearing in reader HTML.
+- Terminal image failures remain cached; transient failures retain the same
+  three-attempt limit and fallback to the original URL after a PMC mapping
+  fails.
+- Duplicate numbered figures still keep the longer caption and prefer the
+  current verified image over the earlier verified image.
+- Owned PMC archive images remain transaction-aware: failed imports delete new
+  uploads, successful replacements retain used assets and retire unused ones.
+- A PMCID collision is still used only as a transient import hint and is not
+  persisted onto the wrong source.
+
+### Verification
+
+- TypeScript compilation: passed.
+- Route contract: 99 feature routes plus the health route preserved.
+- Contract baseline: 26/26 suites passed.
+
+- CALM post-edit scan completed; the reported importer signature risk is from
+  the accumulated extraction diff, while its external call shape and verified
+  caller remain unchanged.
+
+### UI acceptance checklist
+
+- Reimport one PMC article containing duplicate numbered figures and confirm
+  each figure appears once with its caption.
+- Open a PMC reader after reimport and confirm image assets render instead of
+  external-link placeholders.
+- Cancel or fail a reimport after image preparation and confirm the previous
+  reader remains intact.
+- Reimport the same PMC source again and confirm no duplicate image rows or
+  missing previously retained figures appear.
+
+## A5.6 — Reader block cleanup pipeline
+
+### Change
+
+- Embedded-heading repair, endmatter removal, reference cleanup, orphan-heading
+  removal and consecutive-paragraph deduplication moved to
+  `readerBlockCleanup.service.ts`.
+- Figure/table number extraction now has one shared helper instead of a local
+  closure inside the import coordinator.
+- `smartReaderImport.service.ts` is now 457 lines; the cleanup service is 226
+  lines and contains only deterministic block transformations.
+
+### Locked behavior
+
+- Cleanup runs in the same order around table and figure reconciliation.
+- Endmatter mode begins and ends on the same headings and retains the same
+  short-metadata paragraph threshold.
+- Reference cleanup keeps the first reference heading, discards orphan
+  reference blocks, and applies the same junk, first-citation and duplicate
+  checks.
+- Orphan headings retain the original protected-heading list and three cleanup
+  passes.
+- Consecutive paragraph comparison keeps the same case and whitespace
+  normalization.
+
+### Verification
+
+- TypeScript compilation and diff whitespace checks passed.
+- Route contract: 99 feature routes plus the health route preserved.
+- Contract baseline: 26/26 suites passed.
+
+- CALM post-edit scan completed; importer callers remain unchanged.
+
+### UI acceptance checklist
+
+- Reimport an article with References and confirm one heading and the expected
+  citation list remain.
+- Reimport an article containing acknowledgements/funding and confirm those
+  endmatter sections do not appear in Smart Reader.
+- Open an article whose heading is embedded at the start of a paragraph and
+  confirm the heading and following paragraph render separately.
+- Confirm repeated adjacent paragraphs do not appear twice.
+
+## A5.7 — Reader reconciliation coordinator
+
+### Change
+
+- Source selection, article-block filtering, PDF/structured media enrichment,
+  boilerplate exclusion, reference restoration and final validity checks moved
+  to `readerReconciliation.service.ts`.
+- `smartReaderImport.service.ts` now coordinates candidate execution,
+  reconciliation, transactional persistence and the final response only.
+- The importer is 254 lines and reconciliation is 296 lines, both within the
+  service-size limits used for this refactor.
+
+### Locked behavior
+
+- Source priority and PDF artifact scoring remain delegated to the existing
+  selection service.
+- PDF remains the main body only when selected by the same policy; XML/HTML
+  still enrich numbered figures, tables and references.
+- Structured HTML still uses PDF headings to exclude publisher widgets when a
+  PDF is available.
+- Challenge pages, metadata-only readers and PDFs above the 30% artifact
+  threshold are rejected using the same conditions.
+- Import result messages, candidate attempts, resolver diagnostics and
+  transaction rollback behavior are unchanged.
+
+### Verification
+
+- TypeScript compilation and diff whitespace checks passed.
+- Route contract: 99 feature routes plus the health route preserved.
+- Contract baseline: 26/26 suites passed.
+- CALM post-edit scan completed; the external importer call shape and its
+  verified caller remain unchanged.
+
+### UI acceptance checklist
+
+- Reimport one clean DOI/XML article and confirm the structured reader is still
+  selected with the same sections.
+- Reimport one PDF whose XML/HTML contains figures or tables and confirm the PDF
+  body is enriched without duplicate media.
+- Retry a blocked or metadata-only source and confirm failure is reported while
+  the previous reader remains available.
+- Reimport an uploaded PDF and confirm Reader builds still records PDF/Docling,
+  section count, chunk count and duration.
+
+## A6.1 — Source import resolution
+
+### Change
+
+- `sourceImportResolver.service.ts` is now a 44-line priority dispatcher,
+  reduced from 680 lines.
+- Resolver request/response contracts moved to
+  `dto/sourceImport.dto.ts`, replacing the previously missing DTO boundary for
+  this workflow.
+- Crossref, Europe PMC, Google Books and Open Library calls moved to
+  `sourceMetadataProviders.service.ts`.
+- DOI/PMCID/ISBN policy, uploaded-PDF verification and web-URL crawling moved
+  to separate capability services.
+- Removed DOI locals that were assigned but never read and had no effect on the
+  returned source metadata.
+
+### Locked behavior
+
+- Input priority remains PMCID, DOI, uploaded PDF, ISBN, then URL.
+- Crossref and Europe PMC retain their nine-second timeout and existing
+  warning/fallback behavior.
+- Frontiers DOI URLs, Unpaywall Open Access selection and closed-access
+  warnings are unchanged.
+- Uploaded assets still require the same moderator identity, folder prefix and
+  raw-resource verification.
+- Web URLs retain SSRF checks, direct-PDF handling, safe redirects and the same
+  metadata-tag priority.
+
+### Verification
+
+- TypeScript compilation and diff whitespace checks passed.
+- Route contract: 99 feature routes plus the health route preserved.
+- Contract baseline: 26/26 suites passed.
+- CALM caller review confirmed all five production callers still use the same
+  two-argument function contract.
+
+### UI acceptance checklist
+
+- Preview one DOI and confirm title, authors, journal and Open Access status.
+- Preview one PMCID and confirm Europe PMC XML/HTML/PDF links remain available.
+- Preview one ISBN and confirm it remains metadata-only.
+- Preview a normal web URL, an unsafe URL and a direct PDF URL; confirm their
+  three distinct results remain unchanged.
+- Upload one PDF contribution and confirm asset verification and metadata
+  preview still succeed.
+
+## A6.2 — Docling reader policy
+
+### Change
+
+- Replaced the 643-line `doclingReaderPolicy.service.ts` implementation with a
+  38-line compatibility facade, so the adapter and existing tests keep the
+  same public API.
+- Moved reading-order repair, reference-boundary recovery and front-matter
+  marking to `doclingReaderOrder.service.ts`.
+- Moved table-caption association and numbered, clustered or untitled figure
+  handling to `doclingCaptionPolicy.service.ts`.
+- Moved the final keep/exclude decision for each normalized block to
+  `doclingItemPolicy.service.ts`.
+- The resulting services are 206, 207 and 166 lines; no replacement service
+  exceeds the module's service-size limit.
+
+### Locked behavior
+
+- Abstract/Introduction ordering and reference-fragment merging use the same
+  conditions and preserve the same item mutations.
+- Author, affiliation, keyword, page-furniture and damaged distribution-notice
+  filtering use the same patterns.
+- Table captions retain the same spatial gap and overlap thresholds.
+- Numbered and captionless figures retain the same sequence, size, aspect
+  ratio, page-area, duplicate-image and body-prose checks.
+- `DoclingReaderPolicyService` still exposes the five methods consumed by the
+  adapter and contract tests.
+
+### Verification
+
+- TypeScript compilation and diff whitespace checks passed.
+- Route contract: 99 feature routes plus the health route preserved.
+- Contract baseline: 26/26 suites passed.
+- Docling reader policy contract: 28/28 assertions passed.
+- CALM pre-edit review identified the adapter and policy tests as the complete
+  caller surface. Its post-edit transport closed while receiving the scoped
+  raw diff, so this run does not claim a completed CALM post-edit scan.
+
+### UI acceptance checklist
+
+- Reimport one two-column academic PDF and confirm Abstract appears before
+  Introduction without reordering later sections.
+- Open a reader containing a table and confirm its caption appears once above
+  the correct table.
+- Open a reader containing numbered figures and confirm captions attach to the
+  correct images without duplicate loose paragraphs.
+- Open a scanned illustrated book and confirm substantial captionless images
+  remain while repeated logos and decorative images remain excluded.
+- Confirm Reader builds still records the same section count, chunk count,
+  parser engine and completion state for the same source.
+
+## A6.3 — Original PDF asset cache
+
+### Change
+
+- Reduced `originalPdfAsset.service.ts` from 529 lines to a 26-line facade.
+- Removed the duplicated source/contribution cache implementations; both now
+  load their own model and call one shared cache workflow.
+- Moved the request/result contract to `dto/originalPdfAsset.dto.ts`.
+- Moved PDF candidate discovery and stored-asset validation to
+  `originalPdfCandidate.service.ts`.
+- Moved PMC landing-page resolution, publisher-block detection and strict PDF
+  byte validation to `originalPdfFetch.service.ts`.
+- Moved temporary-file, upload, save, old-asset cleanup and rollback ordering
+  to `originalPdfCacheWorkflow.service.ts`.
+
+### Locked behavior
+
+- Candidate priority remains source PDF, PMC PDF/HTML, supported Wiley DOI and
+  direct PDF-like source URLs.
+- Cloudinary URLs remain excluded from automatic external-source candidates.
+- reCAPTCHA, publisher-blocked, preparing-download, HTML-not-PDF and fetch
+  failure reasons remain distinct.
+- A response is accepted when its content type is PDF or its bytes begin with
+  the PDF magic header.
+- The previous stored asset is deleted only after the replacement has uploaded
+  and the document save has succeeded.
+- Temporary files are removed in `finally`, including upload or save failures.
+- Controller-facing function names, parameters, result fields and localized
+  messages remain unchanged.
+
+### Verification
+
+- TypeScript compilation and diff whitespace checks passed.
+- Route contract: 99 feature routes plus the health route preserved.
+- Contract baseline: 26/26 suites passed.
+- CALM post-edit review found only the two existing controller callers. Its
+  high aggregate label comes from replacing inline return types with the named
+  but structurally identical DTO, not from a runtime parameter change.
+
+### UI acceptance checklist
+
+- Cache a PDF for an approved source and confirm the success state and PDF
+  viewer remain unchanged.
+- Cache a PDF for a pending contribution and confirm its preview updates.
+- Retry a source whose publisher blocks automated downloads and confirm the
+  precise attempted-source failure remains visible.
+- Force-refresh a source with an existing PDF, simulate a failed download and
+  confirm the old PDF remains readable.
+- Force-refresh successfully and confirm the replacement is stored before the
+  previous asset is removed.
+
+## A6.4 — Uploaded PDF import orchestration
+
+### Change
+
+- Reduced `uploadedPdfImport.service.ts` from 513 lines to 230 lines while
+  preserving `runUploadedPdfImport` and `cancelUploadedPdfImport` as its public
+  entry points.
+- Moved the request/result contract to `dto/uploadedPdfImport.dto.ts`.
+- Moved active-task registration, durable cancellation and terminal-state
+  waiting to `uploadedPdfImportTask.service.ts`.
+- Moved replacement commit, rollback, generated-image cleanup and failed-build
+  history recording to `uploadedPdfImportLifecycle.service.ts`.
+- Moved contribution/source loading and status/metadata updates to
+  `uploadedPdfTarget.service.ts`.
+- Moved the structured JATS/HTML attempt to
+  `uploadedPdfStructuredImport.service.ts`.
+- Moved the Docling compile branch, stage progress and result mapping to
+  `uploadedPdfDoclingImport.service.ts`.
+- Replaced the shared Mongoose target `any` values with the explicit
+  `UploadedPdfTarget` union and named accessors for owner, identifiers and the
+  stored original PDF.
+- Removed inherited numbered-step comments; the coordinator now reads directly
+  as validation, inspection, optional structured import and Docling fallback.
+- Reordered the moderation actions in both the pending-source list and the
+  moderation preview so `Duyệt` appears above `Từ chối`; button variants,
+  validation and review handlers are unchanged.
+
+### Locked behavior
+
+- One active import remains registered per target; cancellation still waits
+  for the replacement journal to reach a safe terminal state.
+- A cancelled or failed replacement removes only newly created image assets
+  and restores the previous reader.
+- Rule-derived data is backed up and removed only immediately before a
+  successful replacement commit.
+- JATS/HTML remains an optional first attempt and falls back to Docling when
+  the structured import does not succeed.
+- Text-layer inspection still decides whether Docling OCR is required.
+- Progress stages, duration estimates, success/failure history and localized
+  controller-facing result fields keep their existing contracts.
+- A compile-result failure still propagates a progress-finalization failure;
+  the generic catch path remains best-effort, matching the previous behavior.
+
+### Verification
+
+- Backend TypeScript compilation passed.
+- Route contract: 99 feature routes plus the health route preserved.
+- Contract baseline: 26/26 suites passed.
+- Frontend production build passed.
+- Backend and frontend diff whitespace checks passed.
+- CALM post-edit review reported low aggregate code-impact risk for the
+  extracted orchestration and low UI risk for the button reorder.
+
+### UI acceptance checklist
+
+- Open both the pending-source list and a moderation preview; confirm `Duyệt`
+  is above `Từ chối` and each action still uses its matching review flow.
+- Import one text-layer PDF and confirm it builds with Docling without OCR.
+- Import one scanned PDF and confirm OCR is selected automatically.
+- Use a source with structured metadata and confirm successful JATS/HTML import
+  remains possible; when it fails, confirm the same job falls back to Docling.
+- Cancel an import after processing begins and confirm the cancellation state
+  appears only after partial output is removed and the previous reader returns.
+- Force a compile failure and confirm Reader builds records the failure reason,
+  while the previous reader and its images remain available.
+- Reimport successfully and confirm progress, duration, parser source, section
+  count and chunk count remain visible in Reader builds.
+
+## A6.5 — Remove the orphaned legacy HTML parser
+
+### Audit result
+
+- `htmlArticleParser.ts` contained 487 lines of older Frontiers, PLOS, PMC and
+  generic HTML parsing logic.
+- Repository search found no import, route, controller, service or test caller.
+- The only matches reported by static indexing were self-references inside the
+  file. The active structured-reader pipeline uses its own JATS, publisher HTML
+  and generic HTML parsers.
+
+### Change
+
+- Removed the unreferenced `htmlArticleParser.ts` instead of splitting and
+  preserving dead code.
+- No replacement wrapper or placeholder was added because no compatibility
+  import exists.
+
+### Locked behavior
+
+- Active Frontiers, JATS/XML, publisher HTML and generic HTML parsing remains
+  implemented by the structured ingestion parsers.
+- Source resolution, DOI/HTML reimport, structured-only enforcement and
+  Docling fallback are unchanged.
+
+### Verification
+
+- Backend TypeScript compilation passed after deletion.
+- Route contract: 99 feature routes plus the health route preserved.
+- Contract baseline: 26/26 suites passed.
+- CALM found no affected production symbol and reported low aggregate risk.
+
+### UI acceptance checklist
+
+- Reimport one accessible DOI/XML article and confirm its structured reader is
+  still created.
+- Reimport one supported publisher HTML article and confirm its headings,
+  paragraphs, tables and figures remain available.
+- Retry one blocked structured source and confirm the existing reader is kept.
+
+## A6.6 — PDF metadata enrichment
+
+### Change
+
+- Reduced `pdfMetadataEnrichment.service.ts` from 430 lines to a 152-line
+  coordinator whose main function exposes the complete enrichment pipeline.
+- Moved the request/result boundary to `dto/pdfMetadataEnrichment.dto.ts`.
+- Moved DOI, PMCID and ISBN normalization, conflict detection and resolver
+  input construction to `pdfMetadataIdentifier.service.ts`.
+- Moved canonical-first title, author, year, publisher, language and URL
+  selection to `pdfMetadataSelection.service.ts`.
+- Moved target loading, contribution status transitions, duplicate PMCID
+  checks and model-specific persistence to
+  `pdfMetadataPersistence.service.ts`.
+- Replaced production `any` values in this metadata group with named DTOs and
+  a typed Mongoose document boundary.
+- Replaced repeated identifier branches with one typed reconciliation policy;
+  each identifier still supplies its own normalizer and label.
+- Simplified `pdfMetadataDetector.service.ts` comments and replaced its
+  untyped existing-metadata argument with a small explicit interface.
+
+### Locked behavior
+
+- Stored canonical metadata remains stronger than resolver metadata, which
+  remains stronger than embedded PDF hints.
+- A detected identifier that conflicts with an existing identifier still
+  blocks the external resolver and produces the same warning.
+- An incomplete source can still use its existing identifier to retrieve
+  missing metadata.
+- PMCID uniqueness is checked against the correct collection before it is
+  persisted; a duplicate keeps the previous identifier.
+- Resolver failure remains non-fatal: PDF import continues and records a
+  warning.
+- Cloudinary asset URLs remain excluded from external article, HTML and PDF
+  metadata fields.
+- Structured-source preference remains JATS first, then HTML, then PDF text.
+- Contribution-only extraction states and detected identifiers are not written
+  to approved academic sources.
+
+### Verification
+
+- Backend TypeScript compilation passed.
+- Route contract: 99 feature routes plus the health route preserved.
+- Contract baseline: 26/26 suites passed.
+- Six focused in-memory assertions passed for matching DOI normalization,
+  identifier conflict blocking, resolver-title priority and structured-source
+  selection.
+- Strict unused-symbol compilation reported no issue in the new metadata
+  files.
+- CALM post-edit review reported low aggregate impact; its standalone server
+  could not resolve the nested backend Git root, so the review used the scoped
+  raw diff instead of the working-tree shortcut.
+
+### UI acceptance checklist
+
+- Import a PDF whose detected DOI matches its stored DOI and confirm missing
+  title, authors or year are filled without an identifier warning.
+- Import a PDF whose detected DOI conflicts with the stored DOI and confirm the
+  original DOI remains visible with a conflict warning.
+- Import a PMCID source that already belongs to another contribution/source
+  and confirm the duplicate is not persisted.
+- Import an ISBN book and confirm it remains metadata-only while its book
+  metadata can still be filled.
+- Simulate resolver failure and confirm Docling import continues from the PDF
+  rather than reporting the whole reader build as failed.
+- Confirm a source with usable JATS or HTML metadata still attempts that source
+  before the Docling fallback.
+
+## Cross-module pipeline-style audit
+
+### Finding
+
+- Earlier phases consistently preserved behavior and established capability
+  boundaries, but not every coordinator yet followed the project's explicit
+  top-down pipeline style.
+- The Dream output finalizer already exposed a clear sequence of grounding
+  steps. The main analysis and background runner still mixed those high-level
+  steps with progress reporting, audit construction, persistence and error
+  handling.
+- Academic A6.3–A6.6 coordinators follow the intended style. Earlier
+  contribution approval/submission, structured-reader import and reader
+  reimport services still require the same style and type cleanup in their
+  owning future correction phases.
+
+### Dream correction
+
+- Rewrote `runDreamAnalysis` as the visible sequence: prepare profile, retrieve
+  dream context, retrieve grounded rules, build prompt, generate and validate,
+  then build the audit result.
+- Moved audit-result construction into
+  `dreamAnalysisResult.service.ts`, a distinct persistence-response capability,
+  instead of hiding it inside the main analysis function.
+- Rewrote `runBackgroundAnalysis` as start, execute, commit, finalize and
+  failure handling while preserving the run fence and write order.
+- Removed untyped casts from pending-run recovery and gave the recovered
+  background runner its actual Dream ID and sleep-context contract.
+
+### Verification
+
+- Backend TypeScript compilation passed.
+- Route contract: 99 feature routes plus the health route preserved.
+- Contract baseline: 26/26 suites passed, including all four Dream suites.
+- Git whitespace checks passed.
+- CALM scoped post-edit review reported low aggregate impact.
+
+## Academic contribution pipeline correction
+
+### Change
+
+- Rewrote source submission as the visible sequence: resolve source, build
+  identity conditions, handle an existing source/contribution, persist a new
+  contribution, then record submission statistics.
+- Moved duplicate-race persistence and rejected-contribution reactivation to
+  `contributionSubmissionPersistence.service.ts`.
+- Rewrote approval as the visible sequence: reject a duplicate, prepare the
+  contribution, save the academic source, mark the contribution approved,
+  record statistics, then promote or import its reader.
+- Moved metadata normalization, reader-state preparation and AcademicSource
+  construction to `contributionApprovalPreparation.service.ts`.
+- Added `contributionWorkflow.dto.ts` so submission and approval no longer use
+  untyped request, contribution, metadata or outcome values.
+- Typed the review and approval-finalization boundaries and replaced the
+  approval error cast with an unknown-safe message helper.
+
+### Locked behavior
+
+- Duplicate checks retain their original priority: approved source, active
+  contribution, then rejected contribution reactivation.
+- Unique-index collision recovery still re-queries the same identity fields
+  and returns the same duplicate/reactivation responses.
+- Approval still saves AcademicSource before updating SourceContribution.
+- Preview reader promotion still moves the document, sections and chunks
+  before recording the final reader status and counts.
+- Full-text auto-import remains best-effort after approval and preserves all
+  metadata-only, hybrid and copyright result codes.
+- A preview contribution still in the transient `importing` state becomes
+  `imported` when its already-built preview reader is promoted; this avoids
+  writing a value rejected by the AcademicSource schema.
+
+### Verification
+
+- Backend TypeScript compilation passed.
+- Route contract: 99 feature routes plus the health route preserved.
+- Contract baseline: 26/26 suites passed.
+- Manual caller review confirmed submission, preview and review controllers
+  remain the only external callers and keep the same argument order.
+- CALM scoped review found no unindexed file and identified the expected high
+  signature risk from replacing `any` with concrete contracts; compilation,
+  caller review and the full baseline cover those call sites.
+
+### UI acceptance checklist
+
+- Preview and submit a new DOI or URL contribution.
+- Submit the same approved source and confirm the existing-source warning.
+- Submit the same pending contribution and confirm the pending warning.
+- Resubmit a rejected contribution and confirm it returns to the pending list.
+- Approve a metadata-only source and confirm it remains readable only when
+  full text is actually available.
+- Approve an uploaded PDF or preview reader and confirm its reader, chunks,
+  statistics and approval response remain available.
+
+## Academic structured reader re-import correction
+
+### Change
+
+- Rewrote `reimportReader` as the visible sequence: load target, resolve a
+  structured candidate, create the replacement context, import, then either
+  commit or roll back.
+- Moved stored URL, legacy AcademicDocument URL and DOI/PMCID candidate
+  recovery to `readerReimportCandidate.service.ts`.
+- Added `readerReimport.dto.ts` for the source, candidate and response
+  boundaries.
+- Replaced inline failure, commit and exception branches with named handlers;
+  the workflow function is now at the top of the file.
+- Removed untyped filters, source candidates, document reads and error casts
+  from this coordinator.
+
+### Locked behavior
+
+- Candidate priority remains source fields, legacy document fields, DOI
+  resolution, then identifier-derived structured candidates.
+- Direct PDF URLs remain excluded from this structured-only action.
+- A replacement run is still created only after a usable candidate exists.
+- Failed or cancelled imports still remove newly created images and restore
+  the previous reader snapshot.
+- Sources without an existing reader still receive the same failed state;
+  sources with an existing reader keep it.
+- Rule V3 evidence is backed up and removed only after the new reader import
+  succeeds, immediately before replacement commit.
+- Old reader images are deleted only after a successful commit.
+
+### Verification
+
+- Backend TypeScript compilation passed.
+- Route contract: 99 feature routes plus the health route preserved.
+- Contract baseline: 26/26 suites passed.
+- CALM scoped review reported medium structural risk for the new coordinator
+  contracts and no unindexed files; both controller callers keep the same
+  `reimportReader(sourceId, moderatorId)` signature.
+
+### UI acceptance checklist
+
+- Use `Nhập từ DOI/HTML` on a source with a valid structured URL and confirm
+  the reader is replaced successfully.
+- Use it on a source with only a PDF and confirm the structured-source error
+  still recommends Docling instead of reporting success.
+- Force a blocked or invalid structured source and confirm the previous reader
+  remains visible.
+- Cancel during re-import and confirm the previous reader and its images return.
+- Complete a re-import and confirm old Rule V3 data is cleared only after the
+  replacement succeeds.
+
+## Academic reader ownership cleanup
+
+### Change
+
+- Added one owner-based cleanup pipeline for approved sources and preview
+  contributions.
+- Source deletion now discovers every linked contribution before removing
+  documents, sections, chunks, Rule V3 data, reader images and stored PDFs.
+- Contribution rejection now clears reader build history and import progress
+  together with the persisted reader.
+- Active reader replacement runs are cancelled and rolled back before cleanup;
+  their backups and terminal run records are then removed.
+- Reader images and original files are deleted only after database cleanup and
+  only when no remaining source still references them.
+- Moderation preview now places Reject on the left and Approve on the right.
+
+### Data repair
+
+- The read-only audit found 8 ownerless documents, 235 ownerless sections,
+  5 ownerless replacement runs and 1 rejected contribution with Reader history.
+- The one-time repair used the owner cleanup pipeline, then removed its
+  temporary script.
+- The verification audit returned zero for orphan documents, sections, chunks,
+  replacement runs and rejected contributions retaining Reader history.
+
+### Locked behavior
+
+- Public source deletion and contribution review routes are unchanged.
+- MongoDB replica deployments keep transactional deletion; standalone
+  deployments keep ordered deletion.
+- Duplicate DOI contributions and contributions linked to an approved source
+  are cleaned as one ownership group, preventing stale reader data on re-add.
+- A file or image shared by another surviving source is preserved.
+
+### Verification
+
+- Backend TypeScript compilation passed.
+- Frontend production build passed.
+- Route contract: 99 feature routes plus the health route preserved.
+- Contract baseline: 26/26 suites passed.
+
+## A7.1 — Canonical Reader translation execution
+
+### Change
+
+- Kept `translateReaderTargets` as the visible translation pipeline and reduced
+  it from 461 to 259 lines.
+- Moved provider batching, concurrency, timeout, client abort and output-size
+  enforcement to `readerTranslationExecution.service.ts`.
+- Moved translated/failed target mapping and final response construction to
+  `readerTranslationResponse.service.ts`.
+- Removed the generated phase banner and kept the public service signature
+  unchanged.
+- Corrected the moderation-list action order to Preview, Reject, Approve.
+- Made pending moderation cards keyboard-accessible preview links while
+  preserving independent PDF links, buttons and form controls inside them.
+
+### Locked behavior
+
+- Approved and moderation-preview routes still use the same translation entry
+  point and canonical identity checks.
+- Provider resolution, batch size, concurrency, timeout, protected-token
+  checks and cumulative output limits are unchanged.
+- Translation remains an in-memory display overlay and performs no database
+  writes.
+
+### Verification
+
+- Backend TypeScript compilation passed.
+- Canonical Reader translation contract: 131/131 assertions passed.
+- Frontend production build passed.
+
+## A7.2 — Academic closure audit and Docling boundaries
+
+### Change
+
+- Split Docling runtime probing, temporary workspace safety, canonical text
+  flow and import support out of the client, adapter and import pipeline.
+- Reduced the three mixed Docling files from 396/367/364 lines to
+  260/212/197 lines without changing their public entry points.
+- Moved the shared item-policy result type out of the reader-policy facade,
+  removing the final import cycle inside the Academic module.
+- Kept JATS and Frontiers traversal intact because each is one stateful DOM
+  parser and currently has no direct parser fixture suite; splitting either
+  during this behavior-preserving phase would add risk without a contract.
+
+### Locked behavior
+
+- `DoclingClientService.isAvailable`, `DoclingClientService.extractPdf`,
+  `DoclingAdapterService.mapToCanonicalBlocks` and `runDoclingPdfImport`
+  retain their signatures.
+- OCR selection, timeout, cancellation, artifact validation, figure upload,
+  reader compilation, title detection and rollback order are unchanged.
+- Academic routes, controller response contracts and database ownership
+  cleanup remain unchanged.
+
+### Verification
+
+- Academic structure contains 17 controllers, 10 DTO files, 7 models and
+  capability-grouped services; the largest controller is 107 lines.
+- DTO files contain validation contracts rather than empty placeholders.
+- Academic dependency audit: 158 production TypeScript files and zero cycles.
+- Docling contracts: metadata 2/2, text repair 15/15 and reader policy 28/28.
+- Backend TypeScript compilation passed.
+- Route contract: 99 feature routes plus the health route preserved.
+- Contract baseline: 26/26 suites passed.
+
+## A7.3 — Academic contribution entry
+
+### Change
+
+- Reduced the contribution entry screen from four choices to two:
+  PDF upload first, followed by DOI/PMCID/academic-link lookup.
+- Replaced the separate DOI and URL forms with one input that normalizes raw
+  DOI, doi.org URLs, PMCID and article URLs into the existing resolver request.
+- Removed the ISBN choice, state, validation, preview row and submit field from
+  the active frontend contribution flow.
+- Delayed lookup validation and server errors until the user submits with the
+  button or Enter; editing the input clears the previous error.
+- Kept backend ISBN metadata support for existing records and identifiers
+  detected inside uploaded PDFs.
+
+### Locked behavior
+
+- PDF contributions still use the existing upload-preview-confirm pipeline.
+- DOI, PMCID and academic links still use the same preview and contribution
+  endpoints, followed by the DOI/HTML/XML reader pipeline after moderation.
+- The metadata confirmation screen and duplicate-source handling are unchanged.
+
+### Verification
+
+- Frontend TypeScript and production build passed.
+- DOI, PMCID, doi.org URL, publisher article URL and invalid-input normalization
+  were checked directly.

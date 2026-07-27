@@ -1,13 +1,124 @@
 import { deleteAsset } from '../../../../infrastructure/storage/cloudinaryStorage.service';
-import { removeRuleV3SourceData } from '../../../rules_v3/services/ruleV3Lifecycle.service';
-import AcademicChunk from '../../models/AcademicChunk';
-import AcademicDocument from '../../models/AcademicDocument';
-import AcademicSection from '../../models/AcademicSection';
+import {
+  deleteReaderOwnedAssets,
+  deleteReaderOwnedDatabaseData,
+  prepareReaderOwnedDataCleanup,
+} from '../reader/persistence/readerOwnedDataCleanup.service';
 import { mapSourceOriginAndUrls } from '../source/academicSourceResponse.service';
 import { recordRejection } from './contributionStats.service';
 
 interface RejectionBackup {
   [key: string]: unknown;
+}
+
+export async function rejectSourceContribution(
+  contribution: any,
+  reviewerId: any,
+  reviewNote: string,
+  reviewNoteProvided: boolean,
+  previousStatus: string,
+) {
+  const backup = captureRejectionBackup(contribution);
+  const originalFile = contribution.originalFile;
+
+  applyRejectedState(contribution, reviewerId, reviewNote, reviewNoteProvided);
+  try {
+    await contribution.save();
+  } catch (error) {
+    restoreRejectionBackup(contribution, backup);
+    throw error;
+  }
+
+  const fileFailure = await deleteRejectedOriginalFile(contribution, originalFile, backup);
+  if (fileFailure) return fileFailure;
+
+  const readerCleanup = await prepareReaderOwnedDataCleanup({
+    targetType: 'contribution',
+    targetId: contribution._id,
+  });
+  await deleteReaderOwnedDatabaseData(readerCleanup.owner);
+  await deleteReaderOwnedAssets(readerCleanup);
+  await recordRejectionIfNeeded(contribution, previousStatus);
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      message: 'Source contribution rejected.',
+      data: { contribution: mapSourceOriginAndUrls(contribution) },
+    },
+  };
+}
+
+function applyRejectedState(
+  contribution: any,
+  reviewerId: any,
+  reviewNote: string,
+  reviewNoteProvided: boolean,
+): void {
+  contribution.reviewStatus = 'rejected';
+  contribution.reviewedBy = reviewerId;
+  contribution.reviewedAt = new Date();
+  if (reviewNoteProvided) contribution.reviewNote = reviewNote || undefined;
+  clearRejectedReaderState(contribution);
+  if (contribution.originalFile?.storageProvider === 'cloudinary') {
+    contribution.originalFile = undefined;
+  }
+}
+
+async function deleteRejectedOriginalFile(
+  contribution: any,
+  originalFile: any,
+  backup: RejectionBackup,
+): Promise<{ status: number; body: Record<string, unknown> } | null> {
+  const publicId = originalFile?.cloudinaryPublicId;
+  if (originalFile?.storageProvider !== 'cloudinary' || !publicId) return null;
+
+  try {
+    await deleteAsset(publicId, originalFile.cloudinaryResourceType || 'raw');
+    return null;
+  } catch (error: any) {
+    const message = String(error.message || '').toLowerCase();
+    if (message.includes('not found') || message.includes('not_found')) return null;
+    return restoreAfterFileDeletionFailure(contribution, backup, error);
+  }
+}
+
+async function restoreAfterFileDeletionFailure(
+  contribution: any,
+  backup: RejectionBackup,
+  deletionError: any,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  try {
+    restoreRejectionBackup(contribution, backup);
+    await contribution.save();
+  } catch (restoreError: any) {
+    return {
+      status: 500,
+      body: {
+        success: false,
+        message: `Lỗi nghiêm trọng: Xóa tệp Cloudinary thất bại và không thể phục hồi trạng thái cơ sở dữ liệu về ban đầu: ${restoreError.message || restoreError}`,
+        error: restoreError.message || restoreError,
+      },
+    };
+  }
+  return {
+    status: 500,
+    body: {
+      success: false,
+      message: `Không thể xóa tệp PDF gốc lưu trên Cloudinary: ${deletionError.message || deletionError}`,
+      error: deletionError.message || deletionError,
+    },
+  };
+}
+
+async function recordRejectionIfNeeded(contribution: any, previousStatus: string): Promise<void> {
+  if (previousStatus === 'rejected') return;
+  try {
+    await recordRejection(contribution.submittedBy.toString());
+  } catch (error) {
+    console.error('Failed to record contribution rejection:', error);
+  }
 }
 
 function captureRejectionBackup(contribution: any): RejectionBackup {
@@ -30,6 +141,9 @@ function captureRejectionBackup(contribution: any): RejectionBackup {
     'pdfPageCount',
     'detectedLanguage',
     'detectedIdentifiers',
+    'readerBuildSnapshots',
+    'pdfImportProgress',
+    'pdfImportHistory',
   ];
   return Object.fromEntries(fields.map(field => [field, contribution[field]]));
 }
@@ -48,10 +162,10 @@ function clearRejectedReaderState(contribution: any): void {
   contribution.pdfPageCount = undefined;
   contribution.detectedLanguage = undefined;
   contribution.detectedIdentifiers = undefined;
+  contribution.readerBuildSnapshots = undefined;
+  contribution.pdfImportProgress = undefined;
+  contribution.pdfImportHistory = undefined;
 
-  const isCloudinaryUrl = (url?: string) => Boolean(
-    url && (url.includes('cloudinary.com') || url.includes('res.cloudinary.com')),
-  );
   if (isCloudinaryUrl(contribution.pdfUrl)) contribution.pdfUrl = undefined;
   if (isCloudinaryUrl(contribution.htmlUrl)) contribution.htmlUrl = undefined;
   if (isCloudinaryUrl(contribution.url)) {
@@ -60,91 +174,9 @@ function clearRejectedReaderState(contribution: any): void {
   }
 }
 
-export async function rejectSourceContribution(
-  contribution: any,
-  reviewerId: any,
-  reviewNote: string,
-  reviewNoteProvided: boolean,
-  previousStatus: string,
-) {
-  const backup = captureRejectionBackup(contribution);
-  const originalFile = contribution.originalFile;
-  const cloudinaryFile = originalFile?.storageProvider === 'cloudinary';
-  const publicId = originalFile?.cloudinaryPublicId;
-  const resourceType = originalFile?.cloudinaryResourceType || 'raw';
-
-  contribution.reviewStatus = 'rejected';
-  contribution.reviewedBy = reviewerId;
-  contribution.reviewedAt = new Date();
-  if (reviewNoteProvided) contribution.reviewNote = reviewNote || undefined;
-  clearRejectedReaderState(contribution);
-  if (cloudinaryFile) contribution.originalFile = undefined;
-
-  try {
-    await contribution.save();
-  } catch (error) {
-    restoreRejectionBackup(contribution, backup);
-    throw error;
-  }
-
-  if (cloudinaryFile && publicId) {
-    try {
-      await deleteAsset(publicId, resourceType);
-      console.log(`Successfully deleted Cloudinary asset for rejected contribution: ${publicId}`);
-    } catch (error: any) {
-      const message = String(error.message || '').toLowerCase();
-      if (message.includes('not found') || message.includes('not_found')) {
-        console.log('Cloudinary asset was already deleted.');
-      } else {
-        console.error('Failed to delete Cloudinary asset, restoring database state:', error);
-        try {
-          restoreRejectionBackup(contribution, backup);
-          await contribution.save();
-        } catch (restoreError: any) {
-          console.error(
-            'Critically failed to restore DB state after Cloudinary deletion failure:',
-            restoreError,
-          );
-          return {
-            status: 500,
-            body: {
-              success: false,
-              message: `Lỗi nghiêm trọng: Xóa tệp Cloudinary thất bại và không thể phục hồi trạng thái cơ sở dữ liệu về ban đầu: ${restoreError.message || restoreError}`,
-              error: restoreError.message || restoreError,
-            },
-          };
-        }
-        return {
-          status: 500,
-          body: {
-            success: false,
-            message: `Không thể xóa tệp PDF gốc lưu trên Cloudinary: ${error.message || error}`,
-            error: error.message || error,
-          },
-        };
-      }
-    }
-  }
-
-  await removeRuleV3SourceData(String(contribution._id), { deleteRunHistory: true });
-  await AcademicDocument.deleteMany({ previewContributionId: contribution._id });
-  await AcademicSection.deleteMany({ previewContributionId: contribution._id });
-  await AcademicChunk.deleteMany({ previewContributionId: contribution._id });
-
-  if (previousStatus !== 'rejected') {
-    try {
-      await recordRejection(contribution.submittedBy.toString());
-    } catch (error) {
-      console.error('Failed to record contribution rejection:', error);
-    }
-  }
-
-  return {
-    status: 200,
-    body: {
-      success: true,
-      message: 'Source contribution rejected.',
-      data: { contribution: mapSourceOriginAndUrls(contribution) },
-    },
-  };
+function isCloudinaryUrl(url?: string): boolean {
+  return Boolean(url && (
+    url.includes('cloudinary.com')
+    || url.includes('res.cloudinary.com')
+  ));
 }

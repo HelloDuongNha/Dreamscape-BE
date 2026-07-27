@@ -2,20 +2,26 @@ import { Router } from 'express';
 import authMiddleware, { isModerator } from '../middleware/authMiddleware';
 import {
   importFullText,
-  buildChunks,
-  uploadPdfMiddleware,
-  uploadPdfFile,
-  deleteSource,
   reimportFullText,
-  getSourcePreview,
-  getContributionPdfInline,
+} from '../modules/academic/controllers/readerImport.controller';
+import { getSourcePreview } from '../modules/academic/controllers/sourcePreview.controller';
+import { getSourcePreviewTranslation } from '../modules/academic/controllers/sourcePreviewTranslation.controller';
+import {
   cacheContributionPdf,
   deleteContributionPdf,
-  processUploadedPdfForContribution,
-  getUploadedPdfImportProgressForContribution,
+  getContributionPdfInline,
+} from '../modules/academic/controllers/contributionPdf.controller';
+import {
   cancelUploadedPdfImportForContribution,
-  getSourcePreviewTranslation
-} from '../modules/academic/controllers/moderationController';
+  getUploadedPdfImportProgressForContribution,
+  processUploadedPdfForContribution,
+} from '../modules/academic/controllers/pdfImport.controller';
+import { deleteSource } from '../modules/academic/controllers/sourceDeletion.controller';
+import { buildChunks } from '../modules/academic/controllers/ragChunkBuild.controller';
+import {
+  uploadPdfFile,
+  uploadPdfMiddleware,
+} from '../modules/academic/controllers/moderationPdfUpload.controller';
 import {
   getPendingSources,
   updateSourceContributionTitle,

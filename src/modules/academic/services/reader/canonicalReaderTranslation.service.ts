@@ -1,37 +1,27 @@
-/**
- * Phase I18N-3B.2A — Canonical Smart Reader Translation Application Service
- *
- * Orchestrates validation, classification, provider dispatch, and result assembly.
- * All dependencies are injected; no global state is mutated.
- * No database writes. Translation is an ephemeral display overlay produced by
- * a separately registered translation provider when one is available.
- */
 import {
   TranslateReaderRequest,
   TranslateReaderResponse,
   TranslatedTargetItem,
-  SuccessfulTranslatedTarget,
   FailedTranslationTarget,
   TranslationServiceDeps,
   TranslationServiceCallParams,
   CanonicalResolutionError,
   AppLocale,
   MT_BATCH_SIZE,
-  MAX_CONCURRENCY,
-  TRANSLATION_SCHEMA_VERSION,
-  NORMALIZATION_VERSION,
   ProviderTranslationItem,
-  ReaderTranslationBatchResponse,
-  MAX_PROVIDER_OUTPUT_BYTES,
 } from './readerTranslation.types';
 import { classifyTarget } from './readerTranslationClassifier.service';
 import {
   validateTargetsAgainstChunks,
   checkCanonicalProviderInputLimit,
 } from './readerTranslationValidator.service';
-import { validateProviderOutputObject } from './readerTranslationProviderResponse.validator';
-import { validateProtectedTokensPreserved } from './readerTranslationProtectedTokens.service';
 import { TranslationProviderUnavailableError } from './readerTranslationProvider.registry';
+import { executeTranslationBatches } from './readerTranslationExecution.service';
+import {
+  buildTranslationResponse,
+  makeFailedTranslation,
+  makeSuccessfulTranslation,
+} from './readerTranslationResponse.service';
 
 // ─── Error type ───────────────────────────────────────────────────────────────
 
@@ -51,17 +41,6 @@ export interface TranslationServiceError {
 type TranslationServiceResult =
   | { success: true; response: TranslateReaderResponse }
   | { success: false; error: TranslationServiceError };
-
-// ─── targetId encoding ────────────────────────────────────────────────────────
-
-function encodeTargetId(target: TranslateReaderRequest['targets'][number]): string {
-  if (target.targetType === 'table_cell') {
-    return `${target.chunkId}:${target.row}:${target.column}`;
-  }
-  return target.chunkId;
-}
-
-// ─── Main Translation Service ─────────────────────────────────────────────────
 
 export async function translateReaderTargets(
   params: TranslationServiceCallParams,
@@ -192,7 +171,7 @@ export async function translateReaderTargets(
     const targets = request.targets.map((_, i) => resultMap.get(i)!);
     return {
       success: true,
-      response: buildResponse(request, context, targets, null, null),
+      response: buildTranslationResponse(request, context, targets, null, null),
     };
   }
 
@@ -224,135 +203,16 @@ export async function translateReaderTargets(
     batches.push(eligibleItems.slice(i, i + MT_BATCH_SIZE));
   }
 
-  const translationResults = new Map<string, { translated: string } | { failed: string }>();
-  let cumulativeOutputBytes = 0; // cumulative across all batches
-
-  for (let batchStart = 0; batchStart < batches.length; batchStart += MAX_CONCURRENCY) {
-    // Abort if client disconnected
-    if (clientSignal?.aborted) {
-      for (const item of eligibleItems) {
-        if (!translationResults.has(item.targetId)) {
-          translationResults.set(item.targetId, { failed: 'translation_timeout' });
-        }
-      }
-      break;
-    }
-
-    // Abort if past deadline
-    if (deadline !== undefined && deps.now() > deadline) {
-      for (const item of eligibleItems) {
-        if (!translationResults.has(item.targetId)) {
-          translationResults.set(item.targetId, { failed: 'translation_timeout' });
-        }
-      }
-      break;
-    }
-
-    const batchSlice = batches.slice(batchStart, batchStart + MAX_CONCURRENCY);
-    const batchAbortController = deps.createAbortController();
-
-    // Forward client disconnect into provider signal
-    const clientAbortHandler = () => batchAbortController.abort();
-    if (clientSignal) {
-      clientSignal.addEventListener('abort', clientAbortHandler, { once: true });
-    }
-
-    let timerHandle: ReturnType<typeof setTimeout> | undefined;
-    if (deadline !== undefined) {
-      const remaining = Math.max(0, deadline - deps.now());
-      timerHandle = deps.setTimer(() => batchAbortController.abort(), remaining);
-    }
-
-    try {
-      await Promise.all(
-        batchSlice.map(async (batch) => {
-          const batchTargetIds = new Set(batch.map((i) => i.targetId));
-          try {
-            let batchResponse: ReaderTranslationBatchResponse;
-            try {
-              batchResponse = await provider.translateBatch(
-                {
-                  sourceLanguage: sourceLanguage as AppLocale,
-                  targetLocale,
-                  envelope: { items: batch },
-                },
-                { signal: batchAbortController.signal }
-              );
-            } catch (err: any) {
-              const isTimeout =
-                err?.name === 'AbortError' || err?.code === 'translation_timeout';
-              const code = isTimeout
-                ? 'translation_timeout'
-                : 'translation_provider_failed';
-              for (const item of batch) {
-                translationResults.set(item.targetId, { failed: code });
-              }
-              return;
-            }
-
-            // Validate provider output (per-batch schema + HTML check)
-            const validation = validateProviderOutputObject(
-              batchResponse.output,
-              batchTargetIds
-            );
-            if (!validation.valid) {
-              for (const item of batch) {
-                translationResults.set(item.targetId, { failed: validation.reason });
-              }
-              return;
-            }
-
-            // Cumulative output size guard across all batches
-            const batchOutputJson = JSON.stringify(batchResponse.output);
-            const batchBytes = Buffer.byteLength(batchOutputJson, 'utf8');
-            if (cumulativeOutputBytes + batchBytes > MAX_PROVIDER_OUTPUT_BYTES) {
-              for (const item of batch) {
-                translationResults.set(item.targetId, {
-                  failed: 'translation_output_too_large',
-                });
-              }
-              return;
-            }
-            cumulativeOutputBytes += batchBytes;
-
-            // Map results, validate protected tokens
-            const sourceTextByTargetId = new Map(
-              batch.map((i) => [i.targetId, i.text])
-            );
-            for (const item of validation.output.items) {
-              const sourceText = sourceTextByTargetId.get(item.targetId) ?? '';
-              const tokenCheck = validateProtectedTokensPreserved(
-                sourceText,
-                item.translatedText
-              );
-              if (!tokenCheck.valid) {
-                translationResults.set(item.targetId, {
-                  failed: 'translation_schema_invalid',
-                });
-              } else {
-                translationResults.set(item.targetId, {
-                  translated: item.translatedText,
-                });
-              }
-            }
-          } catch {
-            for (const item of batch) {
-              if (!translationResults.has(item.targetId)) {
-                translationResults.set(item.targetId, {
-                  failed: 'translation_provider_failed',
-                });
-              }
-            }
-          }
-        })
-      );
-    } finally {
-      if (timerHandle !== undefined) deps.clearTimer(timerHandle);
-      if (clientSignal) {
-        clientSignal.removeEventListener('abort', clientAbortHandler);
-      }
-    }
-  }
+  const translationResults = await executeTranslationBatches({
+    batches,
+    eligibleItems,
+    provider,
+    sourceLanguage: sourceLanguage as AppLocale,
+    targetLocale,
+    clientSignal,
+    deadline,
+    deps,
+  });
 
   // ── 12. Assemble translated/failed results for eligible targets
   for (let idx = 0; idx < eligibleIndexes.length; idx++) {
@@ -364,14 +224,14 @@ export async function translateReaderTargets(
     if (!result) {
       resultMap.set(
         originalIndex,
-        makeFailedTarget(target, 'translation_provider_failed')
+        makeFailedTranslation(target, 'translation_provider_failed')
       );
     } else if ('translated' in result) {
-      resultMap.set(originalIndex, makeSuccessTarget(target, result.translated));
+      resultMap.set(originalIndex, makeSuccessfulTranslation(target, result.translated));
     } else {
       resultMap.set(
         originalIndex,
-        makeFailedTarget(target, result.failed as FailedTranslationTarget['providerFailureCode'])
+        makeFailedTranslation(target, result.failed as FailedTranslationTarget['providerFailureCode'])
       );
     }
   }
@@ -381,7 +241,7 @@ export async function translateReaderTargets(
 
   return {
     success: true,
-    response: buildResponse(
+    response: buildTranslationResponse(
       request,
       context,
       orderedTargets,
@@ -391,71 +251,9 @@ export async function translateReaderTargets(
   };
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function makeSuccessTarget(
-  target: TranslateReaderRequest['targets'][number],
-  translatedText: string
-): SuccessfulTranslatedTarget {
+function encodeTargetId(target: TranslateReaderRequest['targets'][number]): string {
   if (target.targetType === 'table_cell') {
-    return {
-      targetType: 'table_cell',
-      chunkId: target.chunkId,
-      row: target.row,
-      column: target.column,
-      contentHash: target.contentHash,
-      status: 'translated',
-      translatedText,
-    };
+    return `${target.chunkId}:${target.row}:${target.column}`;
   }
-  return {
-    targetType: target.targetType as 'block_text' | 'figure_caption',
-    chunkId: target.chunkId,
-    contentHash: target.contentHash,
-    status: 'translated',
-    translatedText,
-  };
-}
-
-function makeFailedTarget(
-  target: TranslateReaderRequest['targets'][number],
-  providerFailureCode: FailedTranslationTarget['providerFailureCode']
-): FailedTranslationTarget {
-  if (target.targetType === 'table_cell') {
-    return {
-      targetType: 'table_cell',
-      chunkId: target.chunkId,
-      row: target.row,
-      column: target.column,
-      contentHash: target.contentHash,
-      status: 'provider_failed',
-      providerFailureCode,
-    };
-  }
-  return {
-    targetType: target.targetType as 'block_text' | 'figure_caption',
-    chunkId: target.chunkId,
-    contentHash: target.contentHash,
-    status: 'provider_failed',
-    providerFailureCode,
-  };
-}
-
-function buildResponse(
-  request: TranslateReaderRequest,
-  context: { sourceContentHash: string; sourceLanguage: string | null },
-  targets: TranslatedTargetItem[],
-  engineName: string | null,
-  modelName: string | null
-): TranslateReaderResponse {
-  return {
-    sourceContentHash: context.sourceContentHash,
-    sourceLanguage: context.sourceLanguage,
-    targetLocale: request.targetLocale,
-    engineName,
-    modelName,
-    normalizationVersion: NORMALIZATION_VERSION,
-    translationSchemaVersion: TRANSLATION_SCHEMA_VERSION,
-    targets,
-  };
+  return target.chunkId;
 }

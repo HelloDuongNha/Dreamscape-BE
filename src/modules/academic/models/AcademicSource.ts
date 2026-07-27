@@ -66,11 +66,18 @@ export interface IAcademicSource extends Document {
   pdfPageCount?: number;
   detectedLanguage?: string;
   readerBuildSnapshots?: Array<{
+    status?: 'success' | 'failed';
     engine: string;
     sourceType: string;
     sectionCount: number;
     chunkCount: number;
     builtAt: Date;
+    durationMs?: number;
+    estimatedDurationSeconds?: number;
+    pageCount?: number;
+    ocrUsed?: boolean;
+    failureCode?: string;
+    failureMessage?: string;
   }>;
   pdfImportProgress?: {
     stage: string;
@@ -315,11 +322,18 @@ const AcademicSourceSchema = new Schema<IAcademicSource>(
       type: String,
     },
     readerBuildSnapshots: [{
+      status: { type: String, enum: ['success', 'failed'], default: 'success' },
       engine: { type: String, required: true },
       sourceType: { type: String, required: true },
       sectionCount: { type: Number, required: true, min: 0 },
       chunkCount: { type: Number, required: true, min: 0 },
       builtAt: { type: Date, required: true },
+      durationMs: { type: Number, min: 0 },
+      estimatedDurationSeconds: { type: Number, min: 1 },
+      pageCount: { type: Number, min: 0 },
+      ocrUsed: { type: Boolean },
+      failureCode: { type: String },
+      failureMessage: { type: String },
       _id: false,
     }],
     pdfImportProgress: {

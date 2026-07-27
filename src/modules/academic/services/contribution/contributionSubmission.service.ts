@@ -1,120 +1,31 @@
+import { Types } from 'mongoose';
+import {
+  ContributionServiceResult,
+  DuplicateCondition,
+} from '../../dto/contributionWorkflow.dto';
+import {
+  SourceImportResolverInput,
+  SourceImportResolverResult,
+} from '../../dto/sourceImport.dto';
 import AcademicSource from '../../models/AcademicSource';
 import SourceContribution from '../../models/SourceContribution';
 import { buildResolverReport } from '../ingestion/structured/resolverDiagnostics.service';
 import { resolveSourceImport } from '../source/sourceImportResolver.service';
-import { normalizeSourceUrl } from '../source/sourceNormalization.service';
 import { incrementSubmitted } from './contributionStats.service';
+import {
+  buildDuplicateConditions,
+  buildNewContribution,
+  reactivateContribution,
+  saveNewContribution,
+} from './contributionSubmissionPersistence.service';
 
-export interface ContributionServiceResult {
-  status: number;
-  body: Record<string, unknown>;
-}
-
-function isValidOriginalFile(file: any): boolean {
-  if (!file) return false;
-  if (file.storageProvider === 'firebase') {
-    return Boolean(file.firebaseStorageBucket && file.firebaseStoragePath);
-  }
-  if (file.storageProvider === 'cloudinary') {
-    return Boolean(file.cloudinaryPublicId && file.cloudinarySecureUrl);
-  }
-  return Boolean(file.storageProvider && file.originalFileName);
-}
-
-async function reactivateContribution(
-  contribution: any,
-  source: any,
-  submittedBy: any,
-  note: string,
-) {
-  contribution.submittedBy = submittedBy;
-  contribution.doi = source.doi || contribution.doi;
-  contribution.normalizedDoi = source.doi || contribution.normalizedDoi;
-  contribution.pmcid = source.pmcid || contribution.pmcid;
-  contribution.normalizedPmcid = source.pmcid || contribution.normalizedPmcid;
-  contribution.url = source.sourceUrl || contribution.url;
-  contribution.normalizedUrl = source.sourceUrl
-    ? normalizeSourceUrl(source.sourceUrl)
-    : contribution.normalizedUrl;
-  contribution.submittedNote = note || undefined;
-  contribution.reviewStatus = 'pending';
-  contribution.reviewedBy = undefined;
-  contribution.reviewedAt = undefined;
-  contribution.reviewNote = undefined;
-  contribution.title = source.title || contribution.title;
-  contribution.authors = source.authors || contribution.authors;
-  contribution.year = source.year || contribution.year;
-  contribution.license = source.license || contribution.license || 'all-rights-reserved';
-  contribution.allowedUse = source.allowedUse || contribution.allowedUse || 'metadata_only';
-  contribution.copyrightStatus = source.allowedUse === 'open_access_fulltext'
-    ? 'copyrighted_with_open_access'
-    : contribution.copyrightStatus || 'paywalled';
-  contribution.fullTextStatus = source.fullTextAvailable ? 'available' : 'none';
-  contribution.readableInApp = false;
-  contribution.smartReaderStats = undefined;
-  contribution.extractionStatus = undefined;
-  contribution.extractionMethod = undefined;
-  contribution.extractionQuality = undefined;
-  contribution.pdfPageCount = undefined;
-  contribution.detectedLanguage = undefined;
-  contribution.detectedIdentifiers = undefined;
-  contribution.originalFile = isValidOriginalFile(source.originalFile)
-    ? source.originalFile
-    : undefined;
-  contribution.pdfUrl = source.pdfUrl || undefined;
-  contribution.htmlUrl = source.htmlUrl || undefined;
-  contribution.metadata = buildContributionMetadata(source);
-  await contribution.save();
-}
-
-function buildContributionMetadata(source: any) {
-  return {
-    title: source.title,
-    authors: source.authors,
-    year: source.year,
-    journal: source.journal,
-    publisher: source.publisher,
-    doi: source.doi,
-    isbn: source.isbn,
-    url: source.sourceUrl,
-    pdfUrl: source.pdfUrl,
-    htmlUrl: source.htmlUrl,
-    allowedUse: source.allowedUse,
-    openAccessStatus: source.openAccessStatus,
-    oaStatus: source.openAccessStatus,
-    fullTextAvailable: source.fullTextAvailable,
-    warnings: source.warnings,
-    metadataProvider: source.metadataProvider,
-  };
-}
-
-function buildDuplicateConditions(source: any): any[] {
-  const conditions: any[] = [];
-  if (source.doi) conditions.push({ normalizedDoi: source.doi }, { doi: source.doi });
-  if (source.pmcid) conditions.push({ normalizedPmcid: source.pmcid }, { pmcid: source.pmcid });
-  if (source.isbn) conditions.push({ isbn: source.isbn }, { 'metadata.isbn': source.isbn });
-  if (source.sourceUrl) {
-    conditions.push(
-      { normalizedUrl: normalizeSourceUrl(source.sourceUrl) },
-      { url: source.sourceUrl },
-    );
-  }
-  if (source.pdfUrl) {
-    conditions.push(
-      { pdfUrl: source.pdfUrl },
-      { normalizedUrl: normalizeSourceUrl(source.pdfUrl) },
-    );
-  }
-  if (source.originalFile?.cloudinaryPublicId) {
-    conditions.push({ 'originalFile.cloudinaryPublicId': source.originalFile.cloudinaryPublicId });
-  }
-  return conditions;
-}
-
-export async function previewSourceContribution(body: any, userId: any) {
-  const source = await resolveSourceImport(body, userId);
-  const rawInput = body.doi || body.pmcid || body.url || '';
-  const resolverReport = await buildResolverReport(rawInput, source);
+// Preview one source through the same resolver used by contribution submission.
+export async function previewSourceContribution(
+  input: SourceImportResolverInput,
+  userId?: Types.ObjectId,
+): Promise<Record<string, unknown>> {
+  const source = await resolveSourceImport(input, userId);
+  const resolverReport = await buildResolverReport(rawResolverInput(input), source);
   return {
     title: source.title,
     authors: source.authors,
@@ -147,147 +58,102 @@ export async function previewSourceContribution(body: any, userId: any) {
   };
 }
 
+// Resolve, deduplicate and persist one academic-source contribution.
 export async function submitSourceContribution(
-  body: any,
-  submittedBy: any,
+  input: SourceImportResolverInput,
+  submittedBy: Types.ObjectId,
   note: string,
 ): Promise<ContributionServiceResult> {
-  const source = await resolveSourceImport(body, submittedBy);
+  const source = await resolveSourceImport(input, submittedBy);
   const conditions = buildDuplicateConditions(source);
 
-  if (conditions.length) {
-    const existingContribution = await SourceContribution.findOne({
-      reviewStatus: { $ne: 'rejected' },
-      $or: conditions,
-    });
-    const existingSource = await AcademicSource.findOne({ $or: conditions });
-    if (existingSource) {
-      return {
-        status: 409,
-        body: {
-          success: false,
-          code: 'DUPLICATE_SOURCE',
-          message: 'Nguồn này đã tồn tại trong thư viện.',
-        },
-      };
-    }
-    if (existingContribution) {
-      return {
-        status: 409,
-        body: {
-          success: false,
-          code: 'DUPLICATE_CONTRIBUTION',
-          message: 'Nguồn này đã được gửi hoặc đang chờ duyệt.',
-        },
-      };
-    }
-
-    const rejected = await SourceContribution.findOne({
-      reviewStatus: 'rejected',
-      $or: conditions,
-    });
-    if (rejected) {
-      await reactivateContribution(rejected, source, submittedBy, note);
-      try { await incrementSubmitted(submittedBy.toString()); } catch {}
-      const rawInput = body.doi || body.pmcid || body.url || '';
-      return {
-        status: 201,
-        body: {
-          success: true,
-          code: 'REACTIVATED',
-          message: 'Đóng góp trước bị từ chối đã được kích hoạt lại.',
-          data: rejected,
-          resolverReport: await buildResolverReport(rawInput, source),
-        },
-      };
-    }
-  }
-
-  const contribution = new SourceContribution({
+  const existingResult = await handleExistingContribution(
+    source,
+    conditions,
     submittedBy,
-    doi: source.doi || undefined,
-    normalizedDoi: source.doi || undefined,
-    pmcid: source.pmcid || undefined,
-    normalizedPmcid: source.pmcid || undefined,
-    url: source.sourceUrl || undefined,
-    normalizedUrl: source.sourceUrl ? normalizeSourceUrl(source.sourceUrl) : undefined,
-    submittedNote: note || undefined,
-    reviewStatus: 'pending',
-    metadata: buildContributionMetadata(source),
-    license: source.license || 'all-rights-reserved',
-    allowedUse: source.allowedUse || 'metadata_only',
-    verificationStatus: source.sourceType === 'doi' ? 'verified_doi' : 'unverified',
-    sourceQuality: source.sourceType === 'doi' ? 'peer_reviewed' : 'informal',
-    copyrightStatus: source.allowedUse === 'open_access_fulltext'
-      ? 'copyrighted_with_open_access'
-      : 'paywalled',
-    fullTextStatus: source.fullTextAvailable ? 'available' : 'none',
-    fullTextUrl: source.pdfUrl || source.htmlUrl || source.sourceUrl || undefined,
-    oaStatus: source.openAccessStatus || 'closed',
-    openAccessStatus: source.openAccessStatus || 'unknown',
-    readableInApp: false,
-    title: source.title,
-    authors: source.authors,
-    year: source.year,
-    journal: source.journal,
-    publisher: source.publisher,
-    originalFile: source.originalFile,
-    pdfUrl: source.pdfUrl || undefined,
-    htmlUrl: source.htmlUrl || undefined,
-  });
+    note,
+    input,
+  );
+  if (existingResult) return existingResult;
 
-  try {
-    await contribution.save();
-  } catch (error: any) {
-    if (error.code !== 11000) throw error;
-    const recovered = await SourceContribution.findOne({
-      $or: conditions.length ? conditions : [{ _id: null }],
-    });
-    if (recovered?.reviewStatus === 'rejected') {
-      await reactivateContribution(recovered, source, submittedBy, note);
-      return {
-        status: 201,
-        body: {
-          success: true,
-          code: 'REACTIVATED',
-          message: 'Đóng góp đã được kích hoạt lại.',
-          data: recovered,
-        },
-      };
-    }
-    if (recovered) {
-      return {
-        status: 409,
-        body: {
-          success: false,
-          code: 'DUPLICATE_CONTRIBUTION',
-          message: 'Nguồn này đang chờ duyệt hoặc đã tồn tại.',
-        },
-      };
-    }
-    return {
-      status: 409,
-      body: {
-        success: false,
-        message: 'Không thể gửi đóng góp do trùng lặp dữ liệu.',
-      },
-    };
-  }
+  const contribution = buildNewContribution(source, submittedBy, note);
+  const collisionResult = await saveNewContribution(
+    contribution,
+    source,
+    conditions,
+    submittedBy,
+    note,
+  );
+  if (collisionResult) return collisionResult;
 
-  try {
-    await incrementSubmitted(submittedBy.toString());
-  } catch (error) {
-    console.error('Failed to increment contribution stats:', error);
-  }
-
-  const rawInput = body.doi || body.pmcid || body.url || '';
+  await recordSubmissionBestEffort(submittedBy);
   return {
     status: 201,
     body: {
       success: true,
       message: 'Source contribution submitted successfully.',
       data: contribution,
-      resolverReport: await buildResolverReport(rawInput, source),
+      resolverReport: await buildResolverReport(rawResolverInput(input), source),
     },
   };
+}
+
+async function handleExistingContribution(
+  source: SourceImportResolverResult,
+  conditions: DuplicateCondition[],
+  submittedBy: Types.ObjectId,
+  note: string,
+  input: SourceImportResolverInput,
+): Promise<ContributionServiceResult | null> {
+  if (conditions.length === 0) return null;
+
+  const existingContribution = await SourceContribution.findOne({
+    reviewStatus: { $ne: 'rejected' },
+    $or: conditions,
+  });
+  const existingSource = await AcademicSource.findOne({ $or: conditions });
+  if (existingSource) {
+    return duplicateResult('DUPLICATE_SOURCE', 'Nguồn này đã tồn tại trong thư viện.');
+  }
+  if (existingContribution) {
+    return duplicateResult(
+      'DUPLICATE_CONTRIBUTION',
+      'Nguồn này đã được gửi hoặc đang chờ duyệt.',
+    );
+  }
+
+  const rejected = await SourceContribution.findOne({
+    reviewStatus: 'rejected',
+    $or: conditions,
+  });
+  if (!rejected) return null;
+
+  await reactivateContribution(rejected, source, submittedBy, note);
+  await recordSubmissionBestEffort(submittedBy);
+  return {
+    status: 201,
+    body: {
+      success: true,
+      code: 'REACTIVATED',
+      message: 'Đóng góp trước bị từ chối đã được kích hoạt lại.',
+      data: rejected,
+      resolverReport: await buildResolverReport(rawResolverInput(input), source),
+    },
+  };
+}
+
+function duplicateResult(code: string, message: string): ContributionServiceResult {
+  return { status: 409, body: { success: false, code, message } };
+}
+
+async function recordSubmissionBestEffort(submittedBy: Types.ObjectId): Promise<void> {
+  try {
+    await incrementSubmitted(submittedBy.toString());
+  } catch (error) {
+    console.error('Failed to increment contribution stats:', error);
+  }
+}
+
+function rawResolverInput(input: SourceImportResolverInput): string {
+  return input.doi || input.pmcid || input.url || '';
 }

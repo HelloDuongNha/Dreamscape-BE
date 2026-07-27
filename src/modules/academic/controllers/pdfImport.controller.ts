@@ -6,12 +6,15 @@ import {
 } from '../services/ingestion/pdf/uploadedPdfImport.service';
 import { getPdfImportProgress } from '../services/ingestion/pdf/pdfImportProgress.service';
 
-export async function getUploadedPdfImportProgressForApprovedSource(
+type PdfImportTarget = 'approved_source' | 'contribution';
+
+async function sendProgress(
+  targetType: PdfImportTarget,
   req: Request,
   res: Response,
 ): Promise<void> {
   try {
-    const result = await getPdfImportProgress('approved_source', req.params.id as string);
+    const result = await getPdfImportProgress(targetType, req.params.id as string);
     res.status(200).json({ success: true, data: result });
   } catch (error: any) {
     res.status(404).json({
@@ -21,11 +24,12 @@ export async function getUploadedPdfImportProgressForApprovedSource(
   }
 }
 
-export async function cancelUploadedPdfImportForApprovedSource(
+async function cancelImport(
+  targetType: PdfImportTarget,
   req: Request,
   res: Response,
 ): Promise<void> {
-  const cancelled = await cancelUploadedPdfImport('approved_source', req.params.id as string);
+  const cancelled = await cancelUploadedPdfImport(targetType, req.params.id as string);
   if (!cancelled) {
     res.status(409).json({ success: false, message: 'Tác vụ nhập PDF không còn chạy.' });
     return;
@@ -33,23 +37,64 @@ export async function cancelUploadedPdfImportForApprovedSource(
   res.status(200).json({ success: true, message: 'Đã hủy nhập PDF.' });
 }
 
-export async function processUploadedPdfForApprovedSource(
+async function processImport(
+  targetType: PdfImportTarget,
+  fallbackMessage: string,
   req: Request,
   res: Response,
 ): Promise<void> {
   try {
     const options = parsePdfImportOptions(req.body);
     const result = await runUploadedPdfImport({
-      targetType: 'approved_source',
+      targetType,
       targetId: req.params.id as string,
       ...options,
       userId: req.user?._id,
     });
     res.status(200).json(result);
   } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Lỗi xử lý tệp PDF nguồn.',
-    });
+    res.status(500).json({ success: false, message: error.message || fallbackMessage });
   }
+}
+
+export async function getUploadedPdfImportProgressForApprovedSource(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  await sendProgress('approved_source', req, res);
+}
+
+export async function cancelUploadedPdfImportForApprovedSource(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  await cancelImport('approved_source', req, res);
+}
+
+export async function processUploadedPdfForApprovedSource(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  await processImport('approved_source', 'Lỗi xử lý tệp PDF nguồn.', req, res);
+}
+
+export async function getUploadedPdfImportProgressForContribution(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  await sendProgress('contribution', req, res);
+}
+
+export async function cancelUploadedPdfImportForContribution(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  await cancelImport('contribution', req, res);
+}
+
+export async function processUploadedPdfForContribution(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  await processImport('contribution', 'Lỗi xử lý tệp PDF đóng góp.', req, res);
 }

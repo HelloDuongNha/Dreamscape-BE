@@ -25,7 +25,7 @@ import {
   getApprovedSourcePdfInline,
 } from '../modules/academic/controllers/approvedSourceDocument.controller';
 import { getApprovedSourceTranslation } from '../modules/academic/controllers/approvedSourceTranslation.controller';
-import { uploadPdfMiddleware } from '../modules/academic/controllers/moderationController';
+import { uploadPdfMiddleware } from '../modules/academic/controllers/moderationPdfUpload.controller';
 
 
 const router = Router();

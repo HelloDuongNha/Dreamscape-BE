@@ -2,6 +2,12 @@ import { DoclingExtractionResult, DoclingArtifactDescriptor } from '../../types/
 import { CanonicalBlocksOutput, CanonicalBlock, BlockType, SemanticType } from '../../types/canonical.types';
 import { DoclingReaderPolicyService } from './doclingReaderPolicy.service';
 import { DoclingTextRepairService } from './doclingTextRepair.service';
+import {
+  escapeDoclingHtml,
+  normalizeCanonicalFlow,
+  normalizeDoclingTypography,
+  stripPublisherDownloadNotice,
+} from './doclingCanonicalFlow.service';
 
 export interface DoclingAdapterOutput {
   canonicalOutput: CanonicalBlocksOutput;
@@ -14,167 +20,6 @@ export interface DoclingAdapterOutput {
 }
 
 export class DoclingAdapterService {
-  /**
-   * Cleans trailing accent characters separated by whitespace from letters
-   * due to raw PDF parser font decoding failures, and handles ligatures.
-   */
-  private static normalizePdfTypography(text: string): string {
-    const accentMarks: Record<string, string> = {
-      '˜': '\u0303',
-      '¨': '\u0308',
-      '`': '\u0300',
-      '´': '\u0301',
-      '^': '\u0302',
-    };
-
-    // Some embedded PDF fonts expose a footnote glyph as ETX/U+FFFD. Preserve
-    // its role as an unresolved marker without showing a replacement diamond.
-    let normalized = text.replace(/[\u0003\uFFFD]/g, '*').replace(
-      /\s+([˜¨`´^])\s+([\p{L}])/gu,
-      (_match, mark: string, letter: string) => `${letter}${accentMarks[mark]}`.normalize('NFC'),
-    );
-
-    normalized = normalized.replace(/([\p{L}])\s+(['’])\s+([\p{L}])/gu, '$1$2$3');
-    return DoclingTextRepairService.repairText(normalized);
-  }
-
-  private static stripPublisherDownloadNotice(text: string): string {
-    const notice = /downloaded\s+from\s+https?\s*:\s*\/?\/?/i.exec(text);
-    if (!notice) return text;
-    const tail = text.slice(notice.index).toLowerCase();
-    if (!tail.includes('terms and conditions') && !tail.includes('online library')) return text;
-
-    // Publisher watermarks often prepend ISSN, year and issue immediately
-    // before "Downloaded from". Remove that prefix too, but preserve all body
-    // text occurring before the watermark on the same extracted block.
-    const prefix = text.slice(0, notice.index);
-    const metadataPrefix = /\b\d{6,9}\s*,\s*(?:19|20)\d{2}\s*,\s*\d+\s*,\s*$/i.exec(prefix);
-    const cutIndex = metadataPrefix ? metadataPrefix.index : notice.index;
-    return text.slice(0, cutIndex).trim();
-  }
-
-  private static escapeHtml(text: string): string {
-    return text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
-  }
-
-  private static startsWithLowercase(text: string): boolean {
-    return /^\p{Ll}/u.test(text.trim());
-  }
-
-  private static isSentenceContinuation(previous: string, next: string): boolean {
-    const left = previous.trim();
-    if (!left || !this.startsWithLowercase(next)) return false;
-    return !/[.!?。！？:;"'”’\])}]$/.test(left);
-  }
-
-  private static joinContinuation(previous: string, next: string): string {
-    const left = previous.trimEnd();
-    const right = next.trimStart();
-    return left.endsWith('-') ? `${left.slice(0, -1)}${right}` : `${left} ${right}`;
-  }
-
-  private static isStandaloneReferenceIdentifier(text: string): boolean {
-    const clean = text.trim().replace(/[.,;]+$/, '');
-    return /^(?:(?:https?:\/\/(?:dx\.)?doi\.org\/)|(?:doi\s*:\s*))?10\.\d{4,9}\/\S+$/i.test(clean);
-  }
-
-  /**
-   * Repair conservative cross-page flow defects after structural filtering:
-   * - join adjacent lowercase paragraph continuations;
-   * - join a continuation separated only by a floating table and its Note,
-   *   leaving the table/note after the completed paragraph;
-   * - attach a DOI-only reference line to the preceding reference.
-   */
-  private static normalizeCanonicalFlow(input: CanonicalBlock[]): CanonicalBlock[] {
-    const blocks = [...input];
-
-    for (let i = 0; i < blocks.length; i++) {
-      const current = blocks[i];
-
-      if (
-        current.blockType === 'reference' &&
-        this.isStandaloneReferenceIdentifier(current.text) &&
-        i > 0 &&
-        blocks[i - 1].blockType === 'reference'
-      ) {
-        const previous = blocks[i - 1];
-        previous.text = `${previous.text.trim()} ${current.text.trim()}`;
-        previous.html = `<p>${this.escapeHtml(previous.text)}</p>`;
-        blocks.splice(i, 1);
-        i -= 1;
-        continue;
-      }
-
-      if (current.blockType !== 'paragraph') continue;
-
-      const next = blocks[i + 1];
-      const samePage = next?.pageNumber === current.pageNumber;
-      const adjacentPage =
-        typeof current.pageNumber === 'number' &&
-        next?.pageNumber === current.pageNumber + 1;
-      const looksLikeHardWrappedFragment =
-        /[-\u00ad]\s*$/u.test(current.text) ||
-        (current.text.trim().length < 180 && (next?.text.trim().length || 0) < 260);
-      const looksLikePageBreakContinuation =
-        adjacentPage &&
-        !/[.!?。！？:;"'”’\])}]$/.test(current.text.trim());
-      if (
-        next?.blockType === 'paragraph' &&
-        (
-          (samePage && looksLikeHardWrappedFragment) ||
-          looksLikePageBreakContinuation
-        ) &&
-        this.isSentenceContinuation(current.text, next.text)
-      ) {
-        current.text = this.joinContinuation(current.text, next.text);
-        current.html = `<p>${this.escapeHtml(current.text)}</p>`;
-        blocks.splice(i + 1, 1);
-        i -= 1;
-        continue;
-      }
-
-      let cursor = i + 1;
-      let sawTable = false;
-      while (cursor < blocks.length) {
-        const candidate = blocks[cursor];
-        if (candidate.blockType === 'table') {
-          sawTable = true;
-          cursor += 1;
-          continue;
-        }
-        if (sawTable && candidate.blockType === 'paragraph' && /^note\s*[.:]/i.test(candidate.text.trim())) {
-          cursor += 1;
-          continue;
-        }
-        break;
-      }
-
-      const continuation = blocks[cursor];
-      if (
-        sawTable &&
-        continuation?.blockType === 'paragraph' &&
-        continuation.pageNumber === current.pageNumber &&
-        this.isSentenceContinuation(current.text, continuation.text)
-      ) {
-        current.text = this.joinContinuation(current.text, continuation.text);
-        current.html = `<p>${this.escapeHtml(current.text)}</p>`;
-        blocks.splice(cursor, 1);
-        i -= 1;
-      }
-    }
-
-    blocks.forEach((block, index) => { block.order = index; });
-    return blocks;
-  }
-
-  /**
-   * Maps a DoclingExtractionResult to canonical blocks using DoclingReaderPolicyService.
-   */
   public static mapToCanonicalBlocks(
     extraction: DoclingExtractionResult,
     artifacts: DoclingArtifactDescriptor[],
@@ -212,8 +57,8 @@ export class DoclingAdapterService {
       }
 
       // 2. Evaluate block eligibility using Reader Policy Service
-      const normalizedItemText = this.stripPublisherDownloadNotice(
-        this.normalizePdfTypography(item.text)
+      const normalizedItemText = stripPublisherDownloadNotice(
+        normalizeDoclingTypography(item.text)
       );
       const policyItem = { ...item, text: normalizedItemText };
       const policy = DoclingReaderPolicyService.evaluateItem(
@@ -228,7 +73,7 @@ export class DoclingAdapterService {
 
       const activeType = policy.blockTypeOverride || item.type;
       const itemText = policy.textOverride || normalizedItemText;
-      const captionText = this.normalizePdfTypography(policy.captionText || item.caption || '');
+      const captionText = normalizeDoclingTypography(policy.captionText || item.caption || '');
       const normalizedTableHtml = activeType === 'table'
         ? DoclingTextRepairService.repairHtml(item.html || '')
         : item.html;
@@ -254,7 +99,7 @@ export class DoclingAdapterService {
       let htmlMarkup = '';
       let tableHtmlContent: string | undefined;
 
-      const escapedText = this.escapeHtml(itemText);
+      const escapedText = escapeDoclingHtml(itemText);
 
       switch (activeType) {
         case 'title':
@@ -282,7 +127,7 @@ export class DoclingAdapterService {
           semanticType = 'table';
           tableHtmlContent = normalizedTableHtml || '';
           const captionHtml = captionText
-            ? `<p class="caption"><strong>${this.escapeHtml(captionText)}</strong></p>`
+            ? `<p class="caption"><strong>${escapeDoclingHtml(captionText)}</strong></p>`
             : '';
           htmlMarkup = `<div class="table-block">${captionHtml}<div class="table-wrapper">${tableHtmlContent}</div></div>`;
           break;
@@ -331,7 +176,7 @@ export class DoclingAdapterService {
     }
 
     const normalizedBlocks = DoclingTextRepairService
-      .repairDocumentCorpus(this.normalizeCanonicalFlow(blocks))
+      .repairDocumentCorpus(normalizeCanonicalFlow(blocks))
       .map((block) => {
         if (block.blockType === 'table' || block.blockType === 'figure') return block;
         const tag = block.blockType === 'title'
@@ -341,7 +186,7 @@ export class DoclingAdapterService {
             : block.blockType === 'list_item'
               ? 'li'
               : 'p';
-        return { ...block, html: `<${tag}>${this.escapeHtml(block.text)}</${tag}>` };
+        return { ...block, html: `<${tag}>${escapeDoclingHtml(block.text)}</${tag}>` };
       });
     const discardedFurnitureCount = detectedPictureCount - acceptedFigureCount;
 

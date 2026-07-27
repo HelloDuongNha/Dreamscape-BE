@@ -1,12 +1,16 @@
 import mongoose from 'mongoose';
 import { logger } from '../../../../../infrastructure/logger';
 import { generateAnalysis, ILLMOutput } from '../../../../../infrastructure/llm.service';
+import { generateDreamContinuation } from '../creation/dreamContinuation.service';
 import { buildDreamAnalysisPrompt } from '../prompts/dreamAnalysis.prompt';
 import {
   DreamAnalysisProgress,
+  DreamAnalysisReporter,
   DreamAnalysisResult,
   DreamAnalysisStage,
 } from './dreamAnalysisOrchestration.types';
+import { finalizeDreamAnalysisOutput } from './dreamAnalysisOutput.service';
+import { buildDreamAnalysisResult } from './dreamAnalysisResult.service';
 import {
   buildDreamProfilePrompt,
   loadDreamAnalysisProfile,
@@ -14,14 +18,22 @@ import {
 import { buildDreamPromptContext } from './dreamAnalysisPromptContext.service';
 import { retrieveDreamAnalysisContext } from './dreamContextRetrieval.service';
 import { retrieveDreamRuleEvidence } from './dreamRuleEvidence.service';
-import { finalizeDreamAnalysisOutput } from './dreamAnalysisOutput.service';
-import {
-  generateDreamContinuation,
-} from '../creation/dreamContinuation.service';
 
 export type { DreamAnalysisProgress, DreamAnalysisStage } from './dreamAnalysisOrchestration.types';
 
-// Runs the six-stage dream analysis pipeline and returns its audit trail.
+type DreamProfileData = Awaited<ReturnType<typeof loadDreamAnalysisProfile>>;
+type RetrievedDreamContext = Awaited<ReturnType<typeof retrieveDreamAnalysisContext>>;
+type RetrievedRuleEvidence = Awaited<ReturnType<typeof retrieveDreamRuleEvidence>>;
+type DreamProfilePrompt = ReturnType<typeof buildDreamProfilePrompt>;
+
+interface DreamAnalysisRequest {
+  userId: string;
+  dreamText: string;
+  sleepContext: Record<string, any>;
+  abortSignal?: AbortSignal;
+}
+
+// Run the grounded dream-analysis pipeline and return its audit trail.
 export async function runDreamAnalysis(
   userId: string,
   dreamText: string,
@@ -29,32 +41,38 @@ export async function runDreamAnalysis(
   onProgress?: (progress: DreamAnalysisProgress) => void | Promise<void>,
   abortSignal?: AbortSignal,
 ): Promise<DreamAnalysisResult> {
-  const throwIfCancelled = () => {
-    if (abortSignal?.aborted) {
-      const error = new Error('dream_analysis_cancelled');
-      error.name = 'AbortError';
-      throw error;
-    }
-  };
-  const report = async (
-    stage: DreamAnalysisStage,
-    progress: number,
-    message: string,
-    miniStep?: string,
-    resultSummary?: string,
-  ) => {
-    throwIfCancelled();
-    await onProgress?.({ stage, progress, message, miniStep, resultSummary });
-  };
-  throwIfCancelled();
-  const db = mongoose.connection.db;
-  if (!db) {
-    throw new Error('Database connection is not initialized');
-  }
+  requireDreamDatabase();
+  const request = { userId, dreamText, sleepContext, abortSignal };
+  const report = createProgressReporter(onProgress, abortSignal);
 
-  await report('preparing', 8, 'Đang chuẩn bị hồ sơ và ngữ cảnh phân tích...', 'Đang đọc hồ sơ và tách phần lời kể cần phân tích.');
-  const profileData = await loadDreamAnalysisProfile(userId);
+  const profile = await prepareDreamProfile(userId, report);
+  const context = await retrieveDreamContext(request, report);
+  const rules = await retrieveGroundedRules(context, report);
+  const profilePrompt = buildDreamProfilePrompt(profile);
+  const prompt = buildGroundedPrompt(context, rules, profilePrompt);
+  const analysis = await generateGroundedAnalysis(request, context, rules, profilePrompt, prompt, report);
 
+  return buildDreamAnalysisResult({
+    profile,
+    context,
+    rules,
+    profilePrompt,
+    analysis,
+    report,
+  });
+}
+
+async function prepareDreamProfile(
+  userId: string,
+  report: DreamAnalysisReporter,
+): Promise<DreamProfileData> {
+  await report(
+    'preparing',
+    8,
+    'Đang chuẩn bị hồ sơ và ngữ cảnh phân tích...',
+    'Đang đọc hồ sơ và tách phần lời kể cần phân tích.',
+  );
+  const profile = await loadDreamAnalysisProfile(userId);
   await report(
     'preparing',
     18,
@@ -62,107 +80,99 @@ export async function runDreamAnalysis(
     'Đã tách lời kể khỏi thông tin khi thức và nạp các tùy chọn cá nhân được cho phép.',
     'Đã nạp hồ sơ và các lựa chọn cá nhân hóa được người dùng cho phép.',
   );
+  return profile;
+}
 
-  await report('retrieving_context', 20, 'Đang nhận diện chi tiết và tìm các giấc mơ tương đồng...', 'Đang đối chiếu từ điển, mô-típ theo ngữ cảnh và lịch sử giấc mơ.');
-  // ─── STEP 2: Hybrid Search (Component A) ───
-  const minScore = parseFloat(process.env.SYMBOL_RAG_MIN_SCORE || '0.55');
-  const embedModel = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
-
-  const {
-    symbols: retrievedSymbols,
-    strategyUsed,
-    vectorBackend,
-    rawText,
-    dreamNarrative,
-    wakingReactionText,
-    sleepContextText,
-    segmentationReasons,
-    enrichedSleepContext,
-    similarDreamResult,
-    personalSymbolPatterns,
-    contextualMotifHints,
-    observedSymbolPatterns,
-  } = await retrieveDreamAnalysisContext(userId, dreamText, sleepContext);
-
+async function retrieveDreamContext(
+  request: DreamAnalysisRequest,
+  report: DreamAnalysisReporter,
+): Promise<RetrievedDreamContext> {
+  await report(
+    'retrieving_context',
+    20,
+    'Đang nhận diện chi tiết và tìm các giấc mơ tương đồng...',
+    'Đang đối chiếu từ điển, mô-típ theo ngữ cảnh và lịch sử giấc mơ.',
+  );
+  const context = await retrieveDreamAnalysisContext(
+    request.userId,
+    request.dreamText,
+    request.sleepContext,
+  );
   await report(
     'retrieving_context',
     34,
     'Đã nhận diện xong các chi tiết và trường hợp tương đồng.',
     'Đang chuyển các kết quả phù hợp sang bước kiểm tra tri thức.',
-    `Nhận diện ${retrievedSymbols.length} mục từ điển, ${contextualMotifHints.length} chi tiết theo ngữ cảnh, ${observedSymbolPatterns.length} mẫu trong kho quan sát, ${similarDreamResult.matches.length} giấc mơ tương đồng, ${personalSymbolPatterns.length} mô-típ cá nhân lặp lại và ${Object.keys(enrichedSleepContext).length} dữ kiện về điều kiện ngủ.`,
+    `Nhận diện ${context.symbols.length} mục từ điển, ${context.contextualMotifHints.length} chi tiết theo ngữ cảnh, ${context.observedSymbolPatterns.length} mẫu trong kho quan sát, ${context.similarDreamResult.matches.length} giấc mơ tương đồng, ${context.personalSymbolPatterns.length} mô-típ cá nhân lặp lại và ${Object.keys(context.enrichedSleepContext).length} dữ kiện về điều kiện ngủ.`,
   );
+  return context;
+}
 
-  await report('retrieving_rules', 38, 'Đang chọn lập luận phù hợp và kiểm tra dẫn chứng...', 'Đang lọc kết luận mô tả, câu hỏi kiểm tra và cơ chế tâm lý.');
-  const {
-    matchedRules,
-    explanatoryRules,
-    questionRules,
-    usableRules: llmUsableRules,
-    validEvidenceLinks,
-    evidenceLinksAudit,
-    validSourcesMap,
-    validEvidenceMap,
-    promptEvidenceSection,
-  } = await retrieveDreamRuleEvidence(dreamNarrative);
-
+async function retrieveGroundedRules(
+  context: RetrievedDreamContext,
+  report: DreamAnalysisReporter,
+): Promise<RetrievedRuleEvidence> {
+  await report(
+    'retrieving_rules',
+    38,
+    'Đang chọn lập luận phù hợp và kiểm tra dẫn chứng...',
+    'Đang lọc kết luận mô tả, câu hỏi kiểm tra và cơ chế tâm lý.',
+  );
+  const rules = await retrieveDreamRuleEvidence(context.dreamNarrative);
   await report(
     'retrieving_rules',
     48,
     'Đã kiểm tra xong phần tri thức có thể dùng.',
     'Đang đóng gói phần dữ liệu đã kiểm chứng để viết kết quả.',
-    `Tìm thấy ${matchedRules.length} kết luận liên quan; ${explanatoryRules.length} kết luận có thể hỗ trợ giải thích tâm lý và ${questionRules.length} kết luận có điều kiện có thể kiểm tra. Số câu hỏi cuối cùng còn phụ thuộc chi tiết thật sự xuất hiện trong lời kể; ${validEvidenceLinks.length} liên kết dẫn chứng đã được kiểm tra.`,
+    `Tìm thấy ${rules.matchedRules.length} kết luận liên quan; ${rules.explanatoryRules.length} kết luận có thể hỗ trợ giải thích tâm lý và ${rules.questionRules.length} kết luận có điều kiện có thể kiểm tra. Số câu hỏi cuối cùng còn phụ thuộc chi tiết thật sự xuất hiện trong lời kể; ${rules.validEvidenceLinks.length} liên kết dẫn chứng đã được kiểm tra.`,
   );
+  return rules;
+}
 
-  const { profileText, culturalProfileUsed, hasBirthProfile } = buildDreamProfilePrompt(profileData);
-  const {
-    compactSymbolsText,
-    compactRulesText,
-    personalPatternText,
-    observedSymbolText,
-    similarDreamText,
-  } = buildDreamPromptContext({
-    retrievedSymbols,
-    usableRules: llmUsableRules,
-    personalSymbolPatterns,
-    observedSymbolPatterns,
-    similarDreams: similarDreamResult.matches,
+function buildGroundedPrompt(
+  context: RetrievedDreamContext,
+  rules: RetrievedRuleEvidence,
+  profile: DreamProfilePrompt,
+): string {
+  const promptContext = buildDreamPromptContext({
+    retrievedSymbols: context.symbols,
+    usableRules: rules.usableRules,
+    personalSymbolPatterns: context.personalSymbolPatterns,
+    observedSymbolPatterns: context.observedSymbolPatterns,
+    similarDreams: context.similarDreamResult.matches,
   });
 
-  const compactedPrompt = buildDreamAnalysisPrompt({
-    dreamNarrative,
-    wakingContext: wakingReactionText,
-    sleepContext: enrichedSleepContext,
-    profileContext: profileText,
-    evidenceContext: promptEvidenceSection,
-    ruleContext: compactRulesText,
-    dictionaryContext: compactSymbolsText,
-    personalSymbolContext: personalPatternText,
-    observedSymbolContext: observedSymbolText,
-    similarDreamContext: similarDreamText,
-    contextualMotifs: contextualMotifHints,
-    culturalAnalysisAllowed: culturalProfileUsed,
+  return buildDreamAnalysisPrompt({
+    dreamNarrative: context.dreamNarrative,
+    wakingContext: context.wakingReactionText,
+    sleepContext: context.enrichedSleepContext,
+    profileContext: profile.profileText,
+    evidenceContext: rules.promptEvidenceSection,
+    ruleContext: promptContext.compactRulesText,
+    dictionaryContext: promptContext.compactSymbolsText,
+    personalSymbolContext: promptContext.personalPatternText,
+    observedSymbolContext: promptContext.observedSymbolText,
+    similarDreamContext: promptContext.similarDreamText,
+    contextualMotifs: context.contextualMotifHints,
+    culturalAnalysisAllowed: profile.culturalProfileUsed,
   });
+}
 
-  // ─── STEP 5: LLM Generation ───
-  // One bounded generation pass. Structural gaps are completed by deterministic
-  // rule-grounded fallbacks below; re-sending the entire answer to a local model
-  // doubled latency and could introduce a different interpretation.
+async function generateGroundedAnalysis(
+  request: DreamAnalysisRequest,
+  context: RetrievedDreamContext,
+  rules: RetrievedRuleEvidence,
+  profile: DreamProfilePrompt,
+  prompt: string,
+  report: DreamAnalysisReporter,
+): Promise<ILLMOutput> {
   await report(
     'generating_analysis',
     55,
     'Mô hình đang tổng hợp các mạch diễn giải có căn cứ...',
     'Đang nối chuỗi sự kiện, cảm xúc, trường hợp tương đồng và phần tri thức đã kiểm chứng.',
   );
-  let rawAiAnalysis: ILLMOutput;
-  try {
-    rawAiAnalysis = await generateAnalysis(compactedPrompt, abortSignal);
-    rawAiAnalysis.analysis_mode = 'llm_grounded';
-  } catch (error) {
-    logger.warn('Dream analysis generation failed; no synthetic case-specific answer was created.', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    throw error;
-  }
+  const rawAnalysis = await callDreamAnalysisModel(prompt, request.abortSignal);
   await report(
     'generating_analysis',
     82,
@@ -176,18 +186,19 @@ export async function runDreamAnalysis(
     'Đang kiểm tra câu hỏi, nguồn và loại bỏ suy luận không có căn cứ...',
     'Đang đối chiếu chi tiết với lời kể, gắn nguồn và bỏ các kết luận vượt quá bằng chứng.',
   );
-  const aiAnalysis = finalizeDreamAnalysisOutput({
-    rawAnalysis: rawAiAnalysis,
-    dreamNarrative,
-    wakingReactionText,
-    retrievedSymbols,
-    matchedRules,
-    explanatoryRules,
-    questionRules,
-    validSourcesMap,
-    validEvidenceMap,
-    culturalProfileUsed,
-    similarDreams: similarDreamResult.matches,
+
+  const analysis = finalizeDreamAnalysisOutput({
+    rawAnalysis,
+    dreamNarrative: context.dreamNarrative,
+    wakingReactionText: context.wakingReactionText,
+    retrievedSymbols: context.symbols,
+    matchedRules: rules.matchedRules,
+    explanatoryRules: rules.explanatoryRules,
+    questionRules: rules.questionRules,
+    validSourcesMap: rules.validSourcesMap,
+    validEvidenceMap: rules.validEvidenceMap,
+    culturalProfileUsed: profile.culturalProfileUsed,
+    similarDreams: context.similarDreamResult.matches,
   });
   await report(
     'finalizing',
@@ -195,78 +206,45 @@ export async function runDreamAnalysis(
     'Đang viết phần tiếp theo của giấc mơ...',
     'Phần phân tích đã hoàn tất; đang dùng bộ sáng tác riêng để nối tiếp câu chuyện.',
   );
-  aiAnalysis.creative_continuation = await generateDreamContinuation(dreamNarrative);
+  analysis.creative_continuation = await generateDreamContinuation(context.dreamNarrative);
+  return analysis;
+}
 
-  // ─── STEP 6: Construct Audit Trail ───
-  const measuredPsychologicalProfileUsed =
-    profileData.measuredPsychologicalProfile.bigFive.enabled === true ||
-    profileData.measuredPsychologicalProfile.chronotype.enabled === true ||
-    profileData.measuredPsychologicalProfile.schemas.enabled === true;
+async function callDreamAnalysisModel(
+  prompt: string,
+  abortSignal?: AbortSignal,
+): Promise<ILLMOutput> {
+  try {
+    const analysis = await generateAnalysis(prompt, abortSignal);
+    analysis.analysis_mode = 'llm_grounded';
+    return analysis;
+  } catch (error) {
+    logger.warn('Dream analysis generation failed; no synthetic case-specific answer was created.', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
 
-  // Clean retrieved symbols to exclude the interpretation text in audit trail
-  const cleanUsedSymbols = retrievedSymbols.map((s) => ({
-    symbol: s.symbol,
-    category: s.category,
-    symbolValence: s.symbolValence,
-    rawSimilarityScore: s.rawSimilarityScore,
-    adjustedScore: s.adjustedScore,
-    retrievalMethods: s.retrievalMethods,
-    lowConfidence: s.lowConfidence,
-    fallbackReason: s.fallbackReason,
-    boostReasons: s.boostReasons,
-    suppressedBoostReasons: s.suppressedBoostReasons,
-    canonicalSymbol: s.canonicalSymbol,
-    matchedVariants: s.matchedVariants,
-    matchedTextVariant: s.matchedTextVariant,
-  }));
-
-  await report(
-    'finalizing',
-    96,
-    'Đang hoàn tất kết quả phân tích...',
-    'Đang lưu bản phân tích và dấu vết dữ liệu đã sử dụng.',
-    `Giữ lại ${aiAnalysis.symbolic_notes?.length || 0} chi tiết nổi bật, ${aiAnalysis.scientific_context_notes?.length || 0} giải thích có nguồn, ${aiAnalysis.real_life_hypotheses?.length || 0} câu hỏi làm rõ và ${aiAnalysis.similar_dreams?.length || 0} giấc mơ tương đồng.`,
-  );
-  return {
-    aiAnalysis,
-    analysisEmbedding: similarDreamResult.queryEmbedding,
-    retrievedContext: {
-      componentA: {
-        rawText,
-        dreamNarrative,
-        wakingReactionText,
-        sleepContextText,
-        sleepContext: enrichedSleepContext,
-        segmentationReasons,
-        usedSymbols: cleanUsedSymbols,
-        retrievalConfig: {
-          topK: cleanUsedSymbols.length,
-          minSimilarityScore: minScore,
-          embeddingModel: embedModel,
-          retrievalStrategy: strategyUsed,
-          vectorBackend,
-        },
-      },
-      componentB: {
-        usedProfileFields: {
-          culturalProfileUsed,
-          measuredPsychologicalProfileUsed,
-          learnedPersonalPatternUsed: personalSymbolPatterns.length > 0,
-          ...(!culturalProfileUsed ? {
-            reason: hasBirthProfile ? 'cultural_sources_unavailable' : 'missing_birth_profile'
-          } : {}),
-        },
-      },
-      componentC: {
-        similarDreams: similarDreamResult.matches,
-        personalSymbolPatterns,
-        observedSymbolPatterns,
-      },
-      componentD: {
-        appliedRules: matchedRules,
-        evidenceLinks: evidenceLinksAudit,
-      },
-    },
-    strategyUsed,
+function createProgressReporter(
+  onProgress: ((progress: DreamAnalysisProgress) => void | Promise<void>) | undefined,
+  abortSignal?: AbortSignal,
+): DreamAnalysisReporter {
+  return async (stage, progress, message, miniStep, resultSummary) => {
+    throwIfAnalysisCancelled(abortSignal);
+    await onProgress?.({ stage, progress, message, miniStep, resultSummary });
   };
+}
+
+function requireDreamDatabase(): void {
+  if (!mongoose.connection.db) {
+    throw new Error('Database connection is not initialized');
+  }
+}
+
+function throwIfAnalysisCancelled(abortSignal?: AbortSignal): void {
+  if (!abortSignal?.aborted) return;
+  const error = new Error('dream_analysis_cancelled');
+  error.name = 'AbortError';
+  throw error;
 }

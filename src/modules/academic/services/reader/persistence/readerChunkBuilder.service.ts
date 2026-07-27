@@ -9,6 +9,7 @@ import {
   captureReaderReplacementBackup,
   markReaderReplacementWritten,
 } from './readerReplacement.service';
+import { recordReaderBuildSnapshot } from '../history/readerBuildHistory.service';
 
 export async function buildAndSaveSmartReaderData(
   source: any,
@@ -18,6 +19,12 @@ export async function buildAndSaveSmartReaderData(
   sourceType: string,
   isContribution = false,
   replacement?: { runId?: string; abortSignal?: AbortSignal },
+  buildTiming?: {
+    startedAt?: number;
+    estimatedDurationSeconds?: number;
+    pageCount?: number;
+    ocrUsed?: boolean;
+  },
 ): Promise<{ ragChunkCount: number; embedModel: string }> {
   // Filter out any blocks duplicate of the main title (excluding the actual title block)
   const normalizeString = (t: string) => t.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -251,23 +258,15 @@ export async function buildAndSaveSmartReaderData(
   // never duplicated here; the snapshot exists solely so moderators can
   // compare a structured DOI build with a Docling PDF build.
   try {
-    await source.constructor.updateOne(
-      { _id: source._id },
-      {
-        $push: {
-          readerBuildSnapshots: {
-            $each: [{
-              engine: parserEngine,
-              sourceType,
-              sectionCount: cleanBlocks.filter(block => block.blockType === 'heading').length || 1,
-              chunkCount: cleanBlocks.length,
-              builtAt: new Date(),
-            }],
-            $slice: -20,
-          },
-        },
-      },
-    );
+    await recordReaderBuildSnapshot({
+      sourceId: source._id,
+      isContribution,
+      engine: parserEngine,
+      sourceType,
+      sectionCount: cleanBlocks.filter(block => block.blockType === 'heading').length || 1,
+      chunkCount: cleanBlocks.length,
+      timing: buildTiming,
+    });
   } catch (snapshotError) {
     console.warn('[Reader Build Snapshot] Reader was saved, but its lightweight comparison snapshot could not be recorded.');
   }

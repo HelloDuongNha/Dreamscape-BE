@@ -1,13 +1,20 @@
+import { Types } from 'mongoose';
+import {
+  ApprovalContribution,
+  ApprovalOutcome,
+  PreparedApprovalContext,
+} from '../../dto/contributionWorkflow.dto';
 import AcademicChunk from '../../models/AcademicChunk';
 import AcademicDocument from '../../models/AcademicDocument';
+import { IAcademicSource } from '../../models/AcademicSource';
 import AcademicSection from '../../models/AcademicSection';
 import { importFullTextForSource } from '../source/fullTextImport.service';
 
 async function promotePreview(
-  academicSource: any,
-  contribution: any,
-  reviewerId: any,
-) {
+  academicSource: IAcademicSource,
+  contribution: ApprovalContribution,
+  reviewerId: Types.ObjectId,
+): Promise<void> {
   await AcademicDocument.updateOne(
     { previewContributionId: contribution._id },
     { $set: { sourceId: academicSource._id }, $unset: { previewContributionId: 1 } },
@@ -22,8 +29,10 @@ async function promotePreview(
   );
 
   academicSource.allowedUse = 'open_access_fulltext';
-  academicSource.fullTextStatus = contribution.fullTextStatus || 'imported';
-  academicSource.readableInApp = contribution.readableInApp || true;
+  academicSource.fullTextStatus = contribution.fullTextStatus === 'importing'
+    ? 'imported'
+    : contribution.fullTextStatus || 'imported';
+  academicSource.readableInApp = true;
   academicSource.chunkBuildStatus = 'completed';
   academicSource.chunkCount = await AcademicChunk.countDocuments({
     sourceId: academicSource._id,
@@ -38,10 +47,10 @@ async function promotePreview(
 }
 
 export async function finalizeApprovedSource(
-  academicSource: any,
-  prepared: any,
-  reviewerId: any,
-) {
+  academicSource: IAcademicSource,
+  prepared: PreparedApprovalContext,
+  reviewerId: Types.ObjectId,
+): Promise<ApprovalOutcome> {
   if (prepared.previewDocument) {
     await promotePreview(academicSource, prepared.contribution, reviewerId);
     return {
@@ -100,13 +109,17 @@ export async function finalizeApprovedSource(
       code: 'FULLTEXT_IMPORT_FAILED',
       details: { error: result.error || result.message },
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Auto-import on approval crashed:', error);
     return {
       message: 'Nguồn đã được duyệt, nhưng nhập bản đọc tự động gặp lỗi hệ thống.',
       warning: true,
       code: 'FULLTEXT_IMPORT_SYSTEM_ERROR',
-      details: { error: error.message || error },
+      details: { error: errorMessage(error) },
     };
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

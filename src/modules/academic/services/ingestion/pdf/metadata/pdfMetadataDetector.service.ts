@@ -25,9 +25,12 @@ export interface PdfMetadataDetectionResult {
   scannedPages: number[];
 }
 
-/**
- * Validates ISBN-10 checksum.
- */
+interface ExistingPdfMetadata {
+  title?: string;
+  language?: string;
+}
+
+// Validate the ISBN-10 checksum before accepting a detected candidate.
 function isValidIsbn10(isbn: string): boolean {
   if (isbn.length !== 10) return false;
   let sum = 0;
@@ -47,9 +50,7 @@ function isValidIsbn10(isbn: string): boolean {
   return sum % 11 === 0;
 }
 
-/**
- * Validates ISBN-13 checksum.
- */
+// Validate the ISBN-13 checksum before accepting a detected candidate.
 function isValidIsbn13(isbn: string): boolean {
   if (isbn.length !== 13) return false;
   let sum = 0;
@@ -61,19 +62,14 @@ function isValidIsbn13(isbn: string): boolean {
   return sum % 10 === 0;
 }
 
-/**
- * Strips trailing punctuation from matched identifiers.
- */
 function cleanTrailingPunctuation(str: string): string {
   return str.replace(/[.,;:})\]]+$/, '');
 }
 
-/**
- * Scans the extracted pages of a document to discover and validate DOI, ISBN, and PMCID identifiers.
- */
+// Scan representative PDF pages for validated DOI, PMCID and ISBN candidates.
 export function detectPdfMetadata(
   extractedDocument: ExtractedDocument,
-  existingMetadata?: any
+  existingMetadata?: ExistingPdfMetadata,
 ): PdfMetadataDetectionResult {
   const scannedPages: number[] = [];
   const rawDois: string[] = [];
@@ -82,16 +78,12 @@ export function detectPdfMetadata(
 
   const pageCount = extractedDocument.pageCount;
   
-  // Collect target physical page numbers (1-based)
   const targetPages = new Set<number>();
-  
-  // First 8-12 pages (we'll do min of 10 pages and pageCount)
   const firstBound = Math.min(10, pageCount);
   for (let i = 1; i <= firstBound; i++) {
     targetPages.add(i);
   }
   
-  // Last 3-5 pages (we'll do last 4 pages)
   const lastStart = Math.max(1, pageCount - 3);
   for (let i = lastStart; i <= pageCount; i++) {
     targetPages.add(i);
@@ -99,7 +91,6 @@ export function detectPdfMetadata(
 
   const sortedPages = Array.from(targetPages).sort((a, b) => a - b);
 
-  // Regex patterns
   const doiRegex = /\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+/gi;
   const pmcidRegex = /\bPMC\d+/gi;
   const isbnRegex = /\b(?:ISBN(?:[-_ ]*(?:10|13))?:?\s*)?((?:[0-9Xx][-_ ]*){10,13})\b/gi;
@@ -111,7 +102,6 @@ export function detectPdfMetadata(
     scannedPages.push(pageNum);
     const text = page.blocks.map(b => b.text).join('\n');
 
-    // 1. Scan DOIs
     let doiMatch;
     doiRegex.lastIndex = 0;
     while ((doiMatch = doiRegex.exec(text)) !== null) {
@@ -121,7 +111,6 @@ export function detectPdfMetadata(
       }
     }
 
-    // 2. Scan PMCIDs
     let pmcidMatch;
     pmcidRegex.lastIndex = 0;
     while ((pmcidMatch = pmcidRegex.exec(text)) !== null) {
@@ -129,7 +118,6 @@ export function detectPdfMetadata(
       rawPmcids.push(cleaned);
     }
 
-    // 3. Scan ISBNs
     let isbnMatch;
     isbnRegex.lastIndex = 0;
     while ((isbnMatch = isbnRegex.exec(text)) !== null) {
@@ -142,12 +130,10 @@ export function detectPdfMetadata(
     }
   }
 
-  // Deduplicate results
   const validDois = Array.from(new Set(rawDois));
   const validPmcids = Array.from(new Set(rawPmcids));
   const validIsbns = Array.from(new Set(rawIsbns));
 
-  // Determine final validated identifier candidates
   const identifiers: PdfMetadataDetectionResult['identifiers'] = {};
   if (validPmcids.length > 0) {
     identifiers.pmcid = validPmcids[0];
@@ -159,13 +145,11 @@ export function detectPdfMetadata(
     identifiers.isbn = validIsbns[0];
   }
 
-  // Populate metadata hints
   const metadataHints: PdfMetadataDetectionResult['metadataHints'] = {
     title: extractedDocument.title || existingMetadata?.title || undefined,
     language: extractedDocument.language || existingMetadata?.language || undefined
   };
 
-  // Determine Confidence levels
   let identifiersConfidence: 'high' | 'medium' | 'low' = 'low';
   if (validDois.length > 0 || validPmcids.length > 0) {
     identifiersConfidence = 'high';

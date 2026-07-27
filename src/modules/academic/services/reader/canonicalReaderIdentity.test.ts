@@ -30,7 +30,7 @@ import {
 
 // ── Controller endpoints under test ──────────────────────────────────────────
 import { getApprovedSourceRead } from '../../controllers/approvedSourceReader.controller';
-import { getSourcePreview } from '../../controllers/moderationController';
+import { getSourcePreview } from '../../controllers/sourcePreview.controller';
 
 // ── Write method names that must never be called by reader endpoints ──────────
 const WRITE_METHODS = [

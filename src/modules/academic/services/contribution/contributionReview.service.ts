@@ -1,3 +1,4 @@
+import { Types } from 'mongoose';
 import type { SourceReviewInput } from '../../dto/sourceContribution.dto';
 import SourceContribution from '../../models/SourceContribution';
 import { approveSourceContribution } from './contributionApproval.service';
@@ -5,7 +6,7 @@ import { rejectSourceContribution } from './contributionRejection.service';
 
 export async function reviewSourceContribution(
   id: string,
-  reviewerId: any,
+  reviewerId: Types.ObjectId,
   input: Extract<SourceReviewInput, { valid: true }>,
 ) {
   const contribution = await SourceContribution.findById(id);

@@ -1,31 +1,81 @@
-import Dream from '../../../models/Dream';
-import Notification from '../../../../social/models/Notification';
+import { Types } from 'mongoose';
 import { logger } from '../../../../../infrastructure/logger';
+import Notification from '../../../../social/models/Notification';
+import Dream, { IDream } from '../../../models/Dream';
 import { runDreamAnalysis } from '../orchestration/analyze.service';
+import { DreamAnalysisResult } from '../orchestration/dreamAnalysisOrchestration.types';
 import { rollbackDreamAnalysisRun } from './dreamAnalysisRollback.service';
-import { registerDreamAnalysisController, clearDreamAnalysisController } from './dreamAnalysisRuntime.service';
+import {
+  clearDreamAnalysisController,
+  registerDreamAnalysisController,
+} from './dreamAnalysisRuntime.service';
 import { syncDreamSymbolObservations } from './dreamSymbolObservationSync.service';
 
-export const runBackgroundAnalysis = async (
-  dreamId: any,
+interface ActiveAnalysisRun {
+  dreamId: Types.ObjectId | string;
+  userId: string;
+  content: string;
+  sleepContext: Record<string, any>;
+  runId: string;
+  analysisStartedAt: Date;
+  processingStartedAt: Date;
+  abortController: AbortController;
+}
+
+interface DreamCompletionUpdate {
+  $set: Record<string, unknown>;
+  $unset: Record<string, number>;
+}
+
+// Execute one queued analysis behind its run fence and commit only its own result.
+export async function runBackgroundAnalysis(
+  dreamId: Types.ObjectId | string,
   userId: string,
   content: string,
-  sleepContext: any,
+  sleepContext: Record<string, any>,
   runId: string,
-): Promise<void> => {
+): Promise<void> {
   logger.info(`Starting background analysis for dream ${dreamId}`);
+  const run = await startOwnedAnalysisRun({ dreamId, userId, content, sleepContext, runId });
+  if (!run) return;
+
+  try {
+    const result = await executeDreamAnalysis(run);
+    const dream = await commitDreamAnalysis(run, result);
+    if (!dream) return;
+    await finalizeCompletedDream(dream);
+    logger.info(`Background analysis completed successfully for dream ${dreamId}`);
+  } catch (error: unknown) {
+    await handleAnalysisFailure(run, error);
+  } finally {
+    clearDreamAnalysisController(String(dreamId), runId, run.abortController);
+  }
+}
+
+async function startOwnedAnalysisRun(input: {
+  dreamId: Types.ObjectId | string;
+  userId: string;
+  content: string;
+  sleepContext: Record<string, any>;
+  runId: string;
+}): Promise<ActiveAnalysisRun | null> {
   const queuedDream = await Dream.findOne({
-    _id: dreamId,
+    _id: input.dreamId,
     ai_status: 'pending',
-    'analysisRun.runId': runId,
+    'analysisRun.runId': input.runId,
   }).select('ai_status analysisRun analysisMetadata').lean();
-  if (!queuedDream) return;
-  const analysisStartedAt = (queuedDream.analysisRun as any)?.startedAt
-    ? new Date((queuedDream.analysisRun as any).startedAt)
+  if (!queuedDream) return null;
+
+  const analysisStartedAt = queuedDream.analysisRun?.startedAt
+    ? new Date(queuedDream.analysisRun.startedAt)
     : new Date();
   const processingStartedAt = new Date();
   await Dream.updateOne(
-    { _id: dreamId, ai_status: 'pending', 'analysisRun.runId': runId },
+    {
+      _id: input.dreamId,
+      ai_status: 'pending',
+      'analysisRun.runId': input.runId,
+    },
     {
       $set: {
         'analysisMetadata.processingStartedAt': processingStartedAt,
@@ -33,146 +83,183 @@ export const runBackgroundAnalysis = async (
       },
     },
   );
+
   const abortController = new AbortController();
-  registerDreamAnalysisController(String(dreamId), runId, abortController);
+  registerDreamAnalysisController(String(input.dreamId), input.runId, abortController);
+  return { ...input, analysisStartedAt, processingStartedAt, abortController };
+}
 
-  try {
-    // Local models can legitimately take several minutes. Do not turn an estimate
-    // into a cancellation deadline; the job remains pending until it finishes or
-    // the provider returns a real error.
-    const { aiAnalysis, retrievedContext, strategyUsed, analysisEmbedding } = await runDreamAnalysis(
-      userId,
-      content,
-      sleepContext || {},
-      async stage => {
-        const progressFields: Record<string, unknown> = {
-          'analysisMetadata.currentStage': stage.stage,
-          'analysisMetadata.progress': stage.progress,
-          'analysisMetadata.statusMessage': stage.message,
-          'analysisMetadata.currentMiniStep': stage.miniStep || '',
-          'analysisMetadata.startedAt': analysisStartedAt,
-          'analysisMetadata.processingStartedAt': processingStartedAt,
-          'analysisMetadata.lastProgressAt': new Date(),
-        };
-        if (stage.resultSummary) {
-          progressFields[`analysisMetadata.stageResults.${stage.stage}`] = stage.resultSummary;
-        }
-        await Dream.updateOne(
-          { _id: dreamId, ai_status: 'pending', 'analysisRun.runId': runId },
-          {
-            $set: progressFields,
-          }
-        );
-      },
-      abortController.signal,
-    );
-
-    const pendingDream = await Dream.findOne({
-      _id: dreamId,
-      ai_status: 'pending',
-      'analysisRun.runId': runId,
-    });
-    if (!pendingDream) {
-      logger.warn(`Dream ${dreamId} no longer owns analysis run ${runId}. Discarding late LLM success.`);
-      return;
-    }
-
-    const progressHistory = (pendingDream.analysisMetadata as any)?.stageResults || {};
-    const estimatedDurationSeconds = Number((pendingDream.analysisMetadata as any)?.estimatedDurationSeconds) || null;
-    const durationMs = Date.now() - processingStartedAt.getTime();
-    const completedMetadata = {
-      strategyUsed,
-      llmModel: process.env.OLLAMA_MODEL || 'qwen2.5:14b',
-      embeddingModel: process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text',
-      ragTopK: retrievedContext.componentA.usedSymbols.length,
-      minSimilarityScore: parseFloat(process.env.SYMBOL_RAG_MIN_SCORE || '0.55'),
-      vectorBackend: retrievedContext.componentA.retrievalConfig.vectorBackend,
-      analysisVersion: '2.0.0-grounded',
-      currentStage: 'completed',
-      progress: 100,
-      statusMessage: 'Phân tích hoàn tất.',
-      currentMiniStep: 'Kết quả đã sẵn sàng.',
-      stageResults: progressHistory,
-      startedAt: analysisStartedAt,
-      generatedAt: new Date(),
-      durationMs,
-      processingDurationMs: durationMs,
-      estimatedDurationSeconds,
-      timingDeltaSeconds: estimatedDurationSeconds === null
-        ? null
-        : Math.round(durationMs / 1000 - estimatedDurationSeconds),
-      hasUnanalyzedAdditions: false,
-    } as any;
-    const targetSequences = Array.isArray((pendingDream.analysisRun as any)?.targetAdditionSequences)
-      ? (pendingDream.analysisRun as any).targetAdditionSequences.filter(Number.isInteger)
-      : [];
-    const completionUpdate: Record<string, any> = {
-      $set: {
-        ai_status: 'completed',
-        ai_result: aiAnalysis as any,
-        mood_tag: aiAnalysis.emotional_tone || '',
-        analysisEmbedding,
-        retrievedContext: retrievedContext as any,
-        analysisMetadata: completedMetadata,
-        realLifeHypothesesFeedback: [],
-      },
-      $unset: {
-        analysisRun: 1,
-        analysisRollback: 1,
-        aiAnalysis: 1,
-      },
-    };
-    const completionOptions: Record<string, any> = { new: true };
-    if (targetSequences.length > 0) {
-      completionUpdate.$set['additions.$[target].analysisState'] = 'analyzed';
-      completionUpdate.$set['additions.$[target].analyzedAt'] = new Date();
-      completionUpdate.$unset['additions.$[target].analysisRunId'] = 1;
-      completionOptions.arrayFilters = [{ 'target.sequence': { $in: targetSequences } }];
-    }
-    const freshDream = await Dream.findOneAndUpdate(
-      { _id: dreamId, ai_status: 'pending', 'analysisRun.runId': runId },
-      completionUpdate,
-      completionOptions,
-    );
-    if (!freshDream) {
-      logger.warn(`Dream ${dreamId} analysis run ${runId} lost its commit fence.`);
-      return;
-    }
-
-    await syncDreamSymbolObservations(freshDream);
-    try {
-      await Notification.create({
-        recipientId: freshDream.userId,
-        senderId: freshDream.userId,
-        type: 'dream_analysis',
-        postId: freshDream._id,
-      });
-    } catch (notificationError) {
-      // The analysis result is already durable. A notification failure must not
-      // downgrade a completed analysis or make the client retry the LLM job.
-      logger.warn(`Could not persist completion notification for dream ${dreamId}`, {
-        error: notificationError instanceof Error ? notificationError.message : String(notificationError),
-      });
-    }
-    logger.info(`Background analysis completed successfully for dream ${dreamId}`);
-  } catch (err: any) {
-    if (err?.name === 'AbortError' || err?.message === 'dream_analysis_cancelled') {
-      logger.info(`Background analysis cancelled for dream ${dreamId}`);
-      return;
-    }
-    logger.error(`Background analysis failed for dream ${dreamId}`, err);
-
-    try {
-      await rollbackDreamAnalysisRun(
-        dreamId,
-        runId,
-        'failed',
-        err.message || 'An unexpected internal error occurred during dream analysis.',
+async function executeDreamAnalysis(run: ActiveAnalysisRun): Promise<DreamAnalysisResult> {
+  return runDreamAnalysis(
+    run.userId,
+    run.content,
+    run.sleepContext || {},
+    async stage => {
+      const progressFields: Record<string, unknown> = {
+        'analysisMetadata.currentStage': stage.stage,
+        'analysisMetadata.progress': stage.progress,
+        'analysisMetadata.statusMessage': stage.message,
+        'analysisMetadata.currentMiniStep': stage.miniStep || '',
+        'analysisMetadata.startedAt': run.analysisStartedAt,
+        'analysisMetadata.processingStartedAt': run.processingStartedAt,
+        'analysisMetadata.lastProgressAt': new Date(),
+      };
+      if (stage.resultSummary) {
+        progressFields[`analysisMetadata.stageResults.${stage.stage}`] = stage.resultSummary;
+      }
+      await Dream.updateOne(
+        {
+          _id: run.dreamId,
+          ai_status: 'pending',
+          'analysisRun.runId': run.runId,
+        },
+        { $set: progressFields },
       );
-    } catch (saveErr) {
-      logger.error(`Failed to mark dream ${dreamId} as failed:`, saveErr);
-    }
-  } finally {
-    clearDreamAnalysisController(String(dreamId), runId, abortController);
+    },
+    run.abortController.signal,
+  );
+}
+
+async function commitDreamAnalysis(
+  run: ActiveAnalysisRun,
+  result: DreamAnalysisResult,
+): Promise<IDream | null> {
+  const pendingDream = await Dream.findOne({
+    _id: run.dreamId,
+    ai_status: 'pending',
+    'analysisRun.runId': run.runId,
+  });
+  if (!pendingDream) {
+    logger.warn(`Dream ${run.dreamId} no longer owns analysis run ${run.runId}. Discarding late LLM success.`);
+    return null;
   }
-};
+
+  const durationMs = Date.now() - run.processingStartedAt.getTime();
+  const estimatedDurationSeconds = Number(
+    pendingDream.analysisMetadata?.estimatedDurationSeconds,
+  ) || null;
+  const update = buildCompletionUpdate({
+    pendingDream,
+    result,
+    durationMs,
+    estimatedDurationSeconds,
+    analysisStartedAt: run.analysisStartedAt,
+  });
+  const targetSequences = pendingDream.analysisRun?.targetAdditionSequences
+    ?.filter(Number.isInteger) || [];
+  const options: { new: true; arrayFilters?: Array<Record<string, unknown>> } = { new: true };
+  if (targetSequences.length > 0) {
+    update.$set['additions.$[target].analysisState'] = 'analyzed';
+    update.$set['additions.$[target].analyzedAt'] = new Date();
+    update.$unset['additions.$[target].analysisRunId'] = 1;
+    options.arrayFilters = [{ 'target.sequence': { $in: targetSequences } }];
+  }
+
+  const completedDream = await Dream.findOneAndUpdate(
+    {
+      _id: run.dreamId,
+      ai_status: 'pending',
+      'analysisRun.runId': run.runId,
+    },
+    update,
+    options,
+  );
+  if (!completedDream) {
+    logger.warn(`Dream ${run.dreamId} analysis run ${run.runId} lost its commit fence.`);
+  }
+  return completedDream;
+}
+
+function buildCompletionUpdate(input: {
+  pendingDream: IDream;
+  result: DreamAnalysisResult;
+  durationMs: number;
+  estimatedDurationSeconds: number | null;
+  analysisStartedAt: Date;
+}): DreamCompletionUpdate {
+  return {
+    $set: {
+      ai_status: 'completed',
+      ai_result: input.result.aiAnalysis,
+      mood_tag: input.result.aiAnalysis.emotional_tone || '',
+      analysisEmbedding: input.result.analysisEmbedding,
+      retrievedContext: input.result.retrievedContext,
+      analysisMetadata: {
+        strategyUsed: input.result.strategyUsed,
+        llmModel: process.env.OLLAMA_MODEL || 'qwen2.5:14b',
+        embeddingModel: process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text',
+        ragTopK: input.result.retrievedContext.componentA.usedSymbols.length,
+        minSimilarityScore: parseFloat(process.env.SYMBOL_RAG_MIN_SCORE || '0.55'),
+        vectorBackend: input.result.retrievedContext.componentA.retrievalConfig.vectorBackend,
+        analysisVersion: '2.0.0-grounded',
+        currentStage: 'completed',
+        progress: 100,
+        statusMessage: 'Phân tích hoàn tất.',
+        currentMiniStep: 'Kết quả đã sẵn sàng.',
+        stageResults: input.pendingDream.analysisMetadata?.stageResults || {},
+        startedAt: input.analysisStartedAt,
+        generatedAt: new Date(),
+        durationMs: input.durationMs,
+        processingDurationMs: input.durationMs,
+        estimatedDurationSeconds: input.estimatedDurationSeconds,
+        timingDeltaSeconds: input.estimatedDurationSeconds === null
+          ? null
+          : Math.round(input.durationMs / 1000 - input.estimatedDurationSeconds),
+        hasUnanalyzedAdditions: false,
+      },
+      realLifeHypothesesFeedback: [],
+    },
+    $unset: {
+      analysisRun: 1,
+      analysisRollback: 1,
+      aiAnalysis: 1,
+    },
+  };
+}
+
+async function finalizeCompletedDream(dream: IDream): Promise<void> {
+  await syncDreamSymbolObservations(dream);
+  try {
+    await Notification.create({
+      recipientId: dream.userId,
+      senderId: dream.userId,
+      type: 'dream_analysis',
+      postId: dream._id,
+    });
+  } catch (error: unknown) {
+    logger.warn(`Could not persist completion notification for dream ${dream._id}`, {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function handleAnalysisFailure(
+  run: ActiveAnalysisRun,
+  error: unknown,
+): Promise<void> {
+  if (isAnalysisCancellation(error)) {
+    logger.info(`Background analysis cancelled for dream ${run.dreamId}`);
+    return;
+  }
+
+  logger.error(`Background analysis failed for dream ${run.dreamId}`, error);
+  try {
+    await rollbackDreamAnalysisRun(
+      run.dreamId,
+      run.runId,
+      'failed',
+      errorMessage(error) || 'An unexpected internal error occurred during dream analysis.',
+    );
+  } catch (saveError) {
+    logger.error(`Failed to mark dream ${run.dreamId} as failed:`, saveError);
+  }
+}
+
+function isAnalysisCancellation(error: unknown): boolean {
+  return error instanceof Error
+    && (error.name === 'AbortError' || error.message === 'dream_analysis_cancelled');
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
