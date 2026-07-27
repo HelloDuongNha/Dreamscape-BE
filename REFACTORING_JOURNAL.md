@@ -926,3 +926,37 @@ analysis/orchestration/
   questions and evidence.
 - Removed the unused case-conclusion, concern-card, evidence-chain and
   narrative-summary styles from `OracleAnalysisResult.vue`.
+
+## R18 — Dream module closure
+
+### Structural closure
+
+- Moved case-conclusion construction into
+  `analysis/grounding/dreamCaseConclusion.service.ts`; case-answer feedback
+  remains in `dreamCaseAssessment.service.ts`.
+- Kept the grounding response facade stable so existing imports and response
+  behavior remain unchanged.
+- Updated the route contract baseline to the current 17 Dream routes and 99
+  total feature routes, including the existing AI-analysis policy endpoint.
+- Updated the grounding regression expectation to reflect the intended product
+  behavior: a confirmed answer revises the relevant interpretive thread instead
+  of silently leaving the analysis unchanged.
+
+### Locked behavior
+
+- Dream route paths, middleware order, response shapes, queue lifecycle,
+  cancellation, rollback, notification behavior and AI-analysis policy remain
+  unchanged.
+- No dream-specific keyword fixture or prompt behavior was added in this
+  closure pass.
+- The continuation prompt remains separate from scientific analysis and the
+  reload path still branches from the original dream context.
+
+### Verification
+
+- Backend TypeScript: passed.
+- Route contract: 99 feature routes + 1 health route preserved.
+- Contract suite: 26/26 files passed.
+- Frontend production build: passed.
+- Git whitespace/error check: passed.
+- UI acceptance: project-owner verification remains the final product check.

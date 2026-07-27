@@ -12,7 +12,7 @@ const EXPECTED_ROUTE_FILES: Record<string, RouteBaseline> = {
   'authRoutes.ts': { count: 10, sha256: '98f79ffaaf3d0432311a2c1d68aea8a08c699a0fda5382e537e12e09f5601be5' },
   'commentRoutes.ts': { count: 1, sha256: 'f825129e8d6c96eff3f3a20eee76fe2a7844276f5fd869e0706e40d8d3226807' },
   'conversationRoutes.ts': { count: 4, sha256: '4a9fecdf6c5ab6dbf4d80cba802df0a888d4bf9256f2dd7c65a7e385be773c5c' },
-  'dreamRoutes.ts': { count: 16, sha256: 'ac86cd2b18566c69516aa59ff35c05293d8c9ef634e8a34d9a23f1dcf7975a72' },
+  'dreamRoutes.ts': { count: 17, sha256: '3d8da2987e0113a7fa72bdb3f1af24641fc511d1622071f715fca53d8b9f5bac' },
   'moderationRoutes.ts': { count: 29, sha256: '97871a269928fd2d20138d6cfec6cf5c9437df786668e43320cc529864678093' },
   'notificationRoutes.ts': { count: 2, sha256: '06f0f3e29d332edffdfe74a44d81e0eb706c4b9c4543e099a14706517c0bc632' },
   'oracleRoutes.ts': { count: 17, sha256: 'b7ac24a837be4ece918a24628bbbd95a0fde9a0209f2e9ee6a82d1ce9eecdae9' },
@@ -21,7 +21,7 @@ const EXPECTED_ROUTE_FILES: Record<string, RouteBaseline> = {
 };
 const EXPECTED_MOUNT_COUNT = 9;
 const EXPECTED_MOUNT_HASH = '2aaaa1c81edefe2ca6d10718399b51b3bb2a3f5b81d6321cc4a62a834fa30569';
-const EXPECTED_FEATURE_ROUTE_COUNT = 98;
+const EXPECTED_FEATURE_ROUTE_COUNT = 99;
 
 function sha256(lines: string[]): string {
   return createHash('sha256').update([...lines].sort().join('\n')).digest('hex');

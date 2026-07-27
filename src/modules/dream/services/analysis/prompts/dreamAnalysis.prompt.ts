@@ -127,7 +127,11 @@ Required JSON shape:
     "title": "string",
     "continuation": "120-220 Vietnamese words",
     "connectionToCurrentDream": "string",
-    "inspirationIndexes": [1]
+    "inspirationIndexes": [1],
+    "sourceAnchors": ["two to four exact short excerpts from DREAM_NARRATIVE"],
+    "startingAnchor": "one exact excerpt from the final unresolved scene",
+    "awakeningBridge": "the exact two to four sentence sequence that earns the transition to waking",
+    "endingWakeReaction": "the exact final sentence describing the new feeling after waking"
   },
   "confidence": 0.0,
   "core_analysis": "one cohesive 180-320 word synthesis",

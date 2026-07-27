@@ -17,13 +17,15 @@ import {
 import type { DreamEmotionToneKey } from './dreamGroundingText.service';
 import { polishGeneratedDreamProse } from './dreamFeedbackRevision.service';
 import {
-  applyFeedbackToThreads,
   buildCaseGroundedSynthesis,
-  buildDreamCaseConclusion,
   buildFeedbackAppliedAnalysis,
   buildFeedbackConclusion,
+  applyFeedbackToThreads,
   ensureInterpretiveThreadCoverage,
 } from './dreamCaseAssessment.service';
+import {
+  buildDreamCaseConclusion,
+} from './dreamCaseConclusion.service';
 import {
   buildScientificInsightTitle,
   buildVerifiedScientificNote,
@@ -49,6 +51,7 @@ export {
 export * from './dreamGroundingText.service';
 export * from './dreamFeedbackRevision.service';
 export * from './dreamCaseAssessment.service';
+export * from './dreamCaseConclusion.service';
 export * from './scientificNote.service';
 
 function applyFeedbackToSymbolicNotes(notes: any[], _hypotheses: any[]): any[] {

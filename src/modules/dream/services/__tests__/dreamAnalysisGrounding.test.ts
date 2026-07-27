@@ -58,7 +58,10 @@ const feedback = buildFeedbackAppliedAnalysis(answered);
 assert.deepEqual(feedback?.confirmedFacts, [
   'Có một bối cảnh thật cần được giữ lại để đối chiếu trong trường hợp hiện tại.',
 ]);
-assert.deepEqual(applyFeedbackToThreads(threads, answered), threads);
+assert.deepEqual(applyFeedbackToThreads(threads, answered), [{
+  ...threads[0],
+  reasoning: `${threads[0].reasoning} Thông tin bạn xác nhận làm mạch này phù hợp hơn: Có một bối cảnh thật cần được giữ lại để đối chiếu trong trường hợp hiện tại.`,
+}]);
 
 const assessment = buildExploratoryCaseAssessment(answered);
 assert.equal(assessment?.answeredCount, 1);
