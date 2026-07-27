@@ -1,1 +1,1 @@
-// DTO contracts will be introduced during behavior-preserving controller refactoring.
+export * from './approvedSource.dto';

@@ -42,7 +42,7 @@ import mongoose from 'mongoose';
 // ─── Route & Controller imports for boundary tests ──────────────────────────
 import sourceRouter from '../../../../routes/sourceRoutes';
 import moderationRouter from '../../../../routes/moderationRoutes';
-import { getApprovedSourceTranslation } from '../../controllers/sourceController';
+import { getApprovedSourceTranslation } from '../../controllers/approvedSourceTranslation.controller';
 import { getSourcePreviewTranslation } from '../../controllers/moderationController';
 import { resolveApprovedSourceContext, resolvePreviewContributionContext } from './readerTranslationContext.service';
 import * as registry from './readerTranslationProvider.registry';

@@ -42,6 +42,7 @@ export interface IDream extends Document {
   sleepContext?: Record<string, any>;
   retrievedContext?: Record<string, any> | null;
   analysisMetadata?: Record<string, any> | null;
+  continuationMetadata?: Record<string, any> | null;
   analysisRun?: {
     runId: string;
     trigger: 'initial' | 'retry' | 'dream_addition' | 'addition_retry' | 'content_edit' | 'addition_edit' | 'ai_enable';
@@ -192,6 +193,10 @@ const DreamSchema = new Schema<IDream>(
     analysisMetadata: {
       type: Schema.Types.Mixed,
       default: {},
+    },
+    continuationMetadata: {
+      type: Schema.Types.Mixed,
+      default: null,
     },
     analysisRun: {
       type: Schema.Types.Mixed,

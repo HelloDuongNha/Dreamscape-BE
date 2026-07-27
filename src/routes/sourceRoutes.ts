@@ -1,6 +1,26 @@
 import { Router } from 'express';
 import authMiddleware, { isModerator } from '../middleware/authMiddleware';
-import { contributeSource, previewSource, getApprovedSources, getApprovedSourceById, getApprovedSourceRead, getApprovedSourceOriginalDocument, getApprovedSourcePdfInline, contributePdfSource, cacheOriginalPdf, uploadOriginalPdf, deleteOriginalPdf, processUploadedPdfForApprovedSource, getUploadedPdfImportProgressForApprovedSource, cancelUploadedPdfImportForApprovedSource, getApprovedSourceTranslation } from '../modules/academic/controllers/sourceController';
+import {
+  contributeSource,
+  previewSource,
+  contributePdfSource,
+  cacheOriginalPdf,
+  uploadOriginalPdf,
+  deleteOriginalPdf,
+  processUploadedPdfForApprovedSource,
+  getUploadedPdfImportProgressForApprovedSource,
+  cancelUploadedPdfImportForApprovedSource,
+} from '../modules/academic/controllers/sourceController';
+import {
+  getApprovedSourceById,
+  getApprovedSources,
+} from '../modules/academic/controllers/approvedSource.controller';
+import { getApprovedSourceRead } from '../modules/academic/controllers/approvedSourceReader.controller';
+import {
+  getApprovedSourceOriginalDocument,
+  getApprovedSourcePdfInline,
+} from '../modules/academic/controllers/approvedSourceDocument.controller';
+import { getApprovedSourceTranslation } from '../modules/academic/controllers/approvedSourceTranslation.controller';
 import { uploadPdfMiddleware } from '../modules/academic/controllers/moderationController';
 
 

@@ -29,7 +29,7 @@ import {
 } from './canonicalReaderIdentity.service';
 
 // ── Controller endpoints under test ──────────────────────────────────────────
-import { getApprovedSourceRead } from '../../controllers/sourceController';
+import { getApprovedSourceRead } from '../../controllers/approvedSourceReader.controller';
 import { getSourcePreview } from '../../controllers/moderationController';
 
 // ── Write method names that must never be called by reader endpoints ──────────

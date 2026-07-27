@@ -929,18 +929,42 @@ analysis/orchestration/
 
 ## R18 — Dream module closure
 
-### Structural closure
+### R18.1 — Case conclusion boundary
 
 - Moved case-conclusion construction into
   `analysis/grounding/dreamCaseConclusion.service.ts`; case-answer feedback
   remains in `dreamCaseAssessment.service.ts`.
 - Kept the grounding response facade stable so existing imports and response
   behavior remain unchanged.
+
+### R18.2 — Analysis response boundary
+
+- Moved response assembly out of the grounding facade into
+  `dreamAnalysisResponse.service.ts`.
+- Moved question, source and rule-score linking into
+  `dreamResponseQuestion.service.ts`.
+- `dreamAnalysisGrounding.service.ts` is now a seven-line compatibility facade.
+
+### R18.3 — Feedback execution boundary
+
+- Reduced `dreamFeedback.controller.ts` from 225 to 94 lines.
+- Moved feedback persistence, analysis revision, rule scoring and symbol
+  synchronization into `analysis/execution/dreamFeedback.service.ts`.
+- Validation failures retain their existing HTTP 400 responses; unexpected
+  execution failures remain HTTP 500.
+
+### R18.4 — Contracts and continuation recovery
+
 - Updated the route contract baseline to the current 17 Dream routes and 99
   total feature routes, including the existing AI-analysis policy endpoint.
 - Updated the grounding regression expectation to reflect the intended product
   behavior: a confirmed answer revises the relevant interpretive thread instead
   of silently leaving the analysis unchanged.
+- Initial and regenerated continuations now share the same narrative anchors
+  and earned-awakening contract.
+- Regeneration repairs provider output that omits internal audit fields before
+  falling back, so a schema-only miss no longer produces a user-visible 500.
+- Regeneration success and failure messages use the active frontend locale.
 
 ### Locked behavior
 
@@ -959,4 +983,77 @@ analysis/orchestration/
 - Contract suite: 26/26 files passed.
 - Frontend production build: passed.
 - Git whitespace/error check: passed.
+- All Dream controllers are below 150 lines and all Dream services are below
+  300 lines.
 - UI acceptance: project-owner verification remains the final product check.
+
+## A1 — Approved academic source read boundary
+
+### Scope
+
+- `GET /api/sources/approved`
+- `GET /api/sources/approved/:id`
+- `GET /api/sources/approved/:id/read`
+- `POST /api/sources/approved/:id/read/translate`
+- `GET /api/sources/approved/:id/original-document`
+- `GET /api/sources/approved/:id/pdf-inline`
+
+### Before
+
+- Six read endpoints shared the 1,746-line `sourceController.ts` with source
+  contribution, PDF mutation and import-job behavior.
+- Catalog pagination, ObjectId checks and reader pagination were parsed inline.
+- The Academic DTO folder contained only a placeholder.
+
+### After
+
+```text
+controllers/
+├── approvedSource.controller.ts
+├── approvedSourceReader.controller.ts
+├── approvedSourceDocument.controller.ts
+└── approvedSourceTranslation.controller.ts
+
+dto/
+└── approvedSource.dto.ts
+
+services/
+├── reader/approvedSourceReader.service.ts
+├── source/academicSourceResponse.service.ts
+├── source/approvedSourceCatalog.service.ts
+└── storage/approvedSourceDocument.service.ts
+```
+
+- Controllers now handle only HTTP status, headers and response envelopes.
+- DTO parsing preserves the existing page defaults and limits.
+- Catalog queries, canonical reader assembly and document resolution now have
+  separate service boundaries.
+- The shared source response mapper remains available to the contribution and
+  PDF mutation handlers without duplicating normalization rules.
+- Direct controller imports in the reader contract tests now point to the new
+  capability-owned controllers; no compatibility wrapper was left behind.
+- Removed unused Crossref, Unpaywall and URL helpers that had no callers.
+- `sourceController.ts` is reduced to the contribution and PDF mutation
+  capabilities scheduled for later Academic phases.
+
+### Locked behavior
+
+- Route paths, middleware order, status codes, response fields, pagination
+  defaults, canonical hashes, translation cancellation and SSRF handling remain
+  unchanged.
+- No Docling, OCR, Smart Reader import, translation-provider or persistence
+  policy was changed.
+
+### UI acceptance checklist
+
+- Search and paginate the approved-source catalog.
+- Open an approved source and its Smart Reader pages.
+- Open an uploaded PDF and an external open-access PDF inline.
+- Switch Reader translation between Vietnamese and English.
+- Refresh an open source and confirm the same page and source metadata return.
+
+### Verification
+
+- Backend TypeScript: passed.
+- Canonical Reader Identity: 213 assertions passed.
+- Canonical Reader Translation: 131 assertions passed.

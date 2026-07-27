@@ -17,6 +17,13 @@ function normalizeForComparison(value: string): string {
   return value.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLocaleLowerCase('vi');
 }
 
+export function isLongFormDreamContinuation(value: unknown): boolean {
+  const text = String(value || '').trim();
+  const wordCount = text.split(/\s+/u).filter(Boolean).length;
+  const paragraphCount = text.split(/\n\s*\n/u).map(item => item.trim()).filter(Boolean).length;
+  return wordCount >= 240 && paragraphCount >= 4;
+}
+
 function validateContinuation(value: any, narrative: string, strict = true): DreamContinuation {
   const title = String(value?.title || '').trim();
   const continuation = String(value?.continuation || '').trim();
@@ -40,7 +47,11 @@ function validateContinuation(value: any, narrative: string, strict = true): Dre
   const groundedAnchors = sourceAnchors.filter((anchor: string) =>
     normalizedNarrative.includes(normalizeForComparison(anchor)),
   );
-  const hasRequiredCore = Boolean(title && continuation && connectionToCurrentDream);
+  const hasRequiredCore = Boolean(
+    title
+    && connectionToCurrentDream
+    && isLongFormDreamContinuation(continuation),
+  );
   const hasGrounding = groundedAnchors.length >= 2
     && Boolean(startingAnchor)
     && normalizedFinalScene.includes(normalizeForComparison(startingAnchor));
@@ -76,7 +87,7 @@ ${JSON.stringify(candidate)}
 Return JSON only with exactly these fields:
 {
   "title": "short Vietnamese title",
-  "continuation": "120-220 Vietnamese words",
+  "continuation": "280-450 Vietnamese words in 4-7 paragraphs, beginning with a natural return to sleep and ending with a causally earned awakening",
   "connectionToCurrentDream": "one concise sentence",
   "sourceAnchors": ["two exact short excerpts from the original dream"],
   "startingAnchor": "an exact excerpt from the final unresolved scene",

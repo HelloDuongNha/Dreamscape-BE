@@ -1,5 +1,3 @@
-import { POST_DREAM_CONTINUATION_RULES } from './dreamContinuation.prompt';
-
 export interface DreamAnalysisPromptInput {
   dreamNarrative: string;
   wakingContext: string;
@@ -123,16 +121,6 @@ Required JSON shape:
   "practical_reflections": [
     { "suggestion": "string", "rationale": "string" }
   ],
-  "creative_continuation": {
-    "title": "string",
-    "continuation": "120-220 Vietnamese words",
-    "connectionToCurrentDream": "string",
-    "inspirationIndexes": [1],
-    "sourceAnchors": ["two to four exact short excerpts from DREAM_NARRATIVE"],
-    "startingAnchor": "one exact excerpt from the final unresolved scene",
-    "awakeningBridge": "the exact two to four sentence sequence that earns the transition to waking",
-    "endingWakeReaction": "the exact final sentence describing the new feeling after waking"
-  },
   "confidence": 0.0,
   "core_analysis": "one cohesive 180-320 word synthesis",
   "disclaimer": "string"
@@ -181,12 +169,10 @@ Reasoning and evidence rules:
 14. Cultural notes are ${input.culturalAnalysisAllowed
     ? 'allowed only for supplied, opted-in parameters and a named framework'
     : 'forbidden; return an empty array'}.
-15. creative_continuation must follow this contract:
-${POST_DREAM_CONTINUATION_RULES}
-    Similar dreams may influence narrative rhythm only. Do not import their
-    people, objects, locations, or events into this continuation.
-    inspirationIndexes may reference only numbered similar dreams and must be
-    empty when none genuinely helps.
+15. Do not create a fictional continuation in this analysis response. A
+    dedicated continuation generator runs after the evidence-based analysis is
+    complete so the first version and later regenerated versions use exactly
+    the same narrative contract.
 16. Respect the lowest confidence cap among applied rules. If evidence is
     insufficient, lower confidence and return fewer claims rather than adding
     generic filler.

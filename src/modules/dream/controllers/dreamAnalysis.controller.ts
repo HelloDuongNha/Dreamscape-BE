@@ -5,11 +5,7 @@ import { mapDreamResponse } from '../services/content/dreamNarrative.service';
 import { abortDreamAnalysisExecution } from '../services/analysis/execution/dreamAnalysisRuntime.service';
 import { rollbackDreamAnalysisRun } from '../services/analysis/execution/dreamAnalysisRollback.service';
 import { restartDreamAnalysis } from '../services/analysis/execution/dreamAnalysisRetry.service';
-import { composeDreamNarrative } from '../services/content/dreamNarrative.service';
-import {
-  generateDreamContinuation,
-  type DreamContinuation,
-} from '../services/analysis/creation/dreamContinuation.service';
+import { queueDreamContinuation } from '../services/analysis/execution/dreamContinuationJob.service';
 
 // Restarts analysis for an owned dream that is not already running.
 export async function analyzeDreamById(req: Request, res: Response): Promise<void> {
@@ -69,33 +65,15 @@ export async function regenerateDreamContinuation(req: Request, res: Response): 
       res.status(404).json({ success: false, message: 'Dream not found.' });
       return;
     }
-    const narrative = composeDreamNarrative(dream.content || '', dream.additions || []);
-    const currentAnalysis = (dream.ai_result || {}) as any;
-    const history = Array.isArray(currentAnalysis.creative_continuation_history)
-      ? currentAnalysis.creative_continuation_history as DreamContinuation[]
-      : [];
-    const existing = currentAnalysis.creative_continuation as DreamContinuation | undefined;
-    const versions = [...history, ...(existing ? [existing] : [])]
-      .filter((item, index, rows) =>
-        rows.findIndex(candidate => candidate.continuation === item.continuation) === index);
-    const continuation = await generateDreamContinuation(narrative, versions);
-    const continuationHistory = [...versions, continuation].slice(-12);
-    const nextAnalysis = {
-      ...currentAnalysis,
-      creative_continuation: continuation,
-      creative_continuation_history: continuationHistory,
-      creative_continuation_index: continuationHistory.length - 1,
-    };
-    dream.ai_result = nextAnalysis as any;
-    dream.markModified('ai_result');
-    await dream.save();
-    res.status(200).json({
+    const queued = await queueDreamContinuation(dream, req.user!._id as Types.ObjectId);
+    if (!queued) {
+      res.status(409).json({ success: false, message: 'Continuation is already being generated.' });
+      return;
+    }
+    res.status(202).json({
       success: true,
-      data: {
-        creative_continuation: continuation,
-        creative_continuation_history: continuationHistory,
-        creative_continuation_index: continuationHistory.length - 1,
-      },
+      message: 'Dream continuation queued.',
+      data: mapDreamResponse(dream),
     });
   } catch (error: any) {
     res.status(500).json({ success: false, message: 'Failed to regenerate continuation.', error: error.message });

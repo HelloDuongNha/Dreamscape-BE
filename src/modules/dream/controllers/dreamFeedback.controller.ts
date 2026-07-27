@@ -2,16 +2,13 @@ import { Request, Response } from 'express';
 import Dream from '../models/Dream';
 import { Types }         from 'mongoose';
 import {
-  buildFeedbackChangeSet,
-  buildFeedbackConclusion,
-  buildFeedbackRevision,
   enrichScientificNotesForResponse,
-  reconcileAlternateQuestionAfterFeedback,
-  resolveQuestionRuleIds,
 } from '../services/analysis/grounding/dreamAnalysisGrounding.service';
-import { setRuleValidationFeedback } from '../../rules_v3/services/ruleV3ValidationScore.service';
 import { composeDreamNarrative } from '../services/content/dreamNarrative.service';
-import { syncDreamSymbolObservations } from '../services/analysis/execution/dreamSymbolObservationSync.service';
+import {
+  applyDreamHypothesisFeedback,
+  DreamFeedbackError,
+} from '../services/analysis/execution/dreamFeedback.service';
 
 // Applies an answer to its linked hypotheses and validation rules.
 export const saveHypothesisFeedback = async (req: Request, res: Response): Promise<void> => {
@@ -71,155 +68,27 @@ export const saveHypothesisFeedback = async (req: Request, res: Response): Promi
       return;
     }
 
-    const matchedHypothesis = hypotheses[matchedIndex];
-    if (!matchedHypothesis || !matchedHypothesis.followUpQuestion) {
-      res.status(400).json({ success: false, message: 'Không tìm thấy câu hỏi tương ứng cho giả thuyết này.' });
-      return;
-    }
-
-    const questionText = matchedHypothesis.followUpQuestion;
-    const linkedRuleIds = resolveQuestionRuleIds(matchedHypothesis);
-    const ruleId = linkedRuleIds[0];
-    if (!ruleId) {
-      res.status(400).json({
-        success: false,
-        message: 'Câu hỏi này không gắn với một lập luận đã duyệt nên không thể dùng để xác minh.'
-      });
-      return;
-    }
-    const verificationKey = matchedHypothesis.verificationKey
-      ? String(matchedHypothesis.verificationKey)
-      : undefined;
-    const declaredEffect = isClearingAnswer ? undefined : matchedHypothesis.answerSemantics?.[answer as 'yes' | 'no' | 'unsure'];
-    const effect: 'supports' | 'weakens' | 'unresolved' = ['supports', 'weakens', 'unresolved'].includes(declaredEffect)
-      ? declaredEffect
-      : 'unresolved';
-
-    if (!dream.realLifeHypothesesFeedback) {
-      dream.realLifeHypothesesFeedback = [];
-    }
-
-    // Store one row per linked rule without asking the same question twice.
-    for (const linkedRuleId of linkedRuleIds) {
-      const existingIndex = dream.realLifeHypothesesFeedback.findIndex(
-        (f: any) => (verificationKey
-          ? f.verificationKey === verificationKey
-          : f.hypothesisIndex === hypothesisIndex)
-          && String(f.ruleId || '') === linkedRuleId
-      );
-      const feedbackEntry = {
-        hypothesisIndex: matchedIndex,
-        ruleId: linkedRuleId,
-        ...(verificationKey ? { verificationKey } : {}),
-        answer: answer as 'yes' | 'no' | 'unsure',
-        effect,
-        questionText,
-        userId: new Types.ObjectId(userId),
-        updatedAt: new Date()
-      };
-      if (isClearingAnswer && existingIndex !== -1) {
-        dream.realLifeHypothesesFeedback.splice(existingIndex, 1);
-      } else if (!isClearingAnswer && existingIndex !== -1) {
-        dream.realLifeHypothesesFeedback[existingIndex] = feedbackEntry;
-      } else if (!isClearingAnswer) {
-        dream.realLifeHypothesesFeedback.push(feedbackEntry);
-      }
-    }
-
-    if (String(matchedHypothesis?.questionDimension || '') === 'external_sound_at_wake') {
-      const nextSleepContext = { ...(dream.sleepContext || {}) };
-      if (isClearingAnswer || answer === 'unsure') delete nextSleepContext.externalSoundAtWake;
-      else nextSleepContext.externalSoundAtWake = answer === 'yes';
-      dream.sleepContext = nextSleepContext;
-      dream.markModified('sleepContext');
-      const retrievedContext = (dream.retrievedContext || {}) as any;
-      retrievedContext.componentA = retrievedContext.componentA || {};
-      retrievedContext.componentA.sleepContext = nextSleepContext;
-      dream.retrievedContext = retrievedContext;
-      dream.markModified('retrievedContext');
-    }
-
-    // Rebuild the displayed analysis instead of treating feedback as a counter.
-    hypotheses[matchedIndex].userFeedback = isClearingAnswer ? null : answer;
-    const activeHypotheses = verificationKey
-      ? reconcileAlternateQuestionAfterFeedback(hypotheses, verificationKey, answer)
-      : hypotheses;
-    const feedbackRevision = buildFeedbackRevision(
-      activeHypotheses,
-      dream.realLifeHypothesesFeedback || [],
-    );
-    const analysisWithFeedback = {
-      ...renderedAnalysis,
-      real_life_hypotheses: activeHypotheses,
-      feedback_revision: feedbackRevision,
-      feedback_conclusion: buildFeedbackConclusion(feedbackRevision),
-    };
-    const refreshedAnalysis = enrichScientificNotesForResponse(
-      analysisWithFeedback,
-      dream.retrievedContext,
-      completeNarrative,
-    );
-    const feedbackChanges = buildFeedbackChangeSet(renderedAnalysis, refreshedAnalysis);
-    refreshedAnalysis.feedback_changed_paths = feedbackChanges.paths;
-    refreshedAnalysis.feedback_changed_fragments = feedbackChanges.fragments;
-    dream.ai_result = refreshedAnalysis;
-    dream.markModified('ai_result');
-    if ((dream as any).aiAnalysis) {
-      (dream as any).aiAnalysis = refreshedAnalysis;
-      dream.markModified('aiAnalysis');
-    }
-
-    await dream.save();
-    const ruleScoreUpdates = await setRuleValidationFeedback({
-      userId: new Types.ObjectId(userId),
-      verificationKey: verificationKey || `${ruleId}:${matchedIndex}`,
-      origin: 'dream_analysis',
-      originId: dream._id as Types.ObjectId,
-      questionText,
+    const data = await applyDreamHypothesisFeedback({
+      dream,
+      userId,
+      hypotheses,
+      matchedIndex,
+      requestedIndex: hypothesisIndex,
       answer,
-      directRuleIds: linkedRuleIds,
-      sourceId: String(matchedHypothesis.validationSourceId || '').trim() || undefined,
-      exactQuote: String(matchedHypothesis.validationExactQuote || '').trim() || undefined,
+      renderedAnalysis,
+      completeNarrative,
     });
-    const scoreByRule = new Map(ruleScoreUpdates.map((item: any) => [String(item.ruleId), item]));
-    const updatedHypotheses = (refreshedAnalysis.real_life_hypotheses || []).map((item: any) => {
-      const candidateRuleIds = [...new Set([
-        item.ruleId,
-        ...(Array.isArray(item.ruleIds) ? item.ruleIds : []),
-      ].map(value => String(value || '').trim()).filter(Boolean))];
-      const score = candidateRuleIds
-        .map(candidateRuleId => scoreByRule.get(candidateRuleId))
-        .find(Boolean);
-      if (!score) return item;
-      return {
-        ...item,
-        ruleScore: score.score,
-        ruleScoreDelta: score.scoreDelta,
-        ruleVoteDelta: score.voteDelta,
-      };
-    });
-    refreshedAnalysis.real_life_hypotheses = updatedHypotheses;
-    dream.ai_result = refreshedAnalysis;
-    dream.markModified('ai_result');
-    if ((dream as any).aiAnalysis) {
-      (dream as any).aiAnalysis = refreshedAnalysis;
-      dream.markModified('aiAnalysis');
-    }
-    await dream.save();
-    await syncDreamSymbolObservations(dream);
 
     res.status(200).json({
       success: true,
       message: isClearingAnswer ? 'Đã bỏ lựa chọn.' : 'Đã ghi nhận phản hồi.',
-      data: {
-        feedback: dream.realLifeHypothesesFeedback,
-        feedbackRevision: refreshedAnalysis?.feedback_revision || [],
-        feedbackConclusion: refreshedAnalysis?.feedback_conclusion || null,
-        analysis: refreshedAnalysis,
-        ruleScoreUpdates,
-      }
+      data,
     });
   } catch (err: any) {
+    if (err instanceof DreamFeedbackError) {
+      res.status(400).json({ success: false, message: err.message });
+      return;
+    }
     res.status(500).json({ success: false, message: 'Không thể lưu phản hồi.', error: err.message });
   }
 };

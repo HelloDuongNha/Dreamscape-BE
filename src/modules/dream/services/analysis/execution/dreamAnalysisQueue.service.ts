@@ -6,6 +6,8 @@ export interface DreamAnalysisQueueJob {
   userId: string;
   runId: string;
   execute: () => Promise<void>;
+  onQueued?: (position: number) => Promise<void>;
+  onStart?: () => Promise<boolean>;
 }
 
 const queuesByUser = new Map<string, DreamAnalysisQueueJob[]>();
@@ -44,7 +46,14 @@ function addReadyUser(userId: string) {
 async function refreshQueuedMetadata(userId: string): Promise<void> {
   const queue = queuesByUser.get(userId) || [];
   if (queue.length === 0) return;
-  await Dream.bulkWrite(queue.map((job, index) => ({
+  await Promise.all(queue
+    .map((job, index) => job.onQueued?.(index + 1))
+    .filter((operation): operation is Promise<void> => Boolean(operation)));
+  const analysisJobs = queue
+    .map((job, index) => ({ job, index }))
+    .filter(item => !item.job.onQueued);
+  if (analysisJobs.length === 0) return;
+  await Dream.bulkWrite(analysisJobs.map(({ job, index }) => ({
     updateOne: {
       filter: {
         _id: job.dreamId,
@@ -66,6 +75,7 @@ async function refreshQueuedMetadata(userId: string): Promise<void> {
 }
 
 async function markJobRunning(job: DreamAnalysisQueueJob): Promise<boolean> {
+  if (job.onStart) return job.onStart();
   const startedAt = new Date();
   const result = await Dream.updateOne({
     _id: job.dreamId,

@@ -15,6 +15,9 @@ import { buildDreamPromptContext } from './dreamAnalysisPromptContext.service';
 import { retrieveDreamAnalysisContext } from './dreamContextRetrieval.service';
 import { retrieveDreamRuleEvidence } from './dreamRuleEvidence.service';
 import { finalizeDreamAnalysisOutput } from './dreamAnalysisOutput.service';
+import {
+  generateDreamContinuation,
+} from '../creation/dreamContinuation.service';
 
 export type { DreamAnalysisProgress, DreamAnalysisStage } from './dreamAnalysisOrchestration.types';
 
@@ -186,6 +189,13 @@ export async function runDreamAnalysis(
     culturalProfileUsed,
     similarDreams: similarDreamResult.matches,
   });
+  await report(
+    'finalizing',
+    92,
+    'Đang viết phần tiếp theo của giấc mơ...',
+    'Phần phân tích đã hoàn tất; đang dùng bộ sáng tác riêng để nối tiếp câu chuyện.',
+  );
+  aiAnalysis.creative_continuation = await generateDreamContinuation(dreamNarrative);
 
   // ─── STEP 6: Construct Audit Trail ───
   const measuredPsychologicalProfileUsed =
