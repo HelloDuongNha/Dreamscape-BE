@@ -1,9 +1,6 @@
 import { Router } from 'express';
 import authMiddleware, { isModerator } from '../middleware/authMiddleware';
 import {
-  getPendingSources,
-  reviewSource,
-  updateSourceContributionTitle,
   importFullText,
   buildChunks,
   uploadPdfMiddleware,
@@ -19,6 +16,11 @@ import {
   cancelUploadedPdfImportForContribution,
   getSourcePreviewTranslation
 } from '../modules/academic/controllers/moderationController';
+import {
+  getPendingSources,
+  updateSourceContributionTitle,
+} from '../modules/academic/controllers/sourceModeration.controller';
+import { reviewSource } from '../modules/academic/controllers/sourceReview.controller';
 
 import {
   previewRuleV3Plan,

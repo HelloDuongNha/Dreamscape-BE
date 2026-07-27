@@ -1,16 +1,20 @@
 import { Router } from 'express';
 import authMiddleware, { isModerator } from '../middleware/authMiddleware';
+import { contributePdfSource } from '../modules/academic/controllers/pdfContribution.controller';
 import {
-  contributeSource,
-  previewSource,
-  contributePdfSource,
   cacheOriginalPdf,
   uploadOriginalPdf,
   deleteOriginalPdf,
+} from '../modules/academic/controllers/originalPdfMutation.controller';
+import {
   processUploadedPdfForApprovedSource,
   getUploadedPdfImportProgressForApprovedSource,
   cancelUploadedPdfImportForApprovedSource,
-} from '../modules/academic/controllers/sourceController';
+} from '../modules/academic/controllers/pdfImport.controller';
+import {
+  contributeSource,
+  previewSource,
+} from '../modules/academic/controllers/sourceContribution.controller';
 import {
   getApprovedSourceById,
   getApprovedSources,

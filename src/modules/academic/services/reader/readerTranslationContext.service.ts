@@ -4,7 +4,7 @@
  * Shared resolution helpers for building CanonicalTranslationContext and loading
  * AcademicChunk records for translation target validation.
  *
- * Used by both sourceController (approved path) and moderationController (preview path).
+ * Used by both the approved-reader and moderation preview paths.
  * Zero DB writes. Identical hash formula as the established canonical identity service.
  */
 import AcademicSource from '../../models/AcademicSource';

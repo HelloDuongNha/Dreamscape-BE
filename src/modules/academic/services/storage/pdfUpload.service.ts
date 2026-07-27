@@ -51,7 +51,7 @@ export async function computeFileHash(filePath: string): Promise<string> {
 
 /**
  * Performs strict validations (extension, MIME, magic bytes, size, filename)
- * on a temporary disk PDF file, computes its SHA-256 hash, and uploads it to Cloudinary.
+ * on a temporary disk PDF file, computes its SHA-256 hash, and stores the original in Firebase.
  */
 export async function processPdfUpload(
   filePath: string,

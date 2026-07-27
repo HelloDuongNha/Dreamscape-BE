@@ -1057,3 +1057,150 @@ services/
 - Backend TypeScript: passed.
 - Canonical Reader Identity: 213 assertions passed.
 - Canonical Reader Translation: 131 assertions passed.
+
+## A2 — Academic contribution moderation boundary
+
+### Scope
+
+- Preview and submit an academic source contribution.
+- List pending, approved or rejected contributions.
+- Update a pending contribution title.
+- Approve or reject a contribution.
+- Promote preview reader data and start the existing full-text import after approval.
+
+### Before
+
+- Contribution submission still shared the remaining 938-line
+  `sourceController.ts` with PDF and import-job behavior.
+- Moderation listing, title editing, approval, rejection, storage cleanup and
+  reader promotion shared the 2,531-line `moderationController.ts`.
+- Request parsing and validation were performed inline in those controllers.
+
+### After
+
+```text
+controllers/
+├── sourceContribution.controller.ts
+├── sourceModeration.controller.ts
+└── sourceReview.controller.ts
+
+dto/
+└── sourceContribution.dto.ts
+
+services/contribution/
+├── contributionSubmission.service.ts
+├── contributionModerationQueue.service.ts
+├── contributionReview.service.ts
+├── contributionApproval.service.ts
+├── contributionApprovalFinalization.service.ts
+├── contributionRejection.service.ts
+└── contributionReaderStats.service.ts
+```
+
+- Controllers now translate HTTP requests and service results only.
+- The DTO owns pagination, title, review-state and note validation.
+- Submission, moderation queries, approval finalization, rejection rollback and
+  reader statistics have separate service boundaries.
+- Duplicate checks retain their original order, so a source already in the
+  approved library still takes precedence over a pending contribution.
+- `sourceController.ts` is now 615 lines; `moderationController.ts` is now
+  1,810 lines. Their remaining capabilities belong to later Academic phases.
+
+### Locked behavior
+
+- Route paths, middleware order, status codes, response envelopes and user-facing
+  messages remain unchanged.
+- Duplicate detection, rejected-contribution reactivation, contribution counters,
+  approval promotion, automatic full-text import and Rule V3 cleanup retain their
+  existing order.
+- Rejection still restores the database state if Cloudinary deletion fails.
+- No Docling, OCR, Smart Reader parsing or Rule V3 extraction policy was changed.
+
+### UI acceptance checklist
+
+- Preview a DOI or URL and submit it for moderation.
+- Submit an existing approved source and confirm the duplicate warning.
+- Edit the title of a pending PDF contribution.
+- Switch among pending, approved and rejected moderation lists.
+- Approve a source and confirm its Smart Reader/import status still updates.
+- Reject an uploaded PDF and confirm it leaves the pending list.
+
+### Verification
+
+- Backend TypeScript: passed.
+- No A2-owned unused TypeScript symbol remains.
+- Route contract: 99 feature routes + 1 health route preserved.
+- Full regression baseline: 26/26 contract files passed.
+- Git whitespace/error check: passed.
+- Post-edit impact scan: low aggregate call-graph risk.
+
+## A3 — Academic PDF storage and import boundary
+
+### Scope
+
+- Submit a PDF as a pending academic contribution.
+- Cache, upload, replace or delete an approved source's original PDF.
+- Start, inspect or cancel the approved-source PDF import workflow.
+- Remove obsolete Cloudinary wording from original-PDF UI labels.
+
+### Before
+
+- The remaining 615-line `sourceController.ts` mixed contribution submission,
+  original-file mutation and long-running import-job endpoints.
+- Original PDFs had already moved to Firebase Storage, but the UI still claimed
+  they were stored on Cloudinary.
+- PDF contribution metadata parsing and request validation remained inline in
+  the controller.
+
+### After
+
+```text
+controllers/
+├── pdfContribution.controller.ts
+├── originalPdfMutation.controller.ts
+└── pdfImport.controller.ts
+
+dto/
+└── pdfSource.dto.ts
+
+services/
+├── contribution/pdfContribution.service.ts
+├── contribution/pdfContributionMetadata.service.ts
+└── storage/originalPdfMutation.service.ts
+```
+
+- `sourceController.ts` was removed; no compatibility wrapper remains.
+- Routes are grouped by capability rather than artificial CRUD names:
+  contribution, original-PDF mutation and import-job control.
+- Controllers are 29–79 lines; new services are 59–250 lines.
+- PDF validation, duplicate handling, rejected-item reactivation, replacement
+  cleanup and import-job options now have explicit boundaries.
+- User-facing labels say DreamScape storage; Cloudinary support remains only for
+  legacy original files and extracted reader images.
+
+### Locked behavior
+
+- Route paths, middleware order, response envelopes and duplicate precedence
+  remain unchanged.
+- A failed database save still removes the newly uploaded Firebase object.
+- A replacement deletes the previous object only after the new reference saves.
+- A rejected contribution can still be reactivated without losing rollback.
+- PDF import progress, cancellation and execution still call the same workflow
+  services used before this refactor.
+
+### UI acceptance checklist
+
+- Upload a PDF contribution and confirm it appears in the pending list.
+- Try a duplicate DOI or duplicate PDF and confirm the existing-source warning.
+- Upload or replace an approved source's original PDF.
+- Delete an original PDF while keeping its Smart Reader intact.
+- Start, hide, reopen and cancel a PDF Smart Reader import.
+- Switch Vietnamese/English and confirm no original-PDF action mentions Cloudinary.
+
+### Verification
+
+- Backend TypeScript and production build: passed.
+- Frontend TypeScript and production build: passed.
+- Route contract: 99 feature routes + 1 health route preserved.
+- Full regression baseline: 26/26 contract files passed.
+- Post-edit backend and frontend impact scans: low aggregate risk.

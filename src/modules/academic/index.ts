@@ -1,4 +1,11 @@
-export * from './controllers/sourceController';
+export * from './controllers/approvedSource.controller';
+export * from './controllers/approvedSourceDocument.controller';
+export * from './controllers/approvedSourceReader.controller';
+export * from './controllers/approvedSourceTranslation.controller';
+export * from './controllers/sourceContribution.controller';
+export * from './controllers/pdfContribution.controller';
+export * from './controllers/originalPdfMutation.controller';
+export * from './controllers/pdfImport.controller';
 export * from './controllers/moderationController';
 export { default as AcademicSource } from './models/AcademicSource';
 export { default as AcademicDocument } from './models/AcademicDocument';
