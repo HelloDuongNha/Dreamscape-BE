@@ -1,5 +1,5 @@
 import { Types } from 'mongoose';
-import { setRuleValidationFeedback } from '../../../../rules_v3/services/ruleV3ValidationScore.service';
+import { setRuleValidationFeedback } from '../../../../rules_v3/services/evidence/ruleV3ValidationScore.service';
 import {
   buildFeedbackChangeSet,
   buildFeedbackConclusion,

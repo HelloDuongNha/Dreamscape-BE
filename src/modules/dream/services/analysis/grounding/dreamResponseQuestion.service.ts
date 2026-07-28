@@ -1,4 +1,4 @@
-import { canGenerateContextQuestion } from '../../../../rules_v3/services/ruleV3DreamApplication.service';
+import { canGenerateContextQuestion } from '../../../../rules_v3/services/retrieval/ruleV3DreamApplication.service';
 import {
   attachRuleQuestionContext,
   removeInternalAnalysisVocabulary,

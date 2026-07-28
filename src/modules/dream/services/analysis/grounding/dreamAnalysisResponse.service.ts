@@ -1,7 +1,7 @@
 import {
   canExplainPsychology,
   canGenerateContextQuestion,
-} from '../../../../rules_v3/services/ruleV3DreamApplication.service';
+} from '../../../../rules_v3/services/retrieval/ruleV3DreamApplication.service';
 import { sanitizePracticalReflections } from '../assembly/practicalReflection.service';
 import {
   buildGroundedMotifExplanation,

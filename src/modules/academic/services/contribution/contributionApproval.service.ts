@@ -17,7 +17,7 @@ import { reconcileOracleEvidenceGapsForSources } from '../../../oracle/services/
 import {
   startAutomaticRuleV3Extraction,
   type AutomaticRuleExtractionStart,
-} from '../../../rules_v3/services/ruleV3AutomaticExtraction.service';
+} from '../../../rules_v3/services/extraction/ruleV3AutomaticExtraction.service';
 
 export type ContributionApprovalResult =
   | { status: 200; body: Record<string, unknown> }
@@ -51,19 +51,37 @@ export async function approveSourceContribution(
     { ...prepared, contribution },
     reviewerId,
   );
+  await preserveApprovedTitle(academicSource, prepared.metadata.title);
   const ruleExtraction = await startRuleExtractionBestEffort(academicSource);
   await reconcileEvidenceGapsBestEffort(academicSource, contribution);
   return buildApprovalResult(contribution, academicSource, outcome, ruleExtraction);
 }
 
+// Keep the reviewed scholarly title authoritative after reader promotion or import.
+async function preserveApprovedTitle(
+  academicSource: IAcademicSource,
+  approvedTitle: string | undefined,
+): Promise<void> {
+  if (!approvedTitle || academicSource.title === approvedTitle) return;
+  academicSource.title = approvedTitle;
+  academicSource.metadata = {
+    ...(academicSource.metadata || {}),
+    title: approvedTitle,
+  };
+  await academicSource.save();
+}
+
 async function startRuleExtractionBestEffort(
   academicSource: IAcademicSource,
-): Promise<AutomaticRuleExtractionStart | null> {
+): Promise<AutomaticRuleExtractionStart> {
   try {
     return await startAutomaticRuleV3Extraction(String(academicSource._id));
   } catch (error) {
     console.error('Failed to start Rule V3 extraction after source approval:', error);
-    return null;
+    return {
+      status: 'failed',
+      errorCode: 'automatic_start_failed',
+    };
   }
 }
 
@@ -123,7 +141,7 @@ function buildApprovalResult(
   contribution: ApprovalContribution,
   academicSource: IAcademicSource,
   outcome: ApprovalOutcome,
-  ruleExtraction: AutomaticRuleExtractionStart | null,
+  ruleExtraction: AutomaticRuleExtractionStart,
 ): ContributionApprovalResult {
   return {
     status: 200,

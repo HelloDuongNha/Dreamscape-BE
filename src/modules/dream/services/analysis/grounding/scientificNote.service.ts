@@ -1,4 +1,4 @@
-import { canExplainPsychology } from '../../../../rules_v3/services/ruleV3DreamApplication.service';
+import { canExplainPsychology } from '../../../../rules_v3/services/retrieval/ruleV3DreamApplication.service';
 import {
   exactExcerptExists,
   normalizeGroundingText,

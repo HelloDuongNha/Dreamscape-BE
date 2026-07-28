@@ -29,7 +29,8 @@ import {
 import {
   getCurrentRuleValidationAnswers,
   setRuleValidationFeedback,
-} from '../../rules_v3/services/ruleV3ValidationScore.service';
+} from '../../rules_v3/services/evidence/ruleV3ValidationScore.service';
+import { findOracleCitationUsageExcerpt } from '../services/oracleEvidenceUsage.service';
 import { logger } from '../../../infrastructure/logger';
 
 function requesterId(req: Request): Types.ObjectId {
@@ -96,6 +97,23 @@ function fallbackCitationQuestion(rule: any): {
   return {
     verificationKey: `${String(rule._id)}:oracle-citation`,
     ...question,
+  };
+}
+
+function citationDetailsResponse(citation: any, contentBlocks: Array<{ text?: string }>) {
+  const plain = typeof citation?.toObject === 'function'
+    ? citation.toObject()
+    : { ...citation };
+  return {
+    ...plain,
+    ruleLinks: (plain.ruleLinks || []).map((link: any) => ({
+      ...link,
+      usageExcerpt: findOracleCitationUsageExcerpt(
+        contentBlocks,
+        Number(plain.index),
+        String(link.statement || ''),
+      ) || undefined,
+    })),
   };
 }
 
@@ -604,7 +622,10 @@ export async function getOracleCitationDetails(req: Request, res: Response): Pro
     ) || turn.citations.find((item) => item.index === citationIndex);
     if (!citation) throw new OracleContractError('oracle_not_found', 'Oracle citation was not found.');
     if (citation.sourceType !== 'academic_source') {
-      res.status(200).json({ success: true, data: citation });
+      res.status(200).json({
+        success: true,
+        data: citationDetailsResponse(citation, turn.contentBlocks),
+      });
       return;
     }
     const academicSource = await AcademicSource.findOne({
@@ -661,6 +682,9 @@ export async function getOracleCitationDetails(req: Request, res: Response): Pro
         link.ruleCode = String(currentRule.ruleCode || link.ruleCode);
         link.statement = String(currentRule.statement || link.statement);
         link.evidenceScore = Number(currentRule.evidenceScore) || 0;
+        link.sourceEvidenceScore = Number(currentRule.sourceEvidenceScore)
+          || Math.max(0, link.evidenceScore - (Number(currentRule.userValidationAdjustment) || 0));
+        link.userValidationAdjustment = Number(currentRule.userValidationAdjustment) || 0;
         link.supportingSourceCount = Number(currentRule.supportingSourceCount) || 0;
         currentLinks.push(link);
       }
@@ -707,7 +731,10 @@ export async function getOracleCitationDetails(req: Request, res: Response): Pro
       }
       turn.markModified('citations');
       await turn.save();
-      res.status(200).json({ success: true, data: citation });
+      res.status(200).json({
+        success: true,
+        data: citationDetailsResponse(citation, turn.contentBlocks),
+      });
       return;
     }
     const evidenceSourceIds = [
@@ -760,6 +787,9 @@ export async function getOracleCitationDetails(req: Request, res: Response): Pro
         localizedStatement: localizeOracleRuleStatement(rule),
         quote: linkedEvidence?.exactQuote || citation.excerpt,
         evidenceScore: rule.evidenceScore,
+        sourceEvidenceScore: Number(rule.sourceEvidenceScore)
+          || Math.max(0, Number(rule.evidenceScore) - (Number(rule.userValidationAdjustment) || 0)),
+        userValidationAdjustment: Number(rule.userValidationAdjustment) || 0,
         supportingSourceCount: rule.supportingSourceCount,
         verificationKey,
         verificationQuestion,
@@ -774,7 +804,10 @@ export async function getOracleCitationDetails(req: Request, res: Response): Pro
     citation.ruleLinks = links;
     turn.markModified('citations');
     await turn.save();
-    res.status(200).json({ success: true, data: citation });
+    res.status(200).json({
+      success: true,
+      data: citationDetailsResponse(citation, turn.contentBlocks),
+    });
   } catch (error) {
     sendOracleError(res, error);
   }

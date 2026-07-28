@@ -6,8 +6,8 @@ import OracleEvidenceGap from '../models/OracleEvidenceGap';
 import OracleTurn from '../models/OracleTurn';
 import KnowledgeRuleV3 from '../../rules_v3/models/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../../rules_v3/models/KnowledgeRuleEvidence';
-import { inferDocumentLanguage } from '../../rules_v3/services/documentLanguage.service';
-import { retrieveApprovedRuleV3 } from '../../rules_v3/services/ruleV3Retrieval.service';
+import { inferDocumentLanguage } from '../../rules_v3/services/planning/documentLanguage.service';
+import { retrieveApprovedRuleV3 } from '../../rules_v3/services/retrieval/ruleV3Retrieval.service';
 import type { OracleCitation } from './oracle.types';
 import {
   buildOracleCitationVerificationQuestion,

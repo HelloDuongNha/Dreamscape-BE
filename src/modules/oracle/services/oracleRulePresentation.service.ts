@@ -1,3 +1,5 @@
+import { classifyRuleV3VerificationKind } from '../../rules_v3/services/retrieval/ruleV3DreamApplication.service';
+
 export interface OracleLocalizedText {
   vi: string;
   en: string;
@@ -67,16 +69,43 @@ export function buildOracleCitationVerificationQuestion(rule: any): OracleVerifi
       en: 'Did this dream occur as you were first falling asleep and recall a specific past event?',
     };
   }
-  const meaningfulCondition = condition
-    && !/^(?:during sleep|while sleeping|in dreams?|khi ngủ|trong giấc mơ)$/iu.test(condition);
-  if (meaningfulCondition) {
-    return {
-      vi: `Trong trường hợp thật của bạn, điều kiện “${condition}” có phù hợp với giấc mơ này không?`,
-      en: `In your real situation, does the condition “${condition}” fit this dream?`,
-    };
-  }
+  const observableQuestion = buildObservableQuestion(
+    classifyRuleV3VerificationKind(rule),
+  );
+  if (observableQuestion) return observableQuestion;
   return {
-    vi: `Lập luận “${statement}” có phù hợp với hoàn cảnh thật liên quan đến giấc mơ này không?`,
-    en: `Does the argument “${statement}” fit the real situation behind this dream?`,
+    vi: 'Trong hoàn cảnh thật liên quan đến giấc mơ này, có chi tiết ngoài đời nào tương ứng trực tiếp với điều được mô tả trong giấc mơ không?',
+    en: 'In the real situation behind this dream, is there a waking-life detail that directly corresponds to what the dream described?',
   };
+}
+
+// Translate academic verification kinds into observable, everyday questions.
+function buildObservableQuestion(kind: string): OracleVerificationQuestion | null {
+  const questions: Record<string, OracleVerificationQuestion> = {
+    recent_experience_incorporation: {
+      vi: 'Trong vài ngày trước giấc mơ này, có trải nghiệm, ký ức mới hoặc cảm xúc cụ thể nào ngoài đời xuất hiện lại trong giấc mơ không?',
+      en: 'In the few days before this dream, did a specific waking experience, new memory, or emotion reappear in the dream?',
+    },
+    anticipated_event: {
+      vi: 'Giấc mơ này có hướng tới một sự kiện có thật mà bạn đang chờ đợi hoặc chuẩn bị không?',
+      en: 'Did this dream involve a real event that you are awaiting or preparing for?',
+    },
+    current_stress: {
+      vi: 'Trong những ngày gần đây, có áp lực cụ thể ngoài đời nào xuất hiện lại trong cảm xúc hoặc diễn biến của giấc mơ không?',
+      en: 'In recent days, did a specific waking-life pressure reappear in the emotions or events of this dream?',
+    },
+    waking_concern_incorporation: {
+      vi: 'Trong tuần trước giấc mơ, bạn có thường xuyên nghĩ hoặc lo về một việc ngoài đời cũng xuất hiện trong giấc mơ không?',
+      en: 'During the week before this dream, were you repeatedly thinking or worrying about a waking-life matter that also appeared in the dream?',
+    },
+    weak_association_recombination: {
+      vi: 'Ít nhất hai chi tiết tưởng như không liên quan trong giấc mơ có gợi lại những trải nghiệm riêng biệt ngoài đời của bạn không?',
+      en: 'Did at least two seemingly unrelated dream details recall separate waking-life experiences for you?',
+    },
+    external_sleep_stimulus: {
+      vi: 'Trong lúc ngủ hoặc ngay khi tỉnh dậy, có âm thanh, ánh sáng hay cảm giác cơ thể thật nào giống một chi tiết trong giấc mơ không?',
+      en: 'While sleeping or just after waking, was there a real sound, light, or bodily sensation that resembled a detail in the dream?',
+    },
+  };
+  return questions[kind] || null;
 }

@@ -31,16 +31,22 @@ import { reviewSource } from '../modules/academic/controllers/sourceReview.contr
 import {
   previewRuleV3Plan,
   dryRunRuleV3Extraction,
+} from '../modules/rules_v3/controllers/ruleV3DryRun.controller';
+import {
   startFullRuleV3Extraction,
   getFullRuleV3ExtractionProgress,
   cancelFullRuleV3Extraction,
   getRuleV3SourceAnalysisSummary,
+} from '../modules/rules_v3/controllers/ruleV3Extraction.controller';
+import {
   getRuleV3Candidates,
   getRuleV3CandidateDetail,
+} from '../modules/rules_v3/controllers/ruleV3CandidateRead.controller';
+import {
   approveRuleV3Candidate,
   rejectRuleV3Candidate,
   bulkRuleV3Action
-} from '../modules/rules_v3/controllers/ruleV3ModerationController';
+} from '../modules/rules_v3/controllers/ruleV3CandidateModeration.controller';
 import { listOracleEvidenceGaps } from '../modules/oracle/controllers/oracleEvidenceGapController';
 
 const router = Router();

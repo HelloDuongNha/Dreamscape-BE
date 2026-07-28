@@ -23,6 +23,25 @@ interface EvidenceUsageGap {
 
 const MAX_EXCERPTS_PER_GAP = 20;
 
+// Selects the Oracle-written passage that most closely applies one cited argument.
+export function findOracleCitationUsageExcerpt(
+  contentBlocks: Array<{ text?: string }>,
+  citationIndex: number,
+  statement: string,
+): string | null {
+  const marker = `[${citationIndex}]`;
+  const passages = contentBlocks
+    .flatMap((block) => splitAnalysisPassages(String(block.text || '')))
+    .filter((passage) => passage.includes(marker));
+  if (!passages.length) return null;
+  return passages
+    .map((passage) => ({
+      passage,
+      similarity: evidenceGapRuleSimilarity(statement, passage),
+    }))
+    .sort((left, right) => right.similarity - left.similarity)[0]?.passage || null;
+}
+
 // Loads only AI-written citation passages, without user content or navigable resource IDs.
 export async function loadOracleEvidenceUsageExcerpts(
   gaps: EvidenceUsageGap[],

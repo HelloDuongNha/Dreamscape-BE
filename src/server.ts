@@ -4,7 +4,7 @@ import app from './app';
 import connectDB from './config/db';
 import { initSocket } from './config/socket';
 import { recoverInterruptedReaderReplacements } from './modules/academic/services/reader/persistence/readerReplacement.service';
-import { recoverIncompleteRuleV3Replacements } from './modules/rules_v3/services/ruleV3ReplacementJournal.service';
+import { recoverIncompleteRuleV3Replacements } from './modules/rules_v3/services/lifecycle/ruleV3ReplacementJournal.service';
 import { runBackgroundAnalysis } from './modules/dream/services/analysis/execution/dreamAnalysisRunner.service';
 import { recoverPendingDreamAnalysisQueue } from './modules/dream/services/analysis/execution/dreamAnalysisRecovery.service';
 

@@ -2,12 +2,12 @@ import {
   RuleV3GenerationProvider,
   ProviderCandidate,
   RuleV3ProviderInput
-} from '../ruleV3GenerationProvider.types';
+} from './ruleV3GenerationProvider.types';
 import {
-  GEMINI_JSON_SCHEMA,
   validateProviderResponse
-} from '../ruleV3ProviderResponseValidator.service';
-import { buildRuleV3ExtractionPrompt } from '../ruleV3ExtractionPrompt.service';
+} from './ruleV3ProviderResponseValidator.service';
+import { GEMINI_JSON_SCHEMA } from './ruleV3ProviderContract.service';
+import { buildRuleV3ExtractionPrompt } from './ruleV3ExtractionPrompt.service';
 
 export class RuleV3GeminiProvider implements RuleV3GenerationProvider {
   name = 'gemini' as const;

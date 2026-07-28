@@ -11,7 +11,7 @@ import SourceContribution from '../../../models/SourceContribution';
 import { deleteAsset } from '../../../../../infrastructure/storage/cloudinaryStorage.service';
 import KnowledgeRuleV3 from '../../../../rules_v3/models/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../../../../rules_v3/models/KnowledgeRuleEvidence';
-import { resolveRuleV3SourceAliases } from '../../../../rules_v3/services/ruleV3Lifecycle.service';
+import { resolveRuleV3SourceAliases } from '../../../../rules_v3/services/lifecycle/ruleV3Lifecycle.service';
 
 const SNAPSHOT_FIELDS = [
   'title', 'metadata', 'authors', 'pmcid', 'normalizedPmcid', 'pdfUrl', 'htmlUrl',

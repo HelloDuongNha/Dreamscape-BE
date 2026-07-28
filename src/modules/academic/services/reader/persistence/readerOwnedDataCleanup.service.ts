@@ -7,7 +7,7 @@ import type {
   ReaderCleanupPlan,
   ReaderOwner,
 } from '../../../dto/readerCleanup.dto';
-import { removeRuleV3SourceData } from '../../../../rules_v3/services/ruleV3Lifecycle.service';
+import { removeRuleV3SourceData } from '../../../../rules_v3/services/lifecycle/ruleV3Lifecycle.service';
 import {
   collectReaderImageAssetIdsFromHtml,
   deleteUnreferencedReaderImageAssets,

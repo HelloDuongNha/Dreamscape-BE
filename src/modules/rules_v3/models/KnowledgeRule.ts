@@ -145,10 +145,7 @@ const KnowledgeRuleV3Schema = new Schema<IKnowledgeRuleV3>(
       required: true,
       validate: {
         validator: function(this: any, val: string) {
-          // Invariant 1: association or correlation must never be elevated to causal
-          // Note: This is only a minimum schema safeguard. The future extraction verifier
-          // must also validate causality against study design and source evidence.
-          // Do not introduce an over-restrictive compatibility matrix in this patch.
+          // Association claims cannot be stored as causal conclusions.
           if (val === 'causal' && this.claimType === 'association') {
             return false;
           }
@@ -207,13 +204,7 @@ const KnowledgeRuleV3Schema = new Schema<IKnowledgeRuleV3>(
       min: 0,
       max: 100,
       default: 0
-      /*
-       * Comment: qualitative and theoretical claims may receive a non-zero evidence score
-       * since evidenceScore represents the strength/credibility of the complete evidence
-       * supporting a rule rather than a quantitative effect size.
-       * They must not invent quantitative effect sizes. Effect-size storage is outside
-       * this schema and is not being added in this patch.
-       */
+      // This score measures total evidence support, not a quantitative effect size.
     },
     sourceEvidenceScore: {
       type: Number,

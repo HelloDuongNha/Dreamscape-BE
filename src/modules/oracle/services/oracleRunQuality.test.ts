@@ -96,10 +96,17 @@ test('citation questions follow the exact rule relation instead of broad feature
     statement: 'Past memories were incorporated into sleep onset dreams.',
     conditions: ['during sleep onset'],
   });
+  const memoryConsolidation = buildOracleCitationVerificationQuestion({
+    statement: 'Dream content may contain newly encoded memories and emotional experiences.',
+    subject: 'memory consolidation',
+    conditions: ['memory consolidation'],
+  });
 
   assert.match(comparison.vi, /chủ yếu gợi lại một sự kiện quá khứ/iu);
   assert.match(combined.vi, /đồng thời gợi lại/iu);
   assert.match(sleepOnset.vi, /mới bắt đầu ngủ/iu);
+  assert.match(memoryConsolidation.vi, /trải nghiệm, ký ức mới hoặc cảm xúc cụ thể/iu);
+  assert.doesNotMatch(memoryConsolidation.vi, /điều kiện|memory consolidation/iu);
 });
 
 test('late-sleep future claims do not match general past-versus-future comparisons', () => {

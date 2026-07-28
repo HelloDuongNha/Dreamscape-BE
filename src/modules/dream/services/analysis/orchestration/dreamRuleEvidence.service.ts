@@ -2,8 +2,8 @@ import { logger } from '../../../../../infrastructure/logger';
 import {
   canExplainPsychology,
   canGenerateContextQuestion,
-} from '../../../../rules_v3/services/ruleV3DreamApplication.service';
-import { retrieveApprovedRuleV3 } from '../../../../rules_v3/services/ruleV3Retrieval.service';
+} from '../../../../rules_v3/services/retrieval/ruleV3DreamApplication.service';
+import { retrieveApprovedRuleV3 } from '../../../../rules_v3/services/retrieval/ruleV3Retrieval.service';
 import { deduplicateAcademicSources } from '../grounding/dreamAnalysisGrounding.service';
 
 interface DreamRuleEvidenceResult {

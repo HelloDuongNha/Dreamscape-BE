@@ -1,13 +1,13 @@
 import type { OracleCitation } from './oracle.types';
 import { retrieveSimilarDreams } from '../../dream/services/analysis/retrieval/similarDreamRetrieval.service';
-import { retrieveApprovedRuleV3 } from '../../rules_v3/services/ruleV3Retrieval.service';
+import { retrieveApprovedRuleV3 } from '../../rules_v3/services/retrieval/ruleV3Retrieval.service';
 import { logger } from '../../../infrastructure/logger';
 import { resolveQuestionRuleIds } from '../../dream/services/analysis/grounding/dreamAnalysisGrounding.service';
 import {
   localizeOracleRuleStatement,
   localizeOracleVerificationQuestion,
 } from './oracleRulePresentation.service';
-import { getCurrentRuleValidationAnswers } from '../../rules_v3/services/ruleV3ValidationScore.service';
+import { getCurrentRuleValidationAnswers } from '../../rules_v3/services/evidence/ruleV3ValidationScore.service';
 
 export interface OracleGrounding {
   citations: OracleCitation[];
