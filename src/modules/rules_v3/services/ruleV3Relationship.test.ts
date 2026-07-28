@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { assessRuleV3MergeCompatibility, buildRuleV3ConceptClusters, buildRuleV3MergeClusters, classifyRuleV3Relationship } from './ruleV3Relationship.service';
+import { assessRuleV3MergeCompatibility, buildRuleV3ConceptClusters, classifyRuleV3Relationship } from './ruleV3Relationship.service';
 import { findRuleV3MergeGroup } from './ruleV3Merge.service';
 
 const base = { subject: 'waking-life stress', outcome: 'threatening dream content', claimType: 'association', effectPolarity: 'positive', conditions: ['during periods of stress'] };
@@ -69,15 +69,6 @@ assert.equal(assessRuleV3MergeCompatibility({
 }, {
   subject: 'future-oriented dreams', outcome: 'unrealistic scenarios', statement: 'Future-oriented dreams often contain unrealistic scenarios.', claimType: 'association', effectPolarity: 'neutral',
 }).canMerge, true, 'paraphrased meaningful subjects and outcomes should be mergeable');
-const presentationMergeClusters = buildRuleV3MergeClusters([{
-  id: 'a', subject: 'future-related dreams', outcome: 'implausible scenarios', statement: 'Future dreams contain implausible scenarios.', claimType: 'association', effectPolarity: 'neutral', evidenceChunkIds: ['p1'],
-}, {
-  id: 'b', subject: 'weak associations', outcome: 'creative thinking', statement: 'Weak associations may support creative thinking.', claimType: 'theoretical_proposition', effectPolarity: 'unknown', evidenceChunkIds: ['p1'],
-}, {
-  id: 'c', subject: 'dream simulations', outcome: 'realistic waking analogues', statement: 'Dream simulations can be realistic.', claimType: 'theoretical_proposition', effectPolarity: 'neutral', evidenceChunkIds: ['p2'],
-}]);
-assert.equal(presentationMergeClusters.get('a')?.memberCount, 2);
-assert.equal(presentationMergeClusters.has('c'), false, 'related-but-not-mergeable claims must not create a candidate-list cluster');
 const nonTransitiveRules = [
   { _id: 'chain-a', subject: 'alpha', outcome: 'outcome-a', claimType: 'theoretical_proposition', effectPolarity: 'neutral' },
   { _id: 'chain-b', subject: 'beta', outcome: 'outcome-b', claimType: 'theoretical_proposition', effectPolarity: 'neutral' },
@@ -93,14 +84,4 @@ assert.deepEqual(
   ['chain-a', 'chain-b'],
   'merge endpoint must require every member to be compatible with every other member',
 );
-const nonTransitiveClusters = buildRuleV3MergeClusters(nonTransitiveRules.map(rule => ({
-  id: String(rule._id),
-  subject: rule.subject,
-  outcome: rule.outcome,
-  claimType: rule.claimType,
-  effectPolarity: rule.effectPolarity,
-  evidenceChunkIds: [...(nonTransitiveChunks.get(String(rule._id)) || [])],
-})));
-assert.deepEqual(nonTransitiveClusters.get('chain-a')?.memberIds, ['chain-a', 'chain-b']);
-assert.equal(nonTransitiveClusters.has('chain-c'), false, 'transitive A–B–C links must not put incompatible A and C in one UI group');
 console.log('RULE V3 RELATIONSHIPS AND CONCEPT CLUSTERS: PASSED');

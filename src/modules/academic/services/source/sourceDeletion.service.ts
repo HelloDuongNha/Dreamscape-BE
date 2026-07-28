@@ -8,6 +8,11 @@ import {
   prepareReaderOwnedDataCleanup,
 } from '../reader/persistence/readerOwnedDataCleanup.service';
 import { deleteOriginalPdfAsset } from '../storage/originalPdfStorage.service';
+import {
+  applyOracleSourceInvalidation,
+  prepareOracleSourceInvalidation,
+  rematchInvalidatedOracleTurns,
+} from '../../../oracle/services/oracleSourceInvalidation.service';
 
 export interface SourceDeletionResult {
   status: number;
@@ -72,6 +77,11 @@ async function deleteApprovedSource(source: any): Promise<SourceDeletionResult> 
   });
   const contributionPlans = await prepareContributionCleanupPlans(linkedContributions);
   const plans = [sourcePlan, ...contributionPlans];
+  const sourceIds = [
+    String(source._id),
+    ...linkedContributions.map((item) => String(item._id)),
+  ];
+  const oracleInvalidation = await prepareOracleSourceInvalidation(sourceIds);
   const files = [
     plainStoredFile(source.originalFile),
     ...linkedContributions.map(item => plainStoredFile(item.originalFile)),
@@ -83,6 +93,7 @@ async function deleteApprovedSource(source: any): Promise<SourceDeletionResult> 
   const warnings: string[] = [];
 
   const databaseResult = await runOptionalTransaction(async session => {
+    await applyOracleSourceInvalidation(oracleInvalidation, session);
     for (const plan of plans) {
       mergeCleanupCounts(deleted, await deleteReaderOwnedDatabaseData(plan.owner, { session }));
     }
@@ -95,6 +106,11 @@ async function deleteApprovedSource(source: any): Promise<SourceDeletionResult> 
     await AcademicSource.deleteOne({ _id: source._id }, session ? { session } : {});
   });
   if (!databaseResult.success) return deletionFailure('Có lỗi xảy ra khi xóa tài liệu.', databaseResult.error);
+  try {
+    await rematchInvalidatedOracleTurns(oracleInvalidation.turnIds);
+  } catch (error) {
+    warnings.push(`Không thể chạy lại đối chiếu Evidence Needed: ${String(error)}`);
+  }
 
   deleted.readerAssets = await deleteCleanupAssets(plans);
   deleted.originalFiles = await deleteUnreferencedStoredFiles(files, warnings);

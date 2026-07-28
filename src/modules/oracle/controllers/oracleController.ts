@@ -18,12 +18,13 @@ import {
 import { ORACLE_RUN_EVENT_RETENTION_MS } from '../../../config/oracleConfig';
 import {
   abortOracleRun,
-  compactUsedCitations,
   executeOracleRun,
 } from '../services/oracleRun.service';
 import {
+  buildOracleCitationVerificationQuestion,
   localizeOracleRuleStatement,
   localizeOracleVerificationQuestion,
+  ORACLE_CITATION_QUESTION_VERSION,
 } from '../services/oracleRulePresentation.service';
 import {
   getCurrentRuleValidationAnswers,
@@ -57,6 +58,7 @@ function sendOracleError(res: Response, error: unknown): void {
           : status === 400
             ? 'Dữ liệu yêu cầu Oracle không hợp lệ.'
             : 'Không thể lưu yêu cầu Oracle.',
+      ...(status === 400 ? { reason: error.message } : {}),
     });
     return;
   }
@@ -82,6 +84,76 @@ function deriveThreadTitle(content: string): string {
   const shortened = compact.slice(0, 64);
   const wordBoundary = shortened.lastIndexOf(' ');
   return `${(wordBoundary >= 36 ? shortened.slice(0, wordBoundary) : shortened).trim()}…`;
+}
+
+// Creates one neutral yes/no check when a linked rule has never supplied a question.
+function fallbackCitationQuestion(rule: any): {
+  verificationKey: string;
+  vi: string;
+  en: string;
+} {
+  const question = buildOracleCitationVerificationQuestion(rule);
+  return {
+    verificationKey: `${String(rule._id)}:oracle-citation`,
+    ...question,
+  };
+}
+
+// Resolves a saved citation to its current argument through identity or exact evidence.
+async function resolveCurrentCitationRule(ruleLink: {
+  ruleId: string;
+  ruleCode: string;
+  quote?: string;
+}, sourceIds: string[]): Promise<any | null> {
+  const ruleIds = [ruleLink.ruleId].filter((value) => Types.ObjectId.isValid(value));
+  const ruleCodes = [ruleLink.ruleCode, ruleLink.ruleId]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  const currentRule = await KnowledgeRuleV3.findOne({
+    status: { $in: ['pending', 'verified'] },
+    $or: [
+      { _id: { $in: ruleIds } },
+      { ruleCode: { $in: ruleCodes } },
+      { 'compositeComponents.sourceRuleId': { $in: ruleIds } },
+      { 'compositeComponents.ruleCode': { $in: ruleCodes } },
+    ],
+  }).lean();
+  if (currentRule) return currentRule;
+
+  const evidenceSourceIds = sourceIds
+    .filter((value) => Types.ObjectId.isValid(value))
+    .map((value) => new Types.ObjectId(value));
+  if (ruleLink.quote?.trim() && evidenceSourceIds.length) {
+    const currentEvidence = await KnowledgeRuleEvidenceV3.findOne({
+      sourceId: { $in: evidenceSourceIds },
+      exactQuote: ruleLink.quote.trim(),
+      stance: 'supports',
+    }).sort({ createdAt: -1 }).select('ruleId').lean();
+    if (currentEvidence?.ruleId) {
+      const evidenceRule = await KnowledgeRuleV3.findOne({
+        status: { $in: ['pending', 'verified'] },
+        $or: [
+          { _id: currentEvidence.ruleId },
+          { 'compositeComponents.sourceRuleId': currentEvidence.ruleId },
+        ],
+      }).lean();
+      if (evidenceRule) return evidenceRule;
+    }
+  }
+
+  const retiredRule = await KnowledgeRuleV3.findOne({
+    $or: [
+      { _id: { $in: ruleIds } },
+      { ruleCode: { $in: ruleCodes } },
+    ],
+    mergedIntoRuleId: { $exists: true },
+  }).select('mergedIntoRuleId').lean();
+  if (!retiredRule?.mergedIntoRuleId) return null;
+
+  return KnowledgeRuleV3.findOne({
+    _id: retiredRule.mergedIntoRuleId,
+    status: { $in: ['pending', 'verified'] },
+  }).lean();
 }
 
 function parseOracleValidationReply(content: string): 'yes' | 'no' | 'unsure' | null {
@@ -129,6 +201,12 @@ async function applyOracleReplyValidation(
     .sort((left, right) => right.position - left.position);
   const selected = candidates[0];
   if (!selected?.link.verificationKey || !selected.link.verificationQuestion) return;
+  const currentRule = await resolveCurrentCitationRule(
+    selected.link,
+    [selected.citation.sourceId],
+  );
+  if (!currentRule) return;
+  const currentRuleId = String(currentRule._id);
   const scoreUpdates = await setRuleValidationFeedback({
     userId,
     verificationKey: selected.link.verificationKey,
@@ -136,16 +214,18 @@ async function applyOracleReplyValidation(
     originId: parent._id as Types.ObjectId,
     questionText: selected.link.verificationQuestion,
     answer,
-    directRuleIds: [selected.link.ruleId],
+    directRuleIds: [currentRuleId],
     sourceId: selected.citation.sourceId,
     exactQuote: selected.link.quote,
   });
   const scoreByRuleId = new Map(scoreUpdates.map((item) => [item.ruleId, item.score]));
+  const directScore = scoreByRuleId.get(currentRuleId);
   for (const citation of parent.citations) {
     for (const link of citation.ruleLinks || []) {
       link.evidenceScore = scoreByRuleId.get(link.ruleId) ?? link.evidenceScore;
       if (link.verificationKey === selected.link.verificationKey) {
         link.currentUserAnswer = answer;
+        if (directScore != null) link.evidenceScore = directScore;
       }
     }
   }
@@ -251,19 +331,8 @@ export async function getOracleThread(req: Request, res: Response): Promise<void
       .limit(limit + 1)
       .lean();
     const hasMore = rows.length > limit;
-    const page = rows.slice(0, limit).reverse().map((turn) => {
-      if (turn.role !== 'assistant' || !turn.citations.length) return turn;
-      const textBlockIndex = turn.contentBlocks.findIndex((block) => block.type === 'text');
-      if (textBlockIndex < 0) return turn;
-      const compacted = compactUsedCitations(
-        turn.contentBlocks[textBlockIndex].text,
-        turn.citations,
-      );
-      const contentBlocks = turn.contentBlocks.map((block, index) => (
-        index === textBlockIndex ? { ...block, text: compacted.text } : block
-      ));
-      return { ...turn, contentBlocks, citations: compacted.citations };
-    });
+    // Giữ nguyên số citation đã lưu để endpoint chi tiết luôn mở đúng nguồn.
+    const page = rows.slice(0, limit).reverse();
     res.status(200).json({
       success: true,
       data: {
@@ -421,7 +490,7 @@ export async function submitOracleCitationFeedback(req: Request, res: Response):
     const answer = req.body?.answer === null
       ? null
       : String(req.body?.answer || '').trim() as 'yes' | 'no' | 'unsure';
-    if (!Number.isInteger(citationIndex) || citationIndex < 1 || !Types.ObjectId.isValid(ruleId)) {
+    if (!Number.isInteger(citationIndex) || citationIndex < 1 || !ruleId) {
       throw new OracleContractError('oracle_invalid_request', 'Invalid citation feedback target.');
     }
     if (answer !== null && !['yes', 'no', 'unsure'].includes(answer)) {
@@ -434,18 +503,39 @@ export async function submitOracleCitationFeedback(req: Request, res: Response):
       status: 'completed',
     });
     if (!turn) throw new OracleContractError('oracle_not_found', 'Oracle turn was not found.');
-    const citation = turn.citations.find((item) => item.index === citationIndex);
-    const ruleLink = citation?.ruleLinks?.find((item) => item.ruleId === ruleId);
+    const expectedSourceId = String(req.query.sourceId || '').trim();
+    const expectedAcademicSource = expectedSourceId
+      ? await AcademicSource.findOne({
+          $or: [
+            { _id: expectedSourceId },
+            { sourceContributionId: expectedSourceId },
+          ],
+        }).select('_id sourceContributionId').lean()
+      : null;
+    const expectedSourceIds = new Set([
+      expectedSourceId,
+      expectedAcademicSource?._id ? String(expectedAcademicSource._id) : '',
+      expectedAcademicSource?.sourceContributionId ? String(expectedAcademicSource.sourceContributionId) : '',
+    ].filter(Boolean));
+    const citation = (
+      expectedSourceId
+        ? turn.citations.find((item) => expectedSourceIds.has(item.sourceId))
+        : null
+    ) || turn.citations.find((item) => item.index === citationIndex);
+    const ruleLink = citation?.ruleLinks?.find((item) =>
+      item.ruleId === ruleId || item.ruleCode === ruleId);
     if (!citation || citation.sourceType !== 'academic_source' || !ruleLink?.verificationQuestion) {
       throw new OracleContractError('oracle_invalid_request', 'This citation has no rule-backed verification question.');
     }
-    const verifiedRule = await KnowledgeRuleV3.findOne({ _id: ruleId, status: 'verified' })
-      .select('_id')
-      .lean();
-    if (!verifiedRule) {
-      throw new OracleContractError('oracle_invalid_request', 'The linked rule is not approved.');
+    const currentRule = await resolveCurrentCitationRule(ruleLink, [...expectedSourceIds]);
+    if (!currentRule) {
+      throw new OracleContractError(
+        'oracle_invalid_request',
+        'The citation no longer has a current argument backed by this exact excerpt.',
+      );
     }
-    const verificationKey = ruleLink.verificationKey || `${ruleId}:oracle-citation`;
+    const canonicalRuleId = String(currentRule._id);
+    const verificationKey = ruleLink.verificationKey || `${canonicalRuleId}:oracle-citation`;
     const scoreUpdates = await setRuleValidationFeedback({
       userId,
       verificationKey,
@@ -453,24 +543,28 @@ export async function submitOracleCitationFeedback(req: Request, res: Response):
       originId: turn._id as Types.ObjectId,
       questionText: ruleLink.verificationQuestion,
       answer,
-      directRuleIds: [ruleId],
+      directRuleIds: [canonicalRuleId],
       sourceId: citation.sourceId,
       exactQuote: ruleLink.quote,
     });
     const scoreByRuleId = new Map(scoreUpdates.map((item) => [item.ruleId, item]));
+    const directScore = scoreByRuleId.get(canonicalRuleId);
     for (const storedCitation of turn.citations) {
       for (const storedLink of storedCitation.ruleLinks || []) {
         const scoreUpdate = scoreByRuleId.get(storedLink.ruleId);
         if (scoreUpdate) storedLink.evidenceScore = scoreUpdate.score;
-        if (storedLink.ruleId === ruleId
+        if ((storedLink.ruleId === ruleId
+          || storedLink.ruleId === canonicalRuleId
+          || storedLink.ruleCode === ruleId
+          || storedLink.ruleCode === ruleLink.ruleCode)
           && storedLink.verificationKey === verificationKey) {
           storedLink.currentUserAnswer = answer;
+          if (directScore) storedLink.evidenceScore = directScore.score;
         }
       }
     }
     turn.markModified('citations');
     await turn.save();
-    const directScore = scoreUpdates.find((item) => item.ruleId === ruleId);
     res.status(200).json({
       success: true,
       data: {
@@ -502,28 +596,104 @@ export async function getOracleCitationDetails(req: Request, res: Response): Pro
       status: 'completed',
     });
     if (!turn) throw new OracleContractError('oracle_not_found', 'Oracle turn was not found.');
-    const citation = turn.citations.find((item) => item.index === citationIndex);
+    const expectedSourceId = String(req.query.sourceId || '').trim();
+    const citation = (
+      expectedSourceId
+        ? turn.citations.find((item) => item.sourceId === expectedSourceId)
+        : null
+    ) || turn.citations.find((item) => item.index === citationIndex);
     if (!citation) throw new OracleContractError('oracle_not_found', 'Oracle citation was not found.');
     if (citation.sourceType !== 'academic_source') {
       res.status(200).json({ success: true, data: citation });
       return;
     }
+    const academicSource = await AcademicSource.findOne({
+      $or: [
+        { _id: citation.sourceId },
+        { sourceContributionId: citation.sourceId },
+      ],
+    }).select('_id sourceContributionId title year').lean();
+    if (!academicSource) {
+      throw new OracleContractError(
+        'oracle_not_found',
+        'The academic citation no longer points to an approved source.',
+      );
+    }
+    const canonicalSourceId = String(academicSource._id);
+    if (citation.sourceId !== canonicalSourceId) {
+      citation.sourceId = canonicalSourceId;
+      citation.title = academicSource.title || citation.title;
+    }
+    if (academicSource.year) citation.year = academicSource.year;
+
     if (citation.ruleLinks?.length) {
       if (!citation.year) {
-        const sourceYear = await AcademicSource.findById(citation.sourceId).select('year').lean();
-        if (sourceYear?.year) citation.year = sourceYear.year;
+        citation.year = academicSource.year;
       }
+      const sourceAliases = [
+        canonicalSourceId,
+        academicSource.sourceContributionId ? String(academicSource.sourceContributionId) : '',
+      ].filter(Boolean);
+      const currentLinks = [];
+      for (const link of citation.ruleLinks) {
+        const currentRule = await resolveCurrentCitationRule(link, sourceAliases);
+        if (!currentRule) continue;
+        const currentEvidence = link.quote
+          ? await KnowledgeRuleEvidenceV3.findOne({
+            sourceId: { $in: sourceAliases },
+            exactQuote: link.quote,
+            stance: 'supports',
+          }).sort({ createdAt: -1 }).select('_id').lean()
+          : null;
+        const verificationKey = `${String(currentRule._id)}:${
+          currentEvidence?._id ? String(currentEvidence._id) : canonicalSourceId
+        }:oracle-citation-${ORACLE_CITATION_QUESTION_VERSION}`;
+        const existingQuestionIsCurrent = link.verificationKey === verificationKey
+          && Boolean(link.verificationQuestion);
+        if (!existingQuestionIsCurrent) {
+          const freshQuestion = fallbackCitationQuestion(currentRule);
+          link.verificationKey = verificationKey;
+          link.verificationQuestion = freshQuestion.vi;
+          link.localizedVerificationQuestion = freshQuestion;
+          link.currentUserAnswer = null;
+        }
+        link.ruleId = String(currentRule._id);
+        link.ruleCode = String(currentRule.ruleCode || link.ruleCode);
+        link.statement = String(currentRule.statement || link.statement);
+        link.evidenceScore = Number(currentRule.evidenceScore) || 0;
+        link.supportingSourceCount = Number(currentRule.supportingSourceCount) || 0;
+        currentLinks.push(link);
+      }
+      citation.ruleLinks = currentLinks;
       const verificationKeys = citation.ruleLinks
         .map((rule) => rule.verificationKey || '')
         .filter(Boolean);
       const answerByKey = await getCurrentRuleValidationAnswers(userId, verificationKeys);
+      const linkedRuleIds = citation.ruleLinks
+        .map((rule) => rule.ruleId)
+        .filter((ruleId) => Types.ObjectId.isValid(ruleId));
+      const linkedRuleCodes = citation.ruleLinks
+        .flatMap((rule) => [rule.ruleId, rule.ruleCode])
+        .filter((ruleCode) => ruleCode && !Types.ObjectId.isValid(ruleCode));
       const liveRules = await KnowledgeRuleV3.find({
-        _id: { $in: citation.ruleLinks.map((rule) => rule.ruleId) },
-        status: 'verified',
-      }).select('_id evidenceScore').lean();
-      const scoreByRuleId = new Map(
-        liveRules.map((rule) => [String(rule._id), Number(rule.evidenceScore) || 0]),
-      );
+        status: { $in: ['pending', 'verified'] },
+        $or: [
+          { _id: { $in: linkedRuleIds } },
+          { ruleCode: { $in: linkedRuleCodes } },
+          { 'compositeComponents.sourceRuleId': { $in: linkedRuleIds } },
+          { 'compositeComponents.ruleCode': { $in: linkedRuleCodes } },
+        ],
+      }).select('_id ruleCode evidenceScore compositeComponents.sourceRuleId compositeComponents.ruleCode').lean();
+      const scoreByRuleId = new Map<string, number>();
+      for (const rule of liveRules) {
+        const score = Number(rule.evidenceScore) || 0;
+        scoreByRuleId.set(String(rule._id), score);
+        scoreByRuleId.set(String(rule.ruleCode), score);
+        for (const component of rule.compositeComponents || []) {
+          scoreByRuleId.set(String(component.sourceRuleId), score);
+          scoreByRuleId.set(String(component.ruleCode), score);
+        }
+      }
       for (const link of citation.ruleLinks) {
         link.localizedStatement = localizeOracleRuleStatement(link);
         link.localizedVerificationQuestion = localizeOracleVerificationQuestion(
@@ -540,12 +710,8 @@ export async function getOracleCitationDetails(req: Request, res: Response): Pro
       res.status(200).json({ success: true, data: citation });
       return;
     }
-    const academicSource = await AcademicSource.findById(citation.sourceId)
-      .select('_id sourceContributionId year')
-      .lean();
-    if (academicSource?.year) citation.year = academicSource.year;
     const evidenceSourceIds = [
-      citation.sourceId,
+      canonicalSourceId,
       academicSource?.sourceContributionId ? String(academicSource.sourceContributionId) : '',
     ].filter(Boolean);
     const evidence = await KnowledgeRuleEvidenceV3.find({
@@ -554,18 +720,39 @@ export async function getOracleCitationDetails(req: Request, res: Response): Pro
     }).sort({ verificationScore: -1, createdAt: 1 }).lean();
     const evidenceRuleIds = [...new Set(evidence.map((item) => String(item.ruleId)))];
     const rules = await KnowledgeRuleV3.find({
-      status: 'verified',
+      status: { $in: ['pending', 'verified'] },
       $or: [
         { _id: { $in: evidenceRuleIds } },
         { 'compositeComponents.sourceRuleId': { $in: evidenceRuleIds } },
       ],
     }).lean();
+    // Questions are generated for this citation version only; never reuse a
+    // question or answer from an unrelated historical turn.
     const questionByRuleId = new Map<string, any>();
-    const currentAnswerByKey = await getCurrentRuleValidationAnswers(userId, []);
+    const questionByRuleIdWithFallback = new Map<string, any>(questionByRuleId);
+    for (const rule of rules) {
+      const ownerIds = [String(rule._id), ...(rule.compositeComponents || []).map((item) => String(item.sourceRuleId))];
+      if (!ownerIds.some((ownerId) => questionByRuleIdWithFallback.has(ownerId))) {
+        questionByRuleIdWithFallback.set(String(rule._id), fallbackCitationQuestion(rule));
+      }
+    }
+    const verificationKeys = [...questionByRuleIdWithFallback.values()]
+      .map((question) => String(question.verificationKey || ''))
+      .filter(Boolean);
+    const currentAnswerByKey = await getCurrentRuleValidationAnswers(userId, verificationKeys);
     const links = await Promise.all(rules.map(async (rule) => {
       const ownerIds = [String(rule._id), ...(rule.compositeComponents || []).map((item) => String(item.sourceRuleId))];
       const linkedEvidence = evidence.find((item) => ownerIds.includes(String(item.ruleId)));
-      const question = questionByRuleId.get(String(rule._id));
+      const question = ownerIds
+        .map((ownerId) => questionByRuleIdWithFallback.get(ownerId))
+        .find(Boolean);
+      const fallback = question?.vi && question?.en ? question : null;
+      const verificationKey = `${String(rule._id)}:${
+        String(linkedEvidence?._id || canonicalSourceId)
+      }:oracle-citation-v2`;
+      const verificationQuestion = String(
+        question?.followUpQuestion || fallback?.vi || '',
+      );
       return {
         ruleId: String(rule._id),
         ruleCode: rule.ruleCode,
@@ -574,16 +761,13 @@ export async function getOracleCitationDetails(req: Request, res: Response): Pro
         quote: linkedEvidence?.exactQuote || citation.excerpt,
         evidenceScore: rule.evidenceScore,
         supportingSourceCount: rule.supportingSourceCount,
-        ...(question ? {
-          verificationKey: String(question.verificationKey || ''),
-          verificationQuestion: String(question.followUpQuestion || ''),
-          localizedVerificationQuestion: localizeOracleVerificationQuestion(
-            rule,
-            question.followUpQuestion,
-          ),
-        } : {}),
-        currentUserAnswer: question?.verificationKey
-          ? currentAnswerByKey.get(String(question.verificationKey)) || null
+        verificationKey,
+        verificationQuestion,
+        localizedVerificationQuestion: fallback
+          ? { vi: fallback.vi, en: fallback.en }
+          : localizeOracleVerificationQuestion(rule, question?.followUpQuestion),
+        currentUserAnswer: verificationKey
+          ? currentAnswerByKey.get(verificationKey) || null
           : null,
       };
     }));

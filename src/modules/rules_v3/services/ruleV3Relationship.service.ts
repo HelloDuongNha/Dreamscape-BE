@@ -184,46 +184,6 @@ export interface RuleV3ConceptCluster {
   relationshipKinds: RuleV3Relationship[];
 }
 
-export interface RuleV3MergeCluster {
-  clusterId: string;
-  memberIds: string[];
-  memberCount: number;
-  reasons: RuleV3MergeReason[];
-}
-
-/** Presentation clusters contain only records that the merge endpoint can
- * actually combine. Related-but-distinct claims are deliberately omitted. */
-export function buildRuleV3MergeClusters(inputs: RuleV3ClusterInput[]): Map<string, RuleV3MergeCluster> {
-  const sorted = [...inputs].sort((a, b) => a.id.localeCompare(b.id));
-  const groups: RuleV3ClusterInput[][] = [];
-  const pairAssessment = (left: RuleV3ClusterInput, right: RuleV3ClusterInput) => {
-      const rightChunks = new Set(right.evidenceChunkIds || []);
-      const sharedEvidenceContext = (left.evidenceChunkIds || []).some(id => rightChunks.has(id));
-      return assessRuleV3MergeCompatibility(left, right, {
-        sharedEvidenceContext,
-        sameQuestionKind: Boolean(left.questionKind && left.questionKind !== 'none' && left.questionKind === right.questionKind),
-      });
-  };
-  for (const input of sorted) {
-    const target = groups.find(group => group.every(member => pairAssessment(member, input).canMerge));
-    if (target) target.push(input); else groups.push([input]);
-  }
-  const output = new Map<string, RuleV3MergeCluster>();
-  for (const members of groups) {
-    if (members.length < 2) continue;
-    const memberIds = members.map(item => item.id).sort();
-    const reasons = members.flatMap((left, index) => members.slice(index + 1).flatMap(right => pairAssessment(left, right).reasons));
-    const cluster = {
-      clusterId: `merge-cluster:${memberIds[0]}`,
-      memberIds,
-      memberCount: memberIds.length,
-      reasons: [...new Set(reasons)],
-    };
-    for (const id of memberIds) output.set(id, cluster);
-  }
-  return output;
-}
-
 /**
  * Atomic rules remain independently reviewable and scoreable. This graph
  * groups rules only for presentation and synthesis: equivalent/contradictory

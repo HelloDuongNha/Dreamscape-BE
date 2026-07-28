@@ -22,9 +22,7 @@ import {
 } from '../services/ruleV3ValidationScore.service';
 import {
   assessRuleV3MergeCompatibility,
-  buildRuleV3MergeClusters,
   classifyRuleV3Relationship,
-  type RuleV3MergeCluster,
 } from '../services/ruleV3Relationship.service';
 import { classifyRuleV3VerificationKind, requiresAggregateRuleValidation } from '../services/ruleV3DreamApplication.service';
 import { generateEmbedding } from '../../../infrastructure/llm.service';
@@ -32,13 +30,17 @@ import {
   getOracleEvidenceGapMatchesForRule,
   reconcileOracleEvidenceGapsForRule,
 } from '../../oracle/services/oracleEvidenceGap.service';
-import { mergePendingRuleV3Group, RuleV3MergeError } from '../services/ruleV3Merge.service';
 import {
   cleanSourceMetadataText,
   loadRuleV3SourceSummaries,
   shortRuleLabel,
   type RuleV3SourceSummary,
 } from '../services/ruleV3SourceSummary.service';
+import {
+  parseRuleV3BulkActionRequest,
+  parseRuleV3CandidateQuery,
+  parseRuleV3ExtractionRequest,
+} from '../dto';
 
 export interface RuleV3ControllerDependencies {
   planLoader: (id: string) => Promise<any>;
@@ -247,7 +249,7 @@ export function createRuleV3ModerationController(deps: RuleV3ControllerDependenc
     try {
       const id = String(req.params.id);
       const workUnitId = String(req.params.workUnitId);
-      const { provider } = req.body;
+      const { provider } = parseRuleV3ExtractionRequest(req.body);
 
       const config = await deps.availabilityChecker();
       const chosenProviderName = provider || config.defaultProvider;
@@ -406,8 +408,9 @@ export const startFullRuleV3Extraction = async (req: Request, res: Response): Pr
     const provider = providerName === 'ollama'
       ? new RuleV3OllamaProvider()
       : new RuleV3GeminiProvider();
+    const { replaceExisting } = parseRuleV3ExtractionRequest(req.body);
     const result = await startRuleV3FullExtraction(String(req.params.id), provider, {
-      replaceExisting: req.body?.replaceExisting === true
+      replaceExisting
     });
     res.status(result.status === 'success' ? 200 : 202).json({ success: true, data: result });
   } catch {
@@ -717,7 +720,6 @@ function mapRuleV3Candidate(
   rule: any,
   source: RuleV3SourceSummary | undefined,
   evidence: any[] = [],
-  mergeCluster?: RuleV3MergeCluster,
 ) {
   const mappedStatus = rule.status === 'verified' ? 'approved' : rule.status;
   const components = Array.isArray(rule.compositeComponents) ? rule.compositeComponents : [];
@@ -846,16 +848,14 @@ function mapRuleV3Candidate(
             : 'The composite score follows the weakest claim. Combining claims from the same document or source paragraph does not create independent evidence and therefore does not increase academic support.'),
       },
     } : {}),
-    ...(mergeCluster && mergeCluster.memberCount > 1 ? { mergeCluster } : {}),
     createdAt: rule.createdAt,
     updatedAt: rule.updatedAt
   };
 }
 
 export const getRuleV3Candidates = async (req: Request, res: Response): Promise<void> => {
-  const requestedStatus = String(req.query.status || 'pending');
+  const { status: requestedStatus, sourceId } = parseRuleV3CandidateQuery(req.query);
   const status = requestedStatus === 'approved' ? 'verified' : requestedStatus;
-  const sourceId = req.query.academicSourceId ? String(req.query.academicSourceId) : null;
   const filter: any = { status };
   if (sourceId) {
     if (!mongoose.Types.ObjectId.isValid(sourceId)) {
@@ -888,26 +888,13 @@ export const getRuleV3Candidates = async (req: Request, res: Response): Promise<
     evidenceByRule.get(key)!.push(item);
   }
   const sourceSummaries = await loadRuleV3SourceSummaries(evidence.map(item => String(item.sourceId)));
-  const mergeClusters = buildRuleV3MergeClusters(rules
-    .filter(rule => rule.status === 'pending' && !rule.isComposite)
-    .map(rule => ({
-    id: String(rule._id),
-    statement: rule.statement,
-    subject: rule.subject,
-    outcome: rule.outcome,
-    claimType: rule.claimType,
-    effectPolarity: rule.effectPolarity,
-    conditions: rule.conditions,
-    questionKind: classifyRuleV3VerificationKind(rule),
-    evidenceChunkIds: (evidenceByRule.get(String(rule._id)) || []).map(item => String(item.chunkId)),
-  })));
   const validationStats = await getRuleValidationStats(rules.map(rule => String(rule._id)));
   const data = rules.map(rule => {
     const ruleOwnerIds = [String(rule._id), ...(rule.compositeComponents || []).map((component: any) => String(component.sourceRuleId))];
     const ruleEvidence = ruleOwnerIds.flatMap(ownerId => evidenceByRule.get(ownerId) || []);
     const source = sourceSummaries.get(String(ruleEvidence[0]?.sourceId || sourceId || ''));
     return {
-      ...mapRuleV3Candidate(rule, source, ruleEvidence, mergeClusters.get(String(rule._id))),
+      ...mapRuleV3Candidate(rule, source, ruleEvidence),
       validationStats: validationStats.get(String(rule._id)),
     };
   });
@@ -946,6 +933,7 @@ export const getRuleV3CandidateDetail = async (req: Request, res: Response): Pro
     status: rule.status,
     evidenceScore: rule.evidenceScore,
     supportingSourceCount: rule.supportingSourceCount,
+    compositeComponents: rule.compositeComponents,
   });
   const comparableRules = await KnowledgeRuleV3.find({
     _id: { $nin: feedbackRuleIds },
@@ -1051,34 +1039,6 @@ export const getRuleV3CandidateDetail = async (req: Request, res: Response): Pro
       evidenceExcerpts: groupEvidenceExcerpts(evidence, chunkMap, sourceSummaries)
     }
   });
-};
-
-export const mergeRuleV3CandidateGroup = async (req: Request, res: Response): Promise<void> => {
-  try {
-    if (String(req.body?.confirmation || '') !== 'MERGE_COMPATIBLE_RULES') {
-      res.status(400).json({ success: false, code: 'merge_confirmation_required', message: 'Thiếu xác nhận gộp lập luận.' });
-      return;
-    }
-    const result = await mergePendingRuleV3Group(String(req.params.id));
-    res.status(200).json({
-      success: true,
-      message: 'Đã tạo lập luận tổng hợp và lưu vết các mệnh đề nguồn.',
-      data: result,
-    });
-  } catch (error) {
-    if (error instanceof RuleV3MergeError) {
-      const status = error.code === 'rule_not_found' ? 404 : 409;
-      const messages = {
-        rule_not_found: 'Không tìm thấy lập luận cần gộp.',
-        rule_not_pending: 'Chỉ có thể gộp các lập luận nguyên tử cùng trạng thái chờ duyệt hoặc cùng trạng thái đã duyệt.',
-        no_compatible_rules: 'Không có mệnh đề đủ tương thích để gộp an toàn với lập luận này.',
-        merge_too_large: 'Cụm lập luận quá lớn để gộp an toàn trong một lần.',
-      };
-      res.status(status).json({ success: false, code: error.code, message: messages[error.code] });
-      return;
-    }
-    res.status(500).json({ success: false, code: 'rule_merge_failed', message: 'Không thể gộp lập luận.' });
-  }
 };
 
 async function approveRuleV3Record(existing: any): Promise<void> {
@@ -1188,6 +1148,7 @@ export const approveRuleV3Candidate = async (req: Request, res: Response): Promi
     outcome: rule.outcome,
     evidenceScore: rule.evidenceScore,
     supportingSourceCount: rule.supportingSourceCount,
+    compositeComponents: rule.compositeComponents,
   }).catch(() => undefined);
   res.status(200).json({ success: true, message: 'Đã duyệt Rule V3.' });
 };
@@ -1208,17 +1169,16 @@ async function bulkRuleIds(status: 'pending' | 'rejected', sourceId?: string): P
 }
 
 export const bulkRuleV3Action = async (req: Request, res: Response): Promise<void> => {
-  const action = String(req.body?.action || '');
+  const { action, confirmation, sourceId } = parseRuleV3BulkActionRequest(req.body);
   const expectedConfirmations: Record<string, string> = {
     approve_pending: 'APPROVE_ALL_PENDING_RULES', reject_pending: 'REJECT_ALL_PENDING_RULES',
     restore_rejected: 'RESTORE_ALL_REJECTED_RULES', delete_rejected: 'DELETE_ALL_REJECTED_RULES'
   };
-  if (!expectedConfirmations[action] || req.body?.confirmation !== expectedConfirmations[action]) {
+  if (!expectedConfirmations[action] || confirmation !== expectedConfirmations[action]) {
     res.status(400).json({ success: false, message: 'Xác nhận thao tác hàng loạt không hợp lệ.' });
     return;
   }
   try {
-    const sourceId = req.body?.sourceId ? String(req.body.sourceId) : undefined;
     const status: 'pending' | 'rejected' = action.includes('pending') ? 'pending' : 'rejected';
     const ids = await bulkRuleIds(status, sourceId);
     if (action === 'reject_pending') await KnowledgeRuleV3.updateMany({ _id: { $in: ids } }, { status: 'rejected', $unset: { embedding: 1, embeddingModel: 1 } });
@@ -1243,6 +1203,7 @@ export const bulkRuleV3Action = async (req: Request, res: Response): Promise<voi
               outcome: verified.outcome,
               evidenceScore: verified.evidenceScore,
               supportingSourceCount: verified.supportingSourceCount,
+              compositeComponents: verified.compositeComponents,
             }).catch(() => undefined);
           }
           processed += 1;

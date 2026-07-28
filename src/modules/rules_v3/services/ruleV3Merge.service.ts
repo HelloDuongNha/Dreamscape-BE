@@ -11,6 +11,13 @@ export class RuleV3MergeError extends Error {
   }
 }
 
+export interface RuleV3AutoMergeResult {
+  activeRuleIds: mongoose.Types.ObjectId[];
+  mergedGroupCount: number;
+  retiredRuleCount: number;
+  failures: Array<{ ruleId: string; reason: string }>;
+}
+
 function componentSnapshot(rule: any) {
   return {
     sourceRuleId: rule._id,
@@ -60,13 +67,13 @@ export async function mergePendingRuleV3Group(selectedRuleId: string) {
   if (!mongoose.Types.ObjectId.isValid(selectedRuleId)) throw new RuleV3MergeError('rule_not_found');
   const selected = await KnowledgeRuleV3.findById(selectedRuleId);
   if (!selected) throw new RuleV3MergeError('rule_not_found');
-  if (!['pending', 'verified'].includes(selected.status) || selected.isComposite) throw new RuleV3MergeError('rule_not_pending');
+  if (selected.status !== 'pending' || selected.isComposite) throw new RuleV3MergeError('rule_not_pending');
 
   // Pending rules from every document are considered. Cross-document claims
   // can merge only through semantic compatibility because their canonical
   // chunk ids necessarily differ.
   const rules = await KnowledgeRuleV3.find({
-    status: selected.status,
+    status: 'pending',
     sourceLanguage: selected.sourceLanguage,
     isComposite: { $ne: true },
   });
@@ -117,5 +124,51 @@ export async function mergePendingRuleV3Group(selectedRuleId: string) {
     retiredRuleIds: secondaryRules.map(rule => String(rule._id)),
     componentCount: mergeGroup.length,
     requiresReview: true,
+  };
+}
+
+/** Tự động gộp các lập luận chờ duyệt vừa được pipeline tạo ra. */
+export async function autoMergePendingRuleV3Groups(
+  seedRuleIds: Array<mongoose.Types.ObjectId | string>,
+): Promise<RuleV3AutoMergeResult> {
+  const activeRuleIds = new Map(
+    seedRuleIds.map(ruleId => [String(ruleId), new mongoose.Types.ObjectId(String(ruleId))]),
+  );
+  const failures: RuleV3AutoMergeResult['failures'] = [];
+  let mergedGroupCount = 0;
+  let retiredRuleCount = 0;
+
+  for (const ruleId of [...activeRuleIds.keys()].sort()) {
+    if (!activeRuleIds.has(ruleId)) continue;
+    const rule = await KnowledgeRuleV3.findById(ruleId).select('status isComposite').lean();
+    if (!rule || rule.status !== 'pending' || rule.isComposite) continue;
+    try {
+      const result = await mergePendingRuleV3Group(ruleId);
+      mergedGroupCount += 1;
+      retiredRuleCount += result.retiredRuleIds.length;
+      for (const retiredRuleId of result.retiredRuleIds) activeRuleIds.delete(retiredRuleId);
+      activeRuleIds.set(
+        result.primaryRuleId,
+        new mongoose.Types.ObjectId(result.primaryRuleId),
+      );
+    } catch (error) {
+      if (
+        error instanceof RuleV3MergeError
+        && ['no_compatible_rules', 'rule_not_pending'].includes(error.code)
+      ) {
+        continue;
+      }
+      failures.push({
+        ruleId,
+        reason: error instanceof RuleV3MergeError ? error.code : 'automatic_merge_failed',
+      });
+    }
+  }
+
+  return {
+    activeRuleIds: [...activeRuleIds.values()],
+    mergedGroupCount,
+    retiredRuleCount,
+    failures,
   };
 }

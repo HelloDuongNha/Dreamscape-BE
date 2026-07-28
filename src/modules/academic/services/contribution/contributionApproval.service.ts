@@ -13,6 +13,11 @@ import {
   prepareContribution,
 } from './contributionApprovalPreparation.service';
 import { recordApproval } from './contributionStats.service';
+import { reconcileOracleEvidenceGapsForSources } from '../../../oracle/services/oracleEvidenceGap.service';
+import {
+  startAutomaticRuleV3Extraction,
+  type AutomaticRuleExtractionStart,
+} from '../../../rules_v3/services/ruleV3AutomaticExtraction.service';
 
 export type ContributionApprovalResult =
   | { status: 200; body: Record<string, unknown> }
@@ -46,7 +51,34 @@ export async function approveSourceContribution(
     { ...prepared, contribution },
     reviewerId,
   );
-  return buildApprovalResult(contribution, academicSource, outcome);
+  const ruleExtraction = await startRuleExtractionBestEffort(academicSource);
+  await reconcileEvidenceGapsBestEffort(academicSource, contribution);
+  return buildApprovalResult(contribution, academicSource, outcome, ruleExtraction);
+}
+
+async function startRuleExtractionBestEffort(
+  academicSource: IAcademicSource,
+): Promise<AutomaticRuleExtractionStart | null> {
+  try {
+    return await startAutomaticRuleV3Extraction(String(academicSource._id));
+  } catch (error) {
+    console.error('Failed to start Rule V3 extraction after source approval:', error);
+    return null;
+  }
+}
+
+async function reconcileEvidenceGapsBestEffort(
+  academicSource: IAcademicSource,
+  contribution: ApprovalContribution,
+): Promise<void> {
+  try {
+    await reconcileOracleEvidenceGapsForSources([
+      academicSource._id,
+      contribution._id,
+    ]);
+  } catch (error) {
+    console.error('Failed to reconcile Oracle evidence gaps after source approval:', error);
+  }
 }
 
 async function findDuplicateSource(contribution: ApprovalContribution) {
@@ -91,6 +123,7 @@ function buildApprovalResult(
   contribution: ApprovalContribution,
   academicSource: IAcademicSource,
   outcome: ApprovalOutcome,
+  ruleExtraction: AutomaticRuleExtractionStart | null,
 ): ContributionApprovalResult {
   return {
     status: 200,
@@ -104,6 +137,7 @@ function buildApprovalResult(
         contribution: mapSourceOriginAndUrls(contribution),
         academicSource: mapSourceOriginAndUrls(academicSource),
         fullText: outcome.fullText,
+        ruleExtraction,
       },
     },
   };

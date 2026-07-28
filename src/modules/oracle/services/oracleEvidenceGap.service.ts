@@ -1,11 +1,19 @@
 import { Types } from 'mongoose';
 import AcademicSource from '../../academic/models/AcademicSource';
 import SourceContribution from '../../academic/models/SourceContribution';
+import Dream from '../../dream/models/Dream';
 import OracleEvidenceGap from '../models/OracleEvidenceGap';
 import OracleTurn from '../models/OracleTurn';
+import KnowledgeRuleV3 from '../../rules_v3/models/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../../rules_v3/models/KnowledgeRuleEvidence';
 import { inferDocumentLanguage } from '../../rules_v3/services/documentLanguage.service';
+import { retrieveApprovedRuleV3 } from '../../rules_v3/services/ruleV3Retrieval.service';
 import type { OracleCitation } from './oracle.types';
+import {
+  buildOracleCitationVerificationQuestion,
+  localizeOracleRuleStatement,
+  ORACLE_CITATION_QUESTION_VERSION,
+} from './oracleRulePresentation.service';
 
 function normalize(value: string): string {
   return cleanOracleEvidenceClaim(value).normalize('NFKC').toLocaleLowerCase('vi')
@@ -60,6 +68,7 @@ const BILINGUAL_EVIDENCE_CONCEPTS: Array<[string, RegExp]> = [
   ['presentation', /trình bày|thuyết phục|slide|khán giả|người nghe|presentation|audience/iu],
   ['connection', /kết nối|cầu nối|gần gũi|chân thật|connect|bridge|authentic/iu],
   ['surprise', /bất ngờ|ngoài dự kiến|vượt khỏi khuôn khổ|surpris|unexpected/iu],
+  ['weak_association', /liên kết yếu|kết nối xa|weak association|remote association/iu],
 ];
 
 function bilingualConceptSimilarity(left: string, right: string): number {
@@ -75,7 +84,7 @@ function bilingualConceptSimilarity(left: string, right: string): number {
   if (shared.length < 2) return 0;
   const anchorShared = shared.some(concept => [
     'memory', 'future', 'anxiety', 'creativity', 'problem_solving',
-    'action_planning', 'stress_reduction', 'work_project',
+    'action_planning', 'stress_reduction', 'work_project', 'weak_association',
   ].includes(concept));
   if (!anchorShared) return 0;
   const coverage = shared.length / Math.min(a.size, b.size);
@@ -92,11 +101,9 @@ export function evidenceGapRuleSimilarity(gapClaim: string, ruleText: string): n
   const gapCluster = oracleEvidenceClaimClusterKey(gapClaim);
   const ruleCluster = oracleEvidenceClaimClusterKey(ruleText);
   const gapHasSemanticCluster = gapCluster.includes('__');
-  const ruleHasSemanticCluster = ruleCluster.includes('__');
-  if (gapHasSemanticCluster && ruleHasSemanticCluster && gapCluster !== ruleCluster) {
-    // Sibling concepts can share most words (for example, memory fragments in
-    // dreams vs. memory plus future concerns) while asserting different
-    // outcomes. Do not let lexical overlap link or resolve the wrong need.
+  if (gapHasSemanticCluster && gapCluster !== ruleCluster) {
+    // A structured evidence need must preserve its relation and outcome.
+    // Shared topic words alone cannot replace a missing semantic facet.
     return Math.min(0.24, Math.max(lexical, canonicalLexical, bilingualConcept));
   }
   // Cluster keys encode bilingual subject/relation/outcome concepts. Equality
@@ -168,30 +175,102 @@ const NON_CLAIM_PATTERNS = [
 export function isResearchableOracleEvidenceClaim(claim: string): boolean {
   const clean = cleanOracleEvidenceClaim(claim);
   if (clean.length < 35) return false;
+  if (/[?？]\s*$/u.test(clean)) return false;
   if (NON_CLAIM_PATTERNS.some((pattern) => pattern.test(clean))) return false;
+  if (/tượng trưng|biểu tượng của|đại diện cho|ám chỉ/iu.test(clean)) return false;
+  const personalizedInterpretation = /\b(?:bạn|của bạn|your)\b/iu.test(clean)
+    && /phản ánh|cho thấy|minh họa|gợi ý|khuyến khích|reflect|suggest|indicat/iu.test(clean);
+  if (personalizedInterpretation) return false;
+  const canonicalClaim = canonicalizeOracleEvidenceClaim(clean);
+  const remainsPersonalized = /\b(?:bạn|của bạn|you|your)\b/iu.test(clean)
+    && normalize(canonicalClaim) === normalize(clean);
+  if (remainsPersonalized) return false;
+  const caseSpecificInterpretation = /^(?:trong mơ,?\s*)?việc\b|^hình ảnh\b/iu.test(clean)
+    && /phản ánh|cho thấy|minh họa|gợi ý|reflect|suggest|illustrat|indicat/iu.test(clean);
+  if (
+    caseSpecificInterpretation
+    && normalize(canonicalClaim) === normalize(clean)
+  ) return false;
   const value = normalize(clean);
   const dreamScience = /giấc mơ|trong mơ|giấc ngủ|tỉnh giấc|dream|dreaming|sleep|awakening/iu.test(value);
   const memoryMechanism = /não bộ|brain/iu.test(value)
     && /ký ức|trí nhớ|memory|memories/iu.test(value);
   const psychologicalMechanism = /lo lắng|căng thẳng|áp lực|anxiety|stress/iu.test(value)
     && /hành động|chuẩn bị|lập kế hoạch|giảm|giải tỏa|sáng tạo|action|planning|reduce|creative/iu.test(value);
-  const relation = /liên quan|kết hợp|tái kết hợp|đưa vào|xử lý|sử dụng|tăng|giảm|dẫn đến|thúc đẩy|ảnh hưởng|associated|related|combine|incorporat|process|increase|decrease|predict|affect/iu.test(value);
-  return relation && (dreamScience || memoryMechanism || psychologicalMechanism);
+  const relationText = `${value} ${normalize(canonicalClaim)}`;
+  const relation = /liên quan|kết hợp|tái kết hợp|đưa vào|xử lý|sử dụng|tăng|giảm|dẫn đến|thúc đẩy|ảnh hưởng|phổ biến|xuất hiện|associated|related|combine|incorporat|process|increase|decrease|predict|affect|common|prevalen|frequen|occur/iu.test(relationText);
+  const conceptCount = BILINGUAL_EVIDENCE_CONCEPTS
+    .filter(([, pattern]) => pattern.test(clean))
+    .length;
+  return relation
+    && (dreamScience || memoryMechanism || psychologicalMechanism || conceptCount >= 2);
+}
+
+function keepMarkerOnlyForResearchableClaim(
+  text: string,
+  marker: RegExp,
+  researchableMarker: string,
+): string {
+  const updatedText = text.replace(marker, (_match, offset: number) => {
+    const prefix = text.slice(0, offset).trimEnd();
+    const contentBeforeTerminalPunctuation = /[.!?？]$/u.test(prefix)
+      ? prefix.slice(0, -1)
+      : prefix;
+    const boundary = Math.max(
+      contentBeforeTerminalPunctuation.lastIndexOf('\n'),
+      contentBeforeTerminalPunctuation.lastIndexOf('. '),
+      contentBeforeTerminalPunctuation.lastIndexOf('! '),
+      contentBeforeTerminalPunctuation.lastIndexOf('? '),
+    );
+    const surroundingClaim = prefix.slice(boundary + 1).trim();
+    return isResearchableOracleEvidenceClaim(surroundingClaim) ? researchableMarker : '';
+  });
+  return updatedText
+    .replace(/[ \t]+([.,!?;:])/gu, '$1')
+    .replace(/[ \t]{2,}/gu, ' ');
+}
+
+// Replaces an invalid citation only when the surrounding text is an academic claim.
+export function invalidateOracleCitationMarker(text: string, citationIndex: number): string {
+  return keepMarkerOnlyForResearchableClaim(
+    text,
+    new RegExp(`\\[${citationIndex}\\]`, 'gu'),
+    '[?]',
+  );
+}
+
+// Removes unresolved markers that were attached to questions or personal advice.
+export function sanitizeOracleUnresolvedMarkers(text: string): string {
+  return keepMarkerOnlyForResearchableClaim(text, /\[\?\]/gu, '[?]');
 }
 
 export function canonicalizeOracleEvidenceClaim(claim: string): string {
   const clean = cleanOracleEvidenceClaim(claim);
   const value = normalize(clean);
-  const vietnamese = /[ăâđêôơưà-ỹ]/iu.test(clean);
+  const vietnamese = /[ăâđêôơưàáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵ]/iu
+    .test(clean)
+    || /\b(?:giấc mơ|trong mơ|ký ức|tương lai|lo âu|sáng tạo)\b/iu.test(clean);
   const dream = /giấc mơ|trong mơ|giấc ngủ|dream|dreaming|sleep/iu.test(value);
   const brain = /não bộ|brain/iu.test(value);
   const memory = /ký ức|trí nhớ|thời thơ ấu|memory|memories|childhood/iu.test(value);
   const future = /tương lai|sắp tới|trách nhiệm|nhiệm vụ hiện tại|future|prospective|upcoming/iu.test(value);
   const anxiety = /lo âu|lo lắng|căng thẳng|áp lực|anxiety|stress|pressure/iu.test(value);
-  const creativity = /sáng tạo|linh hoạt|ứng biến|giải pháp|creative|flexib|improvis|solution/iu.test(value);
+  const creativity = /sáng tạo|linh hoạt|ứng biến|giải pháp|tư duy phân kỳ|creative|flexib|improvis|solution|divergent/iu.test(value);
   const action = /hành động|chuẩn bị|lập kế hoạch|action|prepar|planning/iu.test(value);
   const reduction = /giảm|giải tỏa|tan biến|reduce|relief|decreas/iu.test(value);
+  const weakAssociation = /liên kết yếu|kết nối xa|weak association|remote association/iu.test(value);
+  const lateNight = /cuối đêm|gần sáng|(?:phần\s+)?cuối(?:\s+của)?\s+giấc ngủ|later in the night|later in the sleep period|late in sleep|final quartile/iu.test(value);
 
+  if (dream && future && lateNight) {
+    return vietnamese
+      ? 'Giấc mơ hướng tới tương lai có thể trở nên phổ biến hơn vào phần cuối của giấc ngủ.'
+      : 'Future-oriented dreams may become more common later in the sleep period.';
+  }
+  if (dream && weakAssociation && creativity) {
+    return vietnamese
+      ? 'Kích hoạt các liên kết yếu trong giấc mơ có thể liên quan đến tư duy sáng tạo, linh hoạt hoặc phân kỳ.'
+      : 'Activation of weak associations in dreams may be related to creative, flexible, or divergent thinking.';
+  }
   if (memory && (dream || brain) && future) {
     return vietnamese
       ? 'Nội dung giấc mơ có thể tái kết hợp ký ức quá khứ với mối quan tâm hoặc nhiệm vụ tương lai.'
@@ -224,7 +303,7 @@ export function oracleEvidenceClaimClusterKey(claim: string): string {
   const has = (...patterns: RegExp[]) => hasAny(value, patterns);
 
   const anxiety = has(/lo âu|lo lắng|căng thẳng|áp lực|sợ hãi|anxiety|stress|pressure|fear/iu);
-  const creativity = has(/sáng tạo|linh hoạt|ứng biến|giải pháp|creative|flexib|improvis|solution/iu);
+  const creativity = has(/sáng tạo|linh hoạt|ứng biến|giải pháp|tư duy phân kỳ|creative|flexib|improvis|solution|divergent/iu);
   const presentation = has(/trình bày|thuyết phục|slide|khán giả|người nghe|presentation|audience/iu);
   const uncertainty = has(/bất trắc|thiếu ổn định|không ổn định|chưa rõ|uncertain|unstable|unknown/iu);
   const navigation = has(/tàu|biển|đường ray|lái|hành trình|train|sea|rail|navigat|journey/iu);
@@ -238,8 +317,16 @@ export function oracleEvidenceClaimClusterKey(claim: string): string {
   const reduction = has(/giảm|giải tỏa|tan biến|reduce|relief|decreas/iu);
   const surprise = has(/bất ngờ|khác biệt|vượt khỏi khuôn khổ|surpris|unexpected|different impact/iu);
   const connection = has(/kết nối|cầu nối|chân thật|cá nhân hóa|connect|authentic|personal/iu);
+  const weakAssociation = has(/liên kết yếu|kết nối xa|weak association|remote association/iu);
+  const lateNight = has(/cuối đêm|gần sáng|(?:phần\s+)?cuối(?:\s+của)?\s+giấc ngủ|later in the night|later in the sleep period|late in sleep|final quartile/iu);
 
   if (action && anxiety && reduction) return 'relation:action-planning__outcome:stress-reduction';
+  if (sleepOrDream && future && lateNight) {
+    return 'context:late-sleep__outcome:future-oriented-dream-prevalence';
+  }
+  if (sleepOrDream && weakAssociation && creativity) {
+    return 'mechanism:weak-association__outcome:creative-divergent-thinking';
+  }
   if (memory && sleepOrDream && future) return 'mechanism:memory-recombination__context:future-oriented-dream';
   if (memory && sleepOrDream) return 'mechanism:memory-incorporation__context:dream';
   if (work && anxiety && (intrusion || sleepOrDream || memory)) return 'context:work-pressure__outcome:sleep-or-memory-intrusion';
@@ -268,6 +355,79 @@ export interface LocalizedOracleEvidenceClaim {
   en: string;
 }
 
+interface EvidenceGapRuleInput {
+  _id: Types.ObjectId;
+  ruleCode?: string;
+  statement?: string;
+  subject?: string;
+  outcome?: string;
+  status?: string;
+  evidenceScore?: number;
+  supportingSourceCount?: number;
+  compositeComponents?: Array<{
+    sourceRuleId?: Types.ObjectId;
+    statement?: string;
+    subject?: string;
+    outcome?: string;
+  }>;
+}
+
+/** Tạo văn bản đối chiếu từ toàn bộ mệnh đề của một lập luận tổng hợp. */
+function buildEvidenceGapRuleText(rule: EvidenceGapRuleInput): string {
+  return [
+    rule.statement,
+    rule.subject,
+    rule.outcome,
+    ...(rule.compositeComponents || []).flatMap(component => [
+      component.statement,
+      component.subject,
+      component.outcome,
+    ]),
+  ].filter(Boolean).join(' ');
+}
+
+const DIRECT_CLAIM_MATCH = 0.5;
+const STRONG_MULTILINGUAL_VECTOR_MATCH = 0.82;
+
+// Finds a verified rule only when semantic retrieval and stored evidence agree.
+async function findGroundedRuleForClaim(claim: string): Promise<EvidenceGapRuleInput | null> {
+  const result = await retrieveApprovedRuleV3(claim, 5);
+  for (const rule of result.rules as any[]) {
+    const ruleId = String(rule.ruleId || rule._id);
+    const hasSupportingEvidence = result.evidenceLinks.some(
+      (link: any) => String(link.ruleId) === ruleId && String(link.quote || '').trim(),
+    );
+    if (!hasSupportingEvidence) continue;
+
+    const ruleText = buildEvidenceGapRuleText(rule as EvidenceGapRuleInput);
+    const relationScore = evidenceGapRuleSimilarity(claim, ruleText);
+    const vectorScore = Number(rule.retrievalSignals?.vector) || 0;
+    if (
+      relationScore >= DIRECT_CLAIM_MATCH
+      || vectorScore >= STRONG_MULTILINGUAL_VECTOR_MATCH
+    ) {
+      return rule as EvidenceGapRuleInput;
+    }
+  }
+  return null;
+}
+
+/** Chọn đúng chủ sở hữu dẫn chứng cho mệnh đề thành phần khớp nhất. */
+function findEvidenceOwnerRuleId(claim: string, rule: EvidenceGapRuleInput): Types.ObjectId {
+  const matchingComponent = (rule.compositeComponents || [])
+    .filter(component => component.sourceRuleId)
+    .map(component => ({
+      sourceRuleId: component.sourceRuleId as Types.ObjectId,
+      similarity: evidenceGapRuleSimilarity(
+        claim,
+        [component.statement, component.subject, component.outcome].filter(Boolean).join(' '),
+      ),
+    }))
+    .sort((left, right) => right.similarity - left.similarity)[0];
+
+  return matchingComponent?.sourceRuleId || rule._id;
+}
+
 export function localizeOracleEvidenceClaim(claim: string): LocalizedOracleEvidenceClaim {
   const cleanClaim = cleanOracleEvidenceClaim(claim);
   const key = oracleEvidenceClaimClusterKey(cleanClaim);
@@ -285,6 +445,13 @@ export function localizeOracleEvidenceClaim(claim: string): LocalizedOracleEvide
       en: 'Dream content may recombine past memories with future concerns or anticipated tasks.',
     };
   }
+  if (key === 'context:late-sleep__outcome:future-oriented-dream-prevalence') {
+    return {
+      key,
+      vi: 'Giấc mơ hướng tới tương lai có thể trở nên phổ biến hơn vào phần cuối của giấc ngủ.',
+      en: 'Future-oriented dreams may become more common later in the sleep period.',
+    };
+  }
   if (key === 'state:anxiety__outcome:creative-coping-or-improvisation') {
     return {
       key,
@@ -297,6 +464,13 @@ export function localizeOracleEvidenceClaim(claim: string): LocalizedOracleEvide
       key,
       vi: 'Chuyển lo âu thành hành động hoặc kế hoạch cụ thể có thể liên quan đến việc giảm căng thẳng.',
       en: 'Turning anxiety into concrete action or planning may be associated with reduced stress.',
+    };
+  }
+  if (key === 'mechanism:weak-association__outcome:creative-divergent-thinking') {
+    return {
+      key,
+      vi: 'Kích hoạt các liên kết yếu trong giấc mơ có thể liên quan đến tư duy sáng tạo, linh hoạt hoặc phân kỳ.',
+      en: 'Activation of weak associations in dreams may be related to creative, flexible, or divergent thinking.',
     };
   }
   if (key === 'context:work-pressure__outcome:sleep-or-memory-intrusion') {
@@ -344,169 +518,30 @@ export function localizeOracleEvidenceClaim(claim: string): LocalizedOracleEvide
   return { key, vi: cleanClaim, en: cleanClaim };
 }
 
-function academicSearchQueries(claim: string): string[] {
-  const normalizedClaim = normalize(claim);
-  const clusterKey = oracleEvidenceClaimClusterKey(claim);
-  if (clusterKey === 'mechanism:memory-recombination__context:future-oriented-dream') {
-    return [
-      '"constructive episodic simulation" dreams autobiographical memory',
-      '"future-oriented dreams" prospective cognition memory',
-      '"prospective dreaming" anticipated future events past memory',
-      '"episodic future simulation" sleep dreaming',
-    ];
-  }
-  if (clusterKey === 'mechanism:memory-incorporation__context:dream') {
-    return [
-      '"memory sources of dreams" waking experience',
-      '"memory incorporation in dreams" episodic fragments',
-      '"day residue" dreams memory',
-      '"dream-lag effect" autobiographical memory',
-    ];
-  }
-  if (clusterKey === 'state:anxiety__outcome:creative-coping-or-improvisation') {
-    return [
-      '"dream incubation" creative problem solving anxiety',
-      '"sleep-dependent creative problem solving" affect',
-      '"dreaming" divergent thinking emotional arousal',
-      '"dream affect" creative cognition problem solving',
-    ];
-  }
-  if (clusterKey === 'relation:action-planning__outcome:stress-reduction') {
-    return [
-      '"action planning" perceived stress reduction',
-      '"implementation intentions" anxiety stress',
-      '"problem-focused coping" anxiety reduction',
-      '"concrete planning" psychological stress intervention',
-    ];
-  }
-  const concepts: string[] = [];
-  const add = (...items: string[]) => concepts.push(...items);
-  if (/lo lắng|căng thẳng|áp lực|anxiety|stress/iu.test(normalizedClaim)) {
-    add('"anxiety reduction"', '"psychological stress"');
-  }
-  if (/hành động|chuẩn bị|lập kế hoạch|action|planning|prepare/iu.test(normalizedClaim)) {
-    add('"action planning"', '"problem-focused coping"', '"implementation intentions"');
-  }
-  if (/ký ức|trí nhớ|memory|memories/iu.test(normalizedClaim)) {
-    add('"dream memory"', '"memory incorporation in dreams"');
-  }
-  if (/tương lai|sắp tới|future|prospective/iu.test(normalizedClaim)) {
-    add('"prospective dreaming"', '"future-oriented dreams"');
-  }
-  if (/sáng tạo|creative|creativity/iu.test(normalizedClaim)) {
-    add('"dream creativity"', '"creative problem solving during sleep"');
-  }
-  const fallback = [...words(claim)]
-    .filter((word) => !EVIDENCE_GAP_STOP_WORDS.has(word))
-    .slice(0, 7)
-    .join(' ');
-  const base = [...new Set(concepts)];
-  if (base.length >= 2) {
-    return [
-      `${base[0]} ${base[1]}`,
-      base.slice(1, 4).join(' '),
-      `${base[0]} dream study`,
-    ].filter(Boolean);
-  }
-  return [
-    `"${claim.replace(/"/gu, '').slice(0, 160)}"`,
-    `${fallback} peer reviewed dream study`.trim(),
-  ];
-}
+async function loadRuleEvidenceSupport(claim: string, rule: EvidenceGapRuleInput) {
+  const evidenceOwnerRuleId = findEvidenceOwnerRuleId(claim, rule);
+  const evidenceCandidates = await KnowledgeRuleEvidenceV3.find({
+    ruleId: evidenceOwnerRuleId,
+    stance: 'supports',
+  }).sort({ verificationScore: -1, createdAt: 1 }).lean();
+  const evidence = evidenceCandidates
+    .map((item) => ({
+      item,
+      similarity: evidenceGapRuleSimilarity(claim, String(item.exactQuote || '')),
+    }))
+    .sort((left, right) => right.similarity - left.similarity)[0];
+  if (!evidence || evidence.similarity < DIRECT_CLAIM_MATCH) return null;
 
-function buildDeepResearchPrompt(
-  cleanClaim: string,
-  searchTerms: string[],
-  language: 'vi' | 'en',
-  relatedClaims: string[] = [],
-): string {
-  const variants = relatedClaims
-    .map(cleanOracleEvidenceClaim)
-    .filter((claim, index, claims) => claim && claim !== cleanClaim && claims.indexOf(claim) === index);
-  if (language === 'en') {
-    return [
-      'Conduct a focused Deep Research review to verify or refute this exact claim:',
-      `"${cleanClaim}"`,
-      ...(variants.length ? ['', 'Merged phrasings of the same evidence need:', ...variants.map((claim) => `- ${claim}`)] : []),
-      '',
-      'If the claim is not in English, first translate its meaning into precise academic English without broadening or changing the relationship being claimed.',
-      'Search for English-language evidence in at least two scholarly indexes: Crossref, OpenAlex, PubMed/PMC, Semantic Scholar, Google Scholar, DOAJ, or an official publisher website.',
-      'Verify every DOI through doi.org or Crossref. Verify any open-access full text through Unpaywall, PMC, DOAJ, an institutional repository, or the publisher. Never invent a DOI or PDF URL.',
-      '',
-      `Suggested concept-level queries:\n${searchTerms.map((query) => `- ${query}`).join('\n')}`,
-      '',
-      'Prioritize peer-reviewed studies and academic reviews. You may also include reputable university or research-institute articles, professional-association publications, government reports, and established science journalism when they accurately report a traceable study.',
-      'Keep web/news material in a separate “context only” section. It must never replace the primary research used to support an academic rule.',
-      'Exclude dream-symbol dictionaries, personal blogs, SEO content, anonymous posts, and sources whose underlying study cannot be identified.',
-      '',
-      'For every result provide: title, authors or organization, year, source type, verified DOI when one exists, publisher URL, verified open-access URL when one exists, study design, sample, method, relevant result, an exact supporting or refuting quotation with its location, and limitations.',
-      'Classify each result as direct support, partial support, contradictory evidence, or irrelevant. A broad statement must not be used to prove a more specific claim.',
-      'Finish with the narrowest defensible rule: subject/factor → outcome, scope, observable conditions, limitations, and the verified quotations that support it.',
-    ].join('\n');
-  }
-  return [
-    'Hãy thực hiện một lượt Deep Research có trọng tâm để kiểm chứng hoặc phản bác trực tiếp nhận định sau:',
-    `"${cleanClaim}"`,
-    ...(variants.length ? ['', 'Các cách diễn đạt đã được gộp vào cùng nhu cầu bằng chứng:', ...variants.map((claim) => `- ${claim}`)] : []),
-    '',
-    'Nếu nhận định không phải tiếng Việt, hãy dịch đúng phạm vi của nó sang tiếng Việt trước khi tìm; không được mở rộng hoặc đổi hướng quan hệ đang được nêu.',
-    'Tìm bằng chứng bằng tiếng Việt trong các tạp chí, kho học thuật, trường đại học, viện nghiên cứu và cơ quan chuyên môn đáng tin cậy. Đồng thời tìm nghiên cứu quốc tế bằng tiếng Anh nếu nguồn tiếng Việt chưa đủ.',
-    'Nguồn học thuật phải được đối chiếu từ ít nhất hai hệ thống như Crossref, OpenAlex, PubMed/PMC, Semantic Scholar, Google Scholar, DOAJ hoặc trang chính thức của nhà xuất bản.',
-    'Mỗi DOI phải được xác minh bằng doi.org hoặc Crossref. Đường dẫn toàn văn mở phải được kiểm tra qua Unpaywall, PMC, DOAJ, kho lưu trữ của trường/viện hoặc nhà xuất bản; không được tự đoán DOI hay URL PDF.',
-    '',
-    `Các truy vấn theo cụm khái niệm nên thử:\n${searchTerms.map((query) => `- ${query}`).join('\n')}`,
-    '',
-    'Ưu tiên nghiên cứu bình duyệt và tổng quan học thuật. Có thể bổ sung bài viết của trường đại học, viện nghiên cứu, hiệp hội chuyên môn, cơ quan nhà nước và báo chí khoa học uy tín nếu bài đó dẫn rõ nghiên cứu gốc có thể kiểm tra.',
-    'Tách các bài báo/tin nghiên cứu vào mục “chỉ dùng làm bối cảnh”; không được dùng chúng thay cho nghiên cứu gốc khi tạo rule học thuật.',
-    'Không dùng từ điển biểu tượng giấc mơ, blog cá nhân, nội dung SEO, bài ẩn danh hoặc bài không truy được nghiên cứu gốc.',
-    '',
-    'Với từng kết quả, hãy cung cấp: tiêu đề, tác giả hoặc tổ chức, năm, loại nguồn, DOI đã kiểm chứng nếu có, URL nhà xuất bản, URL toàn văn mở đã kiểm tra nếu có, thiết kế nghiên cứu, cỡ mẫu, phương pháp, kết quả liên quan, trích đoạn nguyên văn hỗ trợ hoặc phản bác kèm vị trí và giới hạn.',
-    'Phân loại từng nguồn thành: hỗ trợ trực tiếp, hỗ trợ một phần, bằng chứng trái chiều hoặc không liên quan. Không dùng một câu quá rộng để chứng minh một kết luận cụ thể hơn.',
-    'Cuối cùng đề xuất rule hẹp nhất có thể bảo vệ: yếu tố/chủ thể → kết quả/hiện tượng, phạm vi, điều kiện quan sát được, giới hạn và các trích dẫn nguyên văn đã kiểm chứng.',
-  ].join('\n');
-}
-
-export function buildOracleEvidenceGapResearchBrief(claim: string, relatedClaims: string[] = []) {
-  const cleanClaim = cleanOracleEvidenceClaim(claim);
-  const localizedClaim = localizeOracleEvidenceClaim(cleanClaim);
-  const searchTerms = academicSearchQueries(cleanClaim);
-  const localizedRelatedClaims = {
-    vi: relatedClaims.map((item) => localizeOracleEvidenceClaim(item).vi),
-    en: relatedClaims.map((item) => localizeOracleEvidenceClaim(item).en),
-  };
-  const deepResearchPrompts = {
-    vi: buildDeepResearchPrompt(localizedClaim.vi, searchTerms, 'vi', localizedRelatedClaims.vi),
-    en: buildDeepResearchPrompt(localizedClaim.en, searchTerms, 'en', localizedRelatedClaims.en),
-  };
-  return {
-    claim: cleanClaim,
-    claimKey: localizedClaim.key,
-    localizedClaims: {
-      vi: localizedClaim.vi,
-      en: localizedClaim.en,
-    },
-    meaning: `Oracle đang sử dụng nhận định “${cleanClaim}”, nhưng thư viện hiện chưa có nguồn đã duyệt hỗ trợ trực tiếp cho quan hệ này.`,
-    evidenceNeeded: [
-      'Nghiên cứu bình duyệt trực tiếp đo hoặc mô tả đúng mối quan hệ trong nhận định, không chỉ giải thích biểu tượng chung.',
-      'Phương pháp phải nêu rõ mẫu nghiên cứu, cách thu thập báo cáo giấc mơ và biến kết quả được đo.',
-      'Cần trích đoạn nguyên văn, DOI hoặc định danh ổn định, cùng giới hạn và bằng chứng trái chiều nếu có.',
-      'Ưu tiên từ hai nguồn độc lập; phân biệt rõ kết quả thực nghiệm với giả thuyết lý thuyết.',
-    ],
-    expectedRule: {
-      subject: 'Điều kiện ngoài đời hoặc đặc trưng giấc mơ được nêu trong nhận định',
-      outcome: cleanClaim,
-      requiredFields: [
-        'phạm vi áp dụng',
-        'đặc trưng quan sát được',
-        'hướng quan hệ',
-        'điều kiện và giới hạn',
-        'trích dẫn nguyên văn đã kiểm chứng',
-      ],
-    },
-    searchTerms,
-    deepResearchPrompt: deepResearchPrompts.vi,
-    deepResearchPrompts,
-  };
+  const [academicSource, contribution] = await Promise.all([
+    AcademicSource.findById(evidence.item.sourceId).lean(),
+    SourceContribution.findById(evidence.item.sourceId).lean(),
+  ]);
+  const approvedFromContribution = !academicSource && contribution
+    ? await AcademicSource.findOne({ sourceContributionId: contribution._id }).lean()
+    : null;
+  // Citation chỉ dùng ID tài liệu đã duyệt để luôn mở được trong Library.
+  const source = academicSource || approvedFromContribution;
+  return source ? { evidence: evidence.item, source } : null;
 }
 
 async function resolveGapInOracleTurn(
@@ -517,22 +552,25 @@ async function resolveGapInOracleTurn(
     claim: string;
     relatedClaims?: string[];
   },
-  rule: { _id: Types.ObjectId; statement?: string },
+  rule: EvidenceGapRuleInput,
 ): Promise<number | null> {
-  const evidence = await KnowledgeRuleEvidenceV3.findOne({
-    ruleId: rule._id,
-    stance: 'supports',
-  }).sort({ verificationScore: -1, createdAt: 1 }).lean();
-  if (!evidence) return null;
-  const [academicSource, contribution] = await Promise.all([
-    AcademicSource.findById(evidence.sourceId).lean(),
-    SourceContribution.findById(evidence.sourceId).lean(),
-  ]);
-  const approvedFromContribution = !academicSource && contribution
-    ? await AcademicSource.findOne({ sourceContributionId: contribution._id }).lean()
-    : null;
-  const source = academicSource || approvedFromContribution || contribution;
-  if (!source) return null;
+  const support = await loadRuleEvidenceSupport(gap.claim, rule);
+  if (!support) return null;
+  const { evidence, source } = support;
+  const verificationQuestion = buildOracleCitationVerificationQuestion(rule);
+  const ruleLink = {
+    ruleId: String(rule._id),
+    ruleCode: String(rule.ruleCode || rule._id),
+    statement: String(rule.statement || ''),
+    localizedStatement: localizeOracleRuleStatement(rule),
+    quote: String(evidence.exactQuote || ''),
+    evidenceScore: Number(rule.evidenceScore) || 0,
+    supportingSourceCount: Number(rule.supportingSourceCount) || 0,
+    verificationKey: `${String(rule._id)}:${String(evidence._id)}:oracle-citation-${ORACLE_CITATION_QUESTION_VERSION}`,
+    verificationQuestion: verificationQuestion.vi,
+    localizedVerificationQuestion: verificationQuestion,
+    currentUserAnswer: null,
+  };
   const claimVariants = [...new Set([gap.claim, ...(gap.relatedClaims || [])])]
     .map(cleanOracleEvidenceClaim)
     .filter(Boolean);
@@ -565,9 +603,10 @@ async function resolveGapInOracleTurn(
     ));
     const citationIndex = existingCitation?.index
       || Math.max(0, ...turn.citations.map((item) => item.index)) + 1;
+    let citationInserted = false;
     const updatedBlocks = turn.contentBlocks.map((block) => {
       if (block.type !== 'text') return block;
-      let text = block.text;
+      let text = sanitizeOracleUnresolvedMarkers(block.text);
       for (const variant of claimVariants) {
         const stem = variant.replace(/[.!?]+\s*$/u, '').trim();
         if (!stem) continue;
@@ -575,15 +614,26 @@ async function resolveGapInOracleTurn(
         const markerPattern = new RegExp(`(${escaped})(\\s*)\\[\\?\\]([.!?]?)`, 'u');
         if (!markerPattern.test(text)) continue;
         text = text.replace(markerPattern, `$1 [${citationIndex}]$3`);
+        citationInserted = true;
         break;
       }
       return text === block.text ? block : { ...block, text };
     });
-    if (!updatedBlocks.some((block, index) => block.text !== turn.contentBlocks[index]?.text)) {
+    if (!citationInserted) {
+      if (updatedBlocks.some((block, index) => block.text !== turn.contentBlocks[index]?.text)) {
+        turn.set({ contentBlocks: updatedBlocks });
+        await turn.save();
+      }
       continue;
     }
     const citations: OracleCitation[] = existingCitation
-      ? turn.citations
+      ? turn.citations.map((citation) => {
+        if (citation !== existingCitation) return citation;
+        const otherLinks = (citation.ruleLinks || []).filter(
+          (link) => link.ruleId !== ruleLink.ruleId,
+        );
+        return { ...citation, ruleLinks: [...otherLinks, ruleLink] };
+      })
       : [
         ...turn.citations,
         {
@@ -591,8 +641,10 @@ async function resolveGapInOracleTurn(
           sourceType: 'academic_source',
           sourceId,
           title: String((source as any).title || (source as any).metadata?.title || 'Nguồn học thuật đã duyệt'),
+          year: Number((source as any).year) || undefined,
           excerpt: evidence.exactQuote,
           detail: rule.statement?.slice(0, 500),
+          ruleLinks: [ruleLink],
         },
       ];
     turn.set({ contentBlocks: updatedBlocks, citations });
@@ -602,13 +654,249 @@ async function resolveGapInOracleTurn(
   return firstCitationIndex;
 }
 
+function replaceClaimMarker(text: string, variants: string[], citationIndex: number): string {
+  for (const variant of variants) {
+    const stem = variant.replace(/[.!?]+\s*$/u, '').trim();
+    if (!stem) continue;
+    const escaped = stem.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+    const marker = new RegExp(`(${escaped})(\\s*)\\[\\?\\]([.!?]?)`, 'iu');
+    if (marker.test(text)) return text.replace(marker, `$1 [${citationIndex}]$3`);
+  }
+  return text;
+}
+
+// Updates persisted Dream analyses that used the same unresolved claim.
+async function resolveGapInDreamPosts(gap: any, rule: EvidenceGapRuleInput): Promise<number> {
+  const support = await loadRuleEvidenceSupport(String(gap.claim || ''), rule);
+  if (!support) return 0;
+  const variants = [...new Set([gap.claim, ...(gap.relatedClaims || [])])]
+    .map(cleanOracleEvidenceClaim)
+    .filter(Boolean);
+  const stems = variants
+    .map((variant) => variant.replace(/[.!?]+\s*$/u, '').trim())
+    .filter(Boolean)
+    .map((stem) => stem.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'));
+  if (!stems.length) return 0;
+
+  const markerPattern = new RegExp(`(?:${stems.join('|')})\\s*\\[\\?\\]`, 'iu');
+  const dreams = await Dream.find({
+    ai_status: 'completed',
+    $or: [
+      { 'ai_result.core_analysis': markerPattern },
+      { 'ai_result.summary': markerPattern },
+      { 'ai_result.interpretive_threads.reasoning': markerPattern },
+      { 'ai_result.scientific_context_notes.note': markerPattern },
+    ],
+  }).limit(500);
+
+  let resolvedCount = 0;
+  for (const dream of dreams) {
+    const analysis = dream.ai_result as any;
+    if (!analysis || typeof analysis !== 'object') continue;
+    const notes = Array.isArray(analysis.scientific_context_notes)
+      ? analysis.scientific_context_notes
+      : [];
+    const sourceId = String(support.source._id);
+    const orderedSourceIds: string[] = [];
+    for (const note of notes) {
+      for (const source of note.sources || []) {
+        const key = String(source.sourceId || source.doi || source.title || '').trim();
+        if (key && !orderedSourceIds.includes(key)) orderedSourceIds.push(key);
+      }
+    }
+    if (!orderedSourceIds.includes(sourceId)) orderedSourceIds.push(sourceId);
+    const citationIndex = orderedSourceIds.indexOf(sourceId) + 1;
+
+    let changed = false;
+    for (const field of ['core_analysis', 'summary'] as const) {
+      const current = String(analysis[field] || '');
+      const next = replaceClaimMarker(current, variants, citationIndex);
+      if (next !== current) {
+        analysis[field] = next;
+        changed = true;
+      }
+    }
+    for (const thread of analysis.interpretive_threads || []) {
+      const current = String(thread.reasoning || '');
+      const next = replaceClaimMarker(current, variants, citationIndex);
+      if (next !== current) {
+        thread.reasoning = next;
+        changed = true;
+      }
+    }
+    if (!changed) continue;
+
+    const ruleId = String(rule._id);
+    if (!notes.some((note: any) => String(note.ruleId || '') === ruleId)) {
+      notes.push({
+        ruleId,
+        ruleCode: rule.ruleCode,
+        ruleStatement: rule.statement,
+        note: rule.statement,
+        confidence: Math.min(1, Math.max(0, Number(rule.evidenceScore || 0) / 100)),
+        evidenceQuotes: [{
+          sourceId,
+          chunkId: String(support.evidence.chunkId),
+          quote: support.evidence.exactQuote,
+        }],
+        sources: [{
+          sourceId,
+          title: String((support.source as any).title || (support.source as any).metadata?.title || 'Academic source'),
+          authors: (support.source as any).authors || (support.source as any).metadata?.authors || [],
+          year: (support.source as any).year || (support.source as any).metadata?.year,
+          journal: (support.source as any).journal || (support.source as any).publisher,
+          doi: (support.source as any).doi || (support.source as any).metadata?.doi,
+          chunkIds: [String(support.evidence.chunkId)],
+        }],
+      });
+      analysis.scientific_context_notes = notes;
+    }
+    dream.markModified('ai_result');
+    await dream.save();
+    resolvedCount += 1;
+  }
+  return resolvedCount;
+}
+
+// Reuses an already-grounded rule when a later Oracle turn emits the same claim.
+async function resolveCapturedGap(gap: any, preferredRule?: EvidenceGapRuleInput | null): Promise<void> {
+  let rule = preferredRule || null;
+  if (!rule && gap.resolvedRuleIds?.length) {
+    rule = await KnowledgeRuleV3.findById(gap.resolvedRuleIds[0]).lean() as EvidenceGapRuleInput | null;
+  }
+  if (!rule) rule = await findGroundedRuleForClaim(String(gap.claim || ''));
+  if (!rule) return;
+
+  const [citationIndex, resolvedDreamCount] = await Promise.all([
+    resolveGapInOracleTurn(gap, rule),
+    resolveGapInDreamPosts(gap, rule),
+  ]);
+  if (!citationIndex && resolvedDreamCount === 0) return;
+  await OracleEvidenceGap.updateOne(
+    { _id: gap._id },
+    {
+      $set: {
+        status: 'resolved',
+        resolvedAt: gap.resolvedAt || new Date(),
+        ...(citationIndex ? { resolutionCitationIndex: citationIndex } : {}),
+      },
+      $addToSet: { resolvedRuleIds: rule._id },
+    },
+  );
+}
+
+// Removes active records that are questions, advice, or symbolic interpretations rather than claims.
+async function pruneNonResearchableOracleEvidenceGaps(): Promise<void> {
+  const rows = await OracleEvidenceGap.find({})
+    .select(
+      '_id userId claim normalizedClaim relatedClaims occurrenceTurnIds occurrenceCount '
+      + 'status candidateRuleIds resolvedRuleIds',
+    )
+    .lean();
+  const invalidIds: Types.ObjectId[] = [];
+  const sanitizedRows: any[] = [];
+  for (const gap of rows) {
+    const validClaims = [...new Set([gap.claim, ...(gap.relatedClaims || [])])]
+      .map((claim) => cleanOracleEvidenceClaim(String(claim || '')))
+      .filter(isResearchableOracleEvidenceClaim);
+    if (!validClaims.length) {
+      invalidIds.push(gap._id as Types.ObjectId);
+      continue;
+    }
+    const claim = canonicalizeOracleEvidenceClaim(validClaims[0]);
+    const normalizedClaim = oracleEvidenceClaimClusterKey(claim) || normalize(claim);
+    const equivalentClaims = validClaims.filter((candidate) => (
+      oracleEvidenceClaimClusterKey(candidate) === normalizedClaim
+    ));
+    sanitizedRows.push({
+      ...gap,
+      claim,
+      normalizedClaim,
+      relatedClaims: equivalentClaims.length ? equivalentClaims : [claim],
+    });
+  }
+  if (invalidIds.length) {
+    await OracleEvidenceGap.deleteMany({ _id: { $in: invalidIds } });
+  }
+
+  const groups = new Map<string, any[]>();
+  for (const gap of sanitizedRows) {
+    const key = `${String(gap.userId)}:${gap.normalizedClaim}`;
+    groups.set(key, [...(groups.get(key) || []), gap]);
+  }
+  for (const equivalentGaps of groups.values()) {
+    const [primary, ...duplicates] = equivalentGaps;
+    const all = [primary, ...duplicates];
+    const occurrenceTurnIds = [...new Set(all.flatMap((gap) =>
+      (gap.occurrenceTurnIds || []).map(String)))];
+    await OracleEvidenceGap.updateOne(
+      { _id: primary._id },
+      {
+        $set: {
+          claim: primary.claim,
+          normalizedClaim: primary.normalizedClaim,
+          relatedClaims: [...new Set(all.flatMap((gap) => gap.relatedClaims || []))],
+          occurrenceTurnIds,
+          occurrenceCount: all.reduce(
+            (total, gap) => total + Math.max(1, Number(gap.occurrenceCount) || 1),
+            0,
+          ),
+          status: all.some((gap) => gap.status === 'resolved')
+            ? 'resolved'
+            : all.some((gap) => gap.status === 'candidate_found')
+              ? 'candidate_found'
+              : 'unresolved',
+          candidateRuleIds: [...new Set(all.flatMap((gap) =>
+            (gap.candidateRuleIds || []).map(String)))],
+          resolvedRuleIds: [...new Set(all.flatMap((gap) =>
+            (gap.resolvedRuleIds || []).map(String)))],
+        },
+      },
+    );
+    if (duplicates.length) {
+      await OracleEvidenceGap.deleteMany({ _id: { $in: duplicates.map((gap) => gap._id) } });
+    }
+  }
+}
+
 export async function captureOracleEvidenceGaps(input: {
   userId: Types.ObjectId;
   threadId: Types.ObjectId;
   turnId: Types.ObjectId;
   answer: string;
 }): Promise<void> {
-  const sourceClaims = input.answer
+  const turn = await OracleTurn.findById(input.turnId);
+  let answer = input.answer;
+  if (turn) {
+    let changed = false;
+    turn.contentBlocks = turn.contentBlocks.map((block) => {
+      const text = sanitizeOracleUnresolvedMarkers(block.text);
+      if (text === block.text) return block;
+      changed = true;
+      return { ...block, text };
+    });
+    if (changed) {
+      turn.markModified('contentBlocks');
+      await turn.save();
+    }
+    answer = turn.contentBlocks.map((block) => block.text).join('\n');
+  }
+
+  const existingForTurn = await OracleEvidenceGap.find({
+    $or: [
+      { turnId: input.turnId },
+      { occurrenceTurnIds: input.turnId },
+    ],
+  }).select('_id claim relatedClaims').lean();
+  const invalidGapIds = existingForTurn
+    .filter((gap) => ![gap.claim, ...(gap.relatedClaims || [])].some((claim) =>
+      isResearchableOracleEvidenceClaim(String(claim || ''))))
+    .map((gap) => gap._id);
+  if (invalidGapIds.length) {
+    await OracleEvidenceGap.deleteMany({ _id: { $in: invalidGapIds } });
+  }
+
+  const sourceClaims = answer
     .split(/(?<=[.!?])\s+|\n+/u)
     .map((item) => item.trim())
     .filter((item) => item.includes('[?]'))
@@ -626,37 +914,55 @@ export async function captureOracleEvidenceGaps(input: {
     }
   }
   for (const [normalizedClaim, group] of [...groupedClaims].slice(0, 4)) {
-    await OracleEvidenceGap.updateOne(
-      { userId: input.userId, normalizedClaim },
-      {
-        $setOnInsert: {
+    let gap = await OracleEvidenceGap.findOne({ userId: input.userId, normalizedClaim });
+    let groundedRule: EvidenceGapRuleInput | null = null;
+    if (!gap) {
+      groundedRule = await findGroundedRuleForClaim(group.claim);
+      if (groundedRule) {
+        gap = await OracleEvidenceGap.findOne({
           userId: input.userId,
-          threadId: input.threadId,
-          turnId: input.turnId,
-          claim: group.claim,
-          candidateRuleIds: [],
-          resolvedRuleIds: [],
+          resolvedRuleIds: groundedRule._id,
+        });
+      }
+    }
+
+    if (!gap) {
+      gap = await OracleEvidenceGap.create({
+        userId: input.userId,
+        threadId: input.threadId,
+        turnId: input.turnId,
+        occurrenceTurnIds: [input.turnId],
+        claim: group.claim,
+        normalizedClaim,
+        relatedClaims: [...group.variants],
+        occurrenceCount: 1,
+        status: 'unresolved',
+        candidateRuleIds: [],
+        resolvedRuleIds: [],
+      });
+    } else {
+      const alreadyRecorded = gap.occurrenceTurnIds.some(
+        (turnId: Types.ObjectId) => String(turnId) === String(input.turnId),
+      );
+      await OracleEvidenceGap.updateOne(
+        { _id: gap._id },
+        {
+          $addToSet: {
+            relatedClaims: { $each: [...group.variants] },
+            occurrenceTurnIds: input.turnId,
+          },
+          ...(!alreadyRecorded ? { $inc: { occurrenceCount: 1 } } : {}),
         },
-        $addToSet: {
-          relatedClaims: { $each: [...group.variants] },
-          occurrenceTurnIds: input.turnId,
-        },
-        $inc: { occurrenceCount: 1 },
-      },
-      { upsert: true },
-    );
+      );
+      gap = await OracleEvidenceGap.findById(gap._id);
+    }
+
+    if (gap) await resolveCapturedGap(gap, groundedRule);
   }
 }
 
-export async function reconcileOracleEvidenceGapsForRule(rule: {
-  _id: Types.ObjectId;
-  statement?: string;
-  subject?: string;
-  outcome?: string;
-  evidenceScore?: number;
-  supportingSourceCount?: number;
-}): Promise<void> {
-  const ruleText = [rule.statement, rule.subject, rule.outcome].filter(Boolean).join(' ');
+export async function reconcileOracleEvidenceGapsForRule(rule: EvidenceGapRuleInput): Promise<void> {
+  const ruleText = buildEvidenceGapRuleText(rule);
   if (!ruleText) return;
   const gapCursor = OracleEvidenceGap.find({ status: { $ne: 'resolved' } })
     .sort({ updatedAt: -1 })
@@ -664,18 +970,11 @@ export async function reconcileOracleEvidenceGapsForRule(rule: {
   for await (const gap of gapCursor) {
     const similarity = evidenceGapRuleSimilarity(gap.claim, ruleText);
     if (similarity < 0.28) continue;
-    const independentlySupported = Number(rule.evidenceScore) >= 60
-      && Number(rule.supportingSourceCount) >= 2
-      && similarity >= 0.5;
-    if (!independentlySupported) {
-      await OracleEvidenceGap.updateOne(
-        { _id: gap._id },
-        { $set: { status: 'candidate_found' }, $addToSet: { candidateRuleIds: rule._id } },
-      );
-      continue;
-    }
-    const citationIndex = await resolveGapInOracleTurn(gap, rule);
-    if (!citationIndex) {
+    const [citationIndex, resolvedDreamCount] = await Promise.all([
+      resolveGapInOracleTurn(gap, rule),
+      resolveGapInDreamPosts(gap, rule),
+    ]);
+    if (!citationIndex && resolvedDreamCount === 0) {
       await OracleEvidenceGap.updateOne(
         { _id: gap._id },
         { $set: { status: 'candidate_found' }, $addToSet: { candidateRuleIds: rule._id } },
@@ -688,7 +987,7 @@ export async function reconcileOracleEvidenceGapsForRule(rule: {
         $set: {
           status: 'resolved',
           resolvedAt: new Date(),
-          resolutionCitationIndex: citationIndex,
+          ...(citationIndex ? { resolutionCitationIndex: citationIndex } : {}),
         },
         $addToSet: { resolvedRuleIds: rule._id },
       },
@@ -705,19 +1004,13 @@ export interface OracleEvidenceGapRuleMatch {
   linkedAsCandidate: boolean;
   resolvedByRule: boolean;
   resolutionReady: boolean;
-  blockers: Array<'approval' | 'score' | 'independent_sources' | 'similarity'>;
+  blockers: Array<'similarity'>;
 }
 
-export async function getOracleEvidenceGapMatchesForRule(rule: {
-  _id: Types.ObjectId;
-  statement?: string;
-  subject?: string;
-  outcome?: string;
-  status?: string;
-  evidenceScore?: number;
-  supportingSourceCount?: number;
-}): Promise<OracleEvidenceGapRuleMatch[]> {
-  const ruleText = [rule.statement, rule.subject, rule.outcome].filter(Boolean).join(' ');
+export async function getOracleEvidenceGapMatchesForRule(
+  rule: EvidenceGapRuleInput,
+): Promise<OracleEvidenceGapRuleMatch[]> {
+  const ruleText = buildEvidenceGapRuleText(rule);
   if (!ruleText) return [];
   const gaps = await OracleEvidenceGap.find({
     $or: [
@@ -737,9 +1030,6 @@ export async function getOracleEvidenceGapMatchesForRule(rule: {
       const resolvedByRule = (gap.resolvedRuleIds || []).some(id => String(id) === String(rule._id));
       if (!linkedAsCandidate && !resolvedByRule && similarity < 0.28) return null;
       const blockers: OracleEvidenceGapRuleMatch['blockers'] = [];
-      if (rule.status !== 'verified') blockers.push('approval');
-      if (Number(rule.evidenceScore) < 60) blockers.push('score');
-      if (Number(rule.supportingSourceCount) < 2) blockers.push('independent_sources');
       if (similarity < 0.5) blockers.push('similarity');
       return {
         gapId: String(gap._id),
@@ -760,15 +1050,10 @@ export async function getOracleEvidenceGapMatchesForRule(rule: {
     .slice(0, 12);
 }
 
-export async function linkOracleEvidenceGapCandidatesForRules(rules: Array<{
-  _id: Types.ObjectId;
-  statement?: string;
-  subject?: string;
-  outcome?: string;
-  status?: string;
-  evidenceScore?: number;
-  supportingSourceCount?: number;
-}>): Promise<void> {
+export async function linkOracleEvidenceGapCandidatesForRules(
+  rules: EvidenceGapRuleInput[],
+): Promise<void> {
+  await pruneNonResearchableOracleEvidenceGaps();
   if (!rules.length) return;
   const gapCursor = OracleEvidenceGap.find({ status: { $ne: 'resolved' } })
     .sort({ updatedAt: -1 })
@@ -776,7 +1061,7 @@ export async function linkOracleEvidenceGapCandidatesForRules(rules: Array<{
   for await (const gap of gapCursor) {
     const matches = rules
       .map((rule) => {
-        const ruleText = [rule.statement, rule.subject, rule.outcome].filter(Boolean).join(' ');
+        const ruleText = buildEvidenceGapRuleText(rule);
         return { rule, similarity: ruleText ? evidenceGapRuleSimilarity(gap.claim, ruleText) : 0 };
       })
       .filter((match) => match.similarity >= 0.28)
@@ -784,22 +1069,20 @@ export async function linkOracleEvidenceGapCandidatesForRules(rules: Array<{
     const matchingRuleIds = matches.map((match) => match.rule._id);
     if (!matchingRuleIds.length) continue;
 
-    const resolvable = matches.find(({ rule, similarity }) => (
-      rule.status === 'verified'
-      && Number(rule.evidenceScore) >= 60
-      && Number(rule.supportingSourceCount) >= 2
-      && similarity >= 0.5
-    ));
+    const resolvable = matches.find(({ similarity }) => similarity >= 0.5);
     if (resolvable) {
-      const citationIndex = await resolveGapInOracleTurn(gap, resolvable.rule);
-      if (citationIndex) {
+      const [citationIndex, resolvedDreamCount] = await Promise.all([
+        resolveGapInOracleTurn(gap, resolvable.rule),
+        resolveGapInDreamPosts(gap, resolvable.rule),
+      ]);
+      if (citationIndex || resolvedDreamCount > 0) {
         await OracleEvidenceGap.updateOne(
           { _id: gap._id },
           {
             $set: {
               status: 'resolved',
               resolvedAt: new Date(),
-              resolutionCitationIndex: citationIndex,
+              ...(citationIndex ? { resolutionCitationIndex: citationIndex } : {}),
             },
             $addToSet: {
               candidateRuleIds: { $each: matchingRuleIds },
@@ -818,4 +1101,33 @@ export async function linkOracleEvidenceGapCandidatesForRules(rules: Array<{
       },
     );
   }
+}
+
+// Rechecks pending arguments as soon as their academic source becomes available.
+export async function reconcileOracleEvidenceGapsForSources(
+  sourceIds: Array<string | Types.ObjectId>,
+): Promise<void> {
+  const normalizedSourceIds = sourceIds
+    .map(String)
+    .filter(Types.ObjectId.isValid)
+    .map((sourceId) => new Types.ObjectId(sourceId));
+  if (!normalizedSourceIds.length) return;
+  const evidence = await KnowledgeRuleEvidenceV3.find({
+    sourceId: { $in: normalizedSourceIds },
+    stance: 'supports',
+  }).select('ruleId').lean();
+  const evidenceOwnerIds = [...new Set(evidence.map((item) => String(item.ruleId)))]
+    .map((ruleId) => new Types.ObjectId(ruleId));
+  if (!evidenceOwnerIds.length) return;
+  const rules = await KnowledgeRuleV3.find({
+    status: { $in: ['pending', 'verified'] },
+    $or: [
+      { _id: { $in: evidenceOwnerIds } },
+      { 'compositeComponents.sourceRuleId': { $in: evidenceOwnerIds } },
+    ],
+  }).select(
+    '_id ruleCode statement subject outcome conditions dreamFeatureTags '
+    + 'status evidenceScore supportingSourceCount compositeComponents',
+  ).lean() as EvidenceGapRuleInput[];
+  await linkOracleEvidenceGapCandidatesForRules(rules);
 }

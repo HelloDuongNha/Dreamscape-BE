@@ -1,13 +1,16 @@
 import { Request, Response } from 'express';
 import OracleEvidenceGap from '../models/OracleEvidenceGap';
 import KnowledgeRuleV3 from '../../rules_v3/models/KnowledgeRule';
+import KnowledgeRuleEvidenceV3 from '../../rules_v3/models/KnowledgeRuleEvidence';
+import AcademicSource from '../../academic/models/AcademicSource';
 import {
-  buildOracleEvidenceGapResearchBrief,
   canonicalizeOracleEvidenceClaim,
+  evidenceGapRuleSimilarity,
   isResearchableOracleEvidenceClaim,
   localizeOracleEvidenceClaim,
   oracleEvidenceClaimClusterKey,
 } from '../services/oracleEvidenceGap.service';
+import { loadOracleEvidenceUsageExcerpts } from '../services/oracleEvidenceUsage.service';
 
 export async function listOracleEvidenceGaps(req: Request, res: Response): Promise<void> {
   const requestedStatus = String(req.query.status || 'active');
@@ -46,6 +49,11 @@ export async function listOracleEvidenceGaps(req: Request, res: Response): Promi
     }
     existing.occurrenceCount += storedOccurrences;
     existing.relatedClaims = [...new Set([...existing.relatedClaims, ...storedClaims])];
+    existing.occurrenceTurnIds = [...new Set([
+      ...(existing.occurrenceTurnIds || []).map(String),
+      ...(gap.occurrenceTurnIds || []).map(String),
+      String(gap.turnId),
+    ])];
     if (canonicalClaim.length < existing.claim.length) {
       existing.claim = canonicalClaim;
       existing.turnId = gap.turnId;
@@ -58,6 +66,13 @@ export async function listOracleEvidenceGaps(req: Request, res: Response): Promi
       ...existing.resolvedRuleIds.map(String),
       ...gap.resolvedRuleIds.map(String),
     ])];
+    if (gap.status === 'resolved') {
+      existing.status = 'resolved';
+      existing.resolvedAt = gap.resolvedAt || existing.resolvedAt;
+      existing.resolutionCitationIndex = gap.resolutionCitationIndex || existing.resolutionCitationIndex;
+    } else if (gap.status === 'candidate_found' && existing.status === 'unresolved') {
+      existing.status = 'candidate_found';
+    }
   }
   const allGaps = [...grouped.values()];
   const total = allGaps.length;
@@ -67,23 +82,88 @@ export async function listOracleEvidenceGaps(req: Request, res: Response): Promi
     ...gap.resolvedRuleIds.map(String),
   ]))];
   const rules = await KnowledgeRuleV3.find({ _id: { $in: ruleIds } })
-    .select('_id ruleCode statement subject outcome evidenceScore supportingSourceCount status')
+    .select('_id ruleCode statement subject outcome evidenceScore supportingSourceCount status compositeComponents')
     .lean();
   const ruleMap = new Map(rules.map((rule) => [String(rule._id), rule]));
-
+  const evidenceOwnerIds = [...new Set(rules.flatMap((rule) => [
+    String(rule._id),
+    ...(rule.compositeComponents || []).map((component) => String(component.sourceRuleId)),
+  ]))];
+  const evidenceRows = await KnowledgeRuleEvidenceV3.find({
+    ruleId: { $in: evidenceOwnerIds },
+    stance: 'supports',
+  }).sort({ verificationScore: -1, createdAt: 1 }).lean();
+  const evidenceSourceIds = [...new Set(evidenceRows.map((evidence) => String(evidence.sourceId)))];
+  const academicSources = await AcademicSource.find({
+    $or: [
+      { _id: { $in: evidenceSourceIds } },
+      { sourceContributionId: { $in: evidenceSourceIds } },
+    ],
+  }).select('_id sourceContributionId title year').lean();
+  const sourceByEvidenceId = new Map<string, typeof academicSources[number]>();
+  for (const source of academicSources) {
+    sourceByEvidenceId.set(String(source._id), source);
+    sourceByEvidenceId.set(String(source.sourceContributionId), source);
+  }
+  const usageExcerptsByGapId = await loadOracleEvidenceUsageExcerpts(gaps);
+  const resolvedSourcesForGap = (gap: any) => {
+    const sources = gap.resolvedRuleIds.flatMap((id: unknown) => {
+      const rule = ruleMap.get(String(id));
+      if (!rule) return [];
+      const ruleText = [rule.statement, rule.subject, rule.outcome].filter(Boolean).join(' ');
+      if (evidenceGapRuleSimilarity(gap.claim, ruleText) < 0.5) return [];
+      const ownerIds = new Set([
+        String(rule._id),
+        ...(rule.compositeComponents || []).map((component) => String(component.sourceRuleId)),
+      ]);
+      const evidence = evidenceRows
+        .filter((item) => ownerIds.has(String(item.ruleId)))
+        .map((item) => ({
+          item,
+          similarity: evidenceGapRuleSimilarity(gap.claim, String(item.exactQuote || '')),
+        }))
+        .filter((candidate) => candidate.similarity >= 0.5)
+        .sort((left, right) => right.similarity - left.similarity)[0]?.item;
+      const source = evidence ? sourceByEvidenceId.get(String(evidence.sourceId)) : null;
+      if (!evidence || !source) return [];
+      return [{
+        sourceId: String(source._id),
+        title: source.title || 'Academic source',
+        year: source.year || null,
+        excerpt: evidence.exactQuote,
+        ruleId: String(rule._id),
+      }];
+    });
+    return [...new Map(sources.map((source: any) => [source.sourceId, source])).values()];
+  };
+  const resolvedRulesForGap = (gap: any) => gap.resolvedRuleIds
+    .map((id: unknown) => ruleMap.get(String(id)))
+    .filter((rule: any) => {
+      if (!rule) return false;
+      const ruleText = [rule.statement, rule.subject, rule.outcome].filter(Boolean).join(' ');
+      return evidenceGapRuleSimilarity(gap.claim, ruleText) >= 0.5;
+    });
   res.status(200).json({
     success: true,
     data: {
       gaps: gaps.map((gap) => {
         const relatedClaims = gap.relatedClaims
-          .map((claim: string) => buildOracleEvidenceGapResearchBrief(claim).claim)
+          .map((claim: string) => canonicalizeOracleEvidenceClaim(claim))
           .filter((claim: string, index: number, claims: string[]) => claims.indexOf(claim) === index);
+        const localizedClaim = localizeOracleEvidenceClaim(gap.claim);
         return {
           _id: String(gap._id),
           status: gap.status,
-          ...buildOracleEvidenceGapResearchBrief(gap.claim, relatedClaims),
+          claim: canonicalizeOracleEvidenceClaim(gap.claim),
+          claimKey: localizedClaim.key,
+          localizedClaims: {
+            vi: localizedClaim.vi,
+            en: localizedClaim.en,
+          },
           candidateRules: gap.candidateRuleIds.map((id: unknown) => ruleMap.get(String(id))).filter(Boolean),
-          resolvedRules: gap.resolvedRuleIds.map((id: unknown) => ruleMap.get(String(id))).filter(Boolean),
+          resolvedRules: resolvedRulesForGap(gap),
+          resolvedSources: resolvedSourcesForGap(gap),
+          usageExcerpts: usageExcerptsByGapId.get(String(gap._id)) || [],
           resolutionCitationIndex: gap.resolutionCitationIndex || null,
           occurrenceCount: gap.occurrenceCount || 1,
           relatedClaims,

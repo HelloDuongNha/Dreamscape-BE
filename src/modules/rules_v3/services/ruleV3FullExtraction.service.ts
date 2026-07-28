@@ -11,6 +11,7 @@ import type { RuleV3GenerationProvider } from './ruleV3GenerationProvider.types'
 import { logger } from '../../../infrastructure/logger';
 import { RULE_V3_SCORING_VERSION, scoreRuleV3 } from './ruleV3Scoring.service';
 import { classifyRuleV3Relationship } from './ruleV3Relationship.service';
+import { autoMergePendingRuleV3Groups } from './ruleV3Merge.service';
 import { removeRuleV3SourceData, resolveRuleV3SourceAliases } from './ruleV3Lifecycle.service';
 import {
   linkOracleEvidenceGapCandidatesForRules,
@@ -482,7 +483,8 @@ async function executeRuleV3FullExtraction(
       mutationRolledBack = true;
     }
     const mutationFailed = allVerifiedCandidatesRejected || incompleteMutation;
-    const finalRuleIds = mutationFailed ? [] : resultRuleIds;
+    let finalRuleIds = mutationFailed ? [] : [...new Set(resultRuleIds.map(String))]
+      .map(ruleId => new mongoose.Types.ObjectId(ruleId));
     const evidenceChunkIds = finalRuleIds.length > 0
       ? await KnowledgeRuleEvidenceV3.distinct('chunkId', {
         ruleId: { $in: finalRuleIds },
@@ -492,6 +494,18 @@ async function executeRuleV3FullExtraction(
     if (abortSignal.aborted) throw new Error('user_cancelled');
     if (!mutationFailed && mutationJournalId) {
       await commitRuleV3MutationJournal(mutationJournalId);
+    }
+    if (!mutationFailed && finalRuleIds.length > 0) {
+      await updateAttemptRun(runId, attemptId, { currentStage: 'merging_candidates' });
+      const automaticMerge = await autoMergePendingRuleV3Groups(finalRuleIds);
+      finalRuleIds = automaticMerge.activeRuleIds;
+      mergedCount += automaticMerge.retiredRuleCount;
+      if (automaticMerge.failures.length > 0) {
+        logger.warn('Some Rule V3 candidates could not be merged automatically.', {
+          runId,
+          failures: automaticMerge.failures,
+        });
+      }
     }
     await updateAttemptRun(runId, attemptId, {
       status: mutationFailed ? 'failed' : 'success',
@@ -511,7 +525,10 @@ async function executeRuleV3FullExtraction(
     });
     if (finalRuleIds.length > 0) {
       const extractedRules = await KnowledgeRuleV3.find({ _id: { $in: finalRuleIds } })
-        .select('_id statement subject outcome status evidenceScore supportingSourceCount')
+        .select(
+          '_id ruleCode statement subject outcome conditions dreamFeatureTags '
+          + 'status evidenceScore supportingSourceCount compositeComponents',
+        )
         .lean();
       await linkOracleEvidenceGapCandidatesForRules(extractedRules).catch((error) => {
         logger.warn('Could not link newly extracted Rule V3 candidates to Oracle evidence gaps.', {

@@ -43,7 +43,7 @@ async function resolveImpacts(
   exactQuote?: string,
 ): Promise<{ impacts: IRuleValidationImpact[]; quoteHashes: string[] }> {
   const directRules = await KnowledgeRuleV3.find({
-    status: 'verified',
+    status: { $in: ['pending', 'verified'] },
     $or: [
       { _id: { $in: directRuleIds } },
       { 'compositeComponents.sourceRuleId': { $in: directRuleIds } },
@@ -91,7 +91,7 @@ async function resolveImpacts(
   const sharedOwnerIds = [...new Set(sharedEvidence.map((item) => String(item.ruleId)))];
   const relatedRules = sharedOwnerIds.length
     ? await KnowledgeRuleV3.find({
-      status: 'verified',
+      status: { $in: ['pending', 'verified'] },
       $or: [
         { _id: { $in: sharedOwnerIds } },
         { 'compositeComponents.sourceRuleId': { $in: sharedOwnerIds } },
@@ -173,7 +173,7 @@ export async function setRuleValidationFeedback(input: {
     input.exactQuote,
   );
   if (!impacts.some((impact) => impact.relation === 'direct')) {
-    throw new Error('validation_has_no_verified_direct_argument');
+    throw new Error('validation_has_no_current_direct_argument');
   }
   if (input.answer === null) {
     await RuleValidationFeedback.deleteOne({

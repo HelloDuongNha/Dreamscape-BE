@@ -37,7 +37,6 @@ import {
   getRuleV3SourceAnalysisSummary,
   getRuleV3Candidates,
   getRuleV3CandidateDetail,
-  mergeRuleV3CandidateGroup,
   approveRuleV3Candidate,
   rejectRuleV3Candidate,
   bulkRuleV3Action
@@ -151,7 +150,6 @@ router.get('/rules-v3/runs/:runId', authMiddleware, isModerator, getFullRuleV3Ex
 router.post('/rules-v3/runs/:runId/cancel', authMiddleware, isModerator, cancelFullRuleV3Extraction);
 router.get('/rules-v3/candidates', authMiddleware, isModerator, getRuleV3Candidates);
 router.get('/rules-v3/candidates/:id', authMiddleware, isModerator, getRuleV3CandidateDetail);
-router.post('/rules-v3/candidates/:id/merge', authMiddleware, isModerator, mergeRuleV3CandidateGroup);
 router.post('/rules-v3/candidates/:id/approve', authMiddleware, isModerator, approveRuleV3Candidate);
 router.post('/rules-v3/candidates/:id/reject', authMiddleware, isModerator, rejectRuleV3Candidate);
 router.post('/rules-v3/bulk-action', authMiddleware, isModerator, bulkRuleV3Action);
