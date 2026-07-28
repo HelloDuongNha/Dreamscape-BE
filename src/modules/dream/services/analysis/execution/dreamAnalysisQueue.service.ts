@@ -147,16 +147,7 @@ function scheduleReadyJobs() {
   }
 }
 
-/**
- * Adds a persisted Dream run to the in-process fair scheduler.
- *
- * Invariants:
- * - At most one analysis from the same user is active.
- * - Users are rotated FIFO, so one account cannot monopolize the next slots.
- * - Global concurrency defaults to one for a local Ollama/GPU process and can
- *   be raised explicitly through DREAM_ANALYSIS_GLOBAL_CONCURRENCY.
- * - A runId can be scheduled only once.
- */
+// Adds one persisted run to the per-user FIFO scheduler and rejects duplicate run IDs.
 export function enqueueDreamAnalysis(job: DreamAnalysisQueueJob): boolean {
   const key = runKey(job);
   if (scheduledRunKeys.has(key)) return false;
@@ -167,6 +158,38 @@ export function enqueueDreamAnalysis(job: DreamAnalysisQueueJob): boolean {
   void refreshQueuedMetadata(job.userId);
   requestSchedule();
   return true;
+}
+
+// Removes a deleted dream from the waiting queue; an active provider call is aborted separately.
+export function discardQueuedDreamAnalysis(input: {
+  dreamId: string;
+  userId: string;
+  runId?: string;
+}): void {
+  const queue = queuesByUser.get(input.userId);
+  if (!queue?.length) return;
+
+  const discarded = queue.filter(job =>
+    job.dreamId === input.dreamId
+    && (!input.runId || job.runId === input.runId),
+  );
+  if (discarded.length === 0) return;
+
+  discarded.forEach(job => scheduledRunKeys.delete(runKey(job)));
+  const remaining = queue.filter(job => !discarded.includes(job));
+
+  for (let index = readyUsers.length - 1; index >= 0; index -= 1) {
+    if (readyUsers[index] === input.userId) readyUsers.splice(index, 1);
+  }
+
+  if (remaining.length === 0) {
+    queuesByUser.delete(input.userId);
+  } else {
+    queuesByUser.set(input.userId, remaining);
+    addReadyUser(input.userId);
+    void refreshQueuedMetadata(input.userId);
+  }
+  requestSchedule();
 }
 
 export function dreamAnalysisQueueSnapshot() {

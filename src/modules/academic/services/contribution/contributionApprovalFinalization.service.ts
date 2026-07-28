@@ -29,9 +29,10 @@ async function promotePreview(
   );
 
   academicSource.allowedUse = 'open_access_fulltext';
-  academicSource.fullTextStatus = contribution.fullTextStatus === 'importing'
-    ? 'imported'
-    : contribution.fullTextStatus || 'imported';
+  if (contribution.fullTextStatus === 'importing') {
+    throw new Error('reader_import_in_progress');
+  }
+  academicSource.fullTextStatus = contribution.fullTextStatus || 'imported';
   academicSource.readableInApp = true;
   academicSource.chunkBuildStatus = 'completed';
   academicSource.chunkCount = await AcademicChunk.countDocuments({

@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import OracleEvidenceGap from '../../../oracle/models/OracleEvidenceGap';
-import { localizeOracleEvidenceClaim } from '../../../oracle/services/oracleEvidenceGap.service';
+import { localizeOracleEvidenceClaim } from '../../../oracle/services/evidence/oracleEvidenceLocalization.service';
 import AcademicRuleExtractionRunV3 from '../../models/AcademicRuleExtractionRun';
 import KnowledgeRuleV3 from '../../models/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../../models/KnowledgeRuleEvidence';

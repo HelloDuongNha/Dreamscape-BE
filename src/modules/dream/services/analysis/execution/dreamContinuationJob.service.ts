@@ -104,19 +104,35 @@ export async function queueDreamContinuation(dream: IDream, userId: Types.Object
   dream.markModified('continuationMetadata');
   await dream.save();
 
+  return enqueueDreamContinuationRun(dream._id.toString(), userId.toString(), runId);
+}
+
+export function enqueueRecoveredDreamContinuation(
+  dreamId: string,
+  userId: string,
+  runId: string,
+): boolean {
+  return enqueueDreamContinuationRun(dreamId, userId, runId);
+}
+
+function enqueueDreamContinuationRun(
+  dreamId: string,
+  userId: string,
+  runId: string,
+): boolean {
   return enqueueDreamAnalysis({
-    dreamId: dream._id.toString(),
-    userId: userId.toString(),
+    dreamId,
+    userId,
     runId: `continuation:${runId}`,
     onQueued: async queuePosition => {
-      await updateProgress(dream._id.toString(), runId, 0, `Đang chờ viết tiếp · vị trí ${queuePosition}`, {
+      await updateProgress(dreamId, runId, 0, `Đang chờ viết tiếp · vị trí ${queuePosition}`, {
         'continuationMetadata.queuePosition': queuePosition,
       });
     },
     onStart: async () => {
       const startedAt = new Date();
       const result = await Dream.updateOne({
-        _id: dream._id,
+        _id: dreamId,
         'continuationMetadata.runId': runId,
         'continuationMetadata.status': 'queued',
       }, {
@@ -131,6 +147,6 @@ export async function queueDreamContinuation(dream: IDream, userId: Types.Object
       });
       return result.matchedCount === 1;
     },
-    execute: () => runContinuation(dream._id.toString(), runId),
+    execute: () => runContinuation(dreamId, runId),
   });
 }

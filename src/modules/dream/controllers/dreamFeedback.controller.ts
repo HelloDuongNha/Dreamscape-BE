@@ -9,35 +9,24 @@ import {
   applyDreamHypothesisFeedback,
   DreamFeedbackError,
 } from '../services/analysis/execution/dreamFeedback.service';
+import { parseDreamFeedbackRequest } from '../dto/dreamFeedback.dto';
 
 // Applies an answer to its linked hypotheses and validation rules.
 export const saveHypothesisFeedback = async (req: Request, res: Response): Promise<void> => {
   try {
-    const dreamId = String(req.params.id);
+    const parsed = parseDreamFeedbackRequest(req.params, req.body);
+    if (!parsed.ok) {
+      res.status(parsed.status).json({ success: false, message: parsed.message });
+      return;
+    }
+    const {
+      dreamId,
+      hypothesisIndex,
+      verificationKey: cleanRequestedKey = '',
+      answer,
+    } = parsed.value;
     const userId = String(req.user!._id);
-    const { hypothesisIndex, verificationKey: requestedVerificationKey, answer } = req.body as {
-      hypothesisIndex?: number;
-      verificationKey?: string;
-      answer: 'yes' | 'no' | 'unsure' | null;
-    };
-
-    if (!Types.ObjectId.isValid(dreamId)) {
-      res.status(400).json({ success: false, message: 'ID giấc mơ không hợp lệ.' });
-      return;
-    }
-
-    const hasValidIndex = typeof hypothesisIndex === 'number' && Number.isInteger(hypothesisIndex) && hypothesisIndex >= 0;
-    const cleanRequestedKey = String(requestedVerificationKey || '').trim();
-    if (!hasValidIndex && !cleanRequestedKey) {
-      res.status(400).json({ success: false, message: 'Thiếu mã câu hỏi hợp lệ.' });
-      return;
-    }
-
     const isClearingAnswer = answer === null;
-    if (!isClearingAnswer && !['yes', 'no', 'unsure'].includes(answer as string)) {
-      res.status(400).json({ success: false, message: 'Câu trả lời không hợp lệ.' });
-      return;
-    }
 
     const dream = await Dream.findById(new Types.ObjectId(dreamId));
     if (!dream) {

@@ -88,7 +88,7 @@
    - [x] Move all 15 Rules V3 tests out of runtime service/controller folders.
    - [x] Convert legacy quote fixtures to evidence IDs at the test boundary and remove the `chunkId + proposedQuote` branch from production types, validation, and verification.
    - [x] Validate claim type against source evidence rather than the generated claim text; positive findings can no longer pass as null findings.
-   - [ ] Complete the manual two-source approval/queue/pin test against a running local app.
+   - [x] Complete the manual two-source approval/queue/pin test against a running local app.
 
 8. **R3.8 — Multi-source queue and citation transparency**
    - [x] Serialize Rule V3 extraction in the backend; approving several sources no longer starts several provider pipelines in parallel.
@@ -98,7 +98,16 @@
    - [x] Show the documentary base score and user-validation adjustment separately under the single argument score.
    - [x] Remove HTML from localized approval confirmations and render confirmation copy as plain text.
    - [x] Re-run backend typecheck, all 26 contract files, frontend production build, EN/VI parity, and whitespace checks.
-   - [ ] Complete the manual three-source approval test and the citation-modal feedback test against an authenticated local app.
+   - [x] Complete the manual three-source approval test and the citation-modal feedback test against an authenticated local app.
+
+9. **R3.9 — Final presentation and auditability**
+   - [x] Preserve the reviewed scholarly title through both moderation approval entry points instead of falling back to the uploaded PDF filename.
+   - [x] Load the backend PDF estimate before showing Reader progress; use an explicit unavailable state instead of a fake measuring state.
+   - [x] Localize Reader stages, pins, Oracle rule statements, and verification questions in EN/VI without overwriting stored bilingual text.
+   - [x] Keep one deterministic argument score and expose its documentary base plus signed case-feedback adjustment.
+   - [x] Let moderators open the exact pending, approved, or rejected argument from the Oracle score card.
+   - [x] Replace remaining multi-line runtime function comments with concise ownership comments.
+   - [x] Re-run backend typecheck, all 26 contract files, frontend production build, EN/VI parity, and whitespace checks on the final worktree.
 
 ## Final ownership map
 

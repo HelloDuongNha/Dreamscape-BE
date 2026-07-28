@@ -6,30 +6,19 @@ import { logger } from '../../../infrastructure/logger';
 import { runDreamAnalysis } from '../services/analysis/orchestration/analyze.service';
 import { mapDreamResponse } from '../services/content/dreamNarrative.service';
 import { syncDreamSymbolObservations } from '../services/analysis/execution/dreamSymbolObservationSync.service';
+import { syncDreamEvidenceNeeds } from '../services/analysis/execution/dreamEvidenceSync.service';
+import { parseAnalyzeDreamRequest } from '../dto/dreamAnalyze.dto';
 
 // Runs the synchronous analysis endpoint and saves only a validated result.
 export async function analyzeDream(req: Request, res: Response): Promise<void> {
   try {
-    const { dreamText, sleepContext, visibility } = req.body as {
-      dreamText?: string;
-      sleepContext?: Record<string, unknown>;
-      visibility?: 'public' | 'private';
-    };
+    const parsed = parseAnalyzeDreamRequest(req.body);
+    if (!parsed.ok) {
+      res.status(parsed.status).json({ success: false, message: parsed.message });
+      return;
+    }
+    const { dreamText, sleepContext, visibility: targetVisibility } = parsed.value;
     const userId = String(req.user!._id);
-    if (!dreamText || typeof dreamText !== 'string' || dreamText.trim() === '') {
-      res.status(400).json({ success: false, message: 'dreamText is required.' });
-      return;
-    }
-    if (dreamText.length > 2000) {
-      res.status(400).json({ success: false, message: 'dreamText must not exceed 2000 characters.' });
-      return;
-    }
-
-    const targetVisibility = visibility || 'private';
-    if (!['public', 'private'].includes(targetVisibility)) {
-      res.status(400).json({ success: false, message: 'visibility must be "public" or "private".' });
-      return;
-    }
 
     logger.info('Starting dream analysis pipeline', { userId, visibility: targetVisibility });
     const { aiAnalysis, retrievedContext, strategyUsed, analysisEmbedding } = await runDreamAnalysis(
@@ -44,12 +33,10 @@ export async function analyzeDream(req: Request, res: Response): Promise<void> {
       is_public: targetVisibility === 'public',
       privacy: targetVisibility,
       ai_status: 'completed',
-      ai_result: aiAnalysis as any,
+      ai_result: aiAnalysis,
       analysisEmbedding,
-      dreamText: dreamText.trim(),
-      sleepContext: sleepContext || {},
-      visibility: targetVisibility,
-      retrievedContext: retrievedContext as any,
+      sleepContext,
+      retrievedContext,
       analysisMetadata: {
         strategyUsed,
         llmModel: process.env.OLLAMA_MODEL || 'qwen2.5:14b',
@@ -59,13 +46,12 @@ export async function analyzeDream(req: Request, res: Response): Promise<void> {
         vectorBackend: retrievedContext.componentA.retrievalConfig.vectorBackend,
         analysisVersion: '2.0.0-grounded',
         generatedAt: new Date(),
-      } as any,
+      },
     });
-    savedDream.set('aiAnalysis', undefined, { strict: false });
-    if ((savedDream as any)._doc) delete (savedDream as any)._doc.aiAnalysis;
 
     await savedDream.save();
     await syncDreamSymbolObservations(savedDream);
+    await syncDreamEvidenceNeeds(savedDream);
     logger.info('Dream analysis pipeline completed and saved successfully', {
       dreamId: String(savedDream._id),
       userId,
@@ -77,7 +63,6 @@ export async function analyzeDream(req: Request, res: Response): Promise<void> {
     });
 
     const responseData = mapDreamResponse(savedDream);
-    delete responseData.dreamText;
     res.status(201).json({
       success: true,
       message: 'Dream analyzed and saved successfully.',

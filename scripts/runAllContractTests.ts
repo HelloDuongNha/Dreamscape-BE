@@ -2,7 +2,7 @@ import { readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { spawnSync } from 'child_process';
 
-const EXPECTED_BASELINE_TEST_COUNT = 26;
+const EXPECTED_BASELINE_TEST_COUNT = 34;
 const sourceRoot = join(process.cwd(), 'src');
 
 function collectTests(directory: string): string[] {
@@ -39,4 +39,3 @@ for (const testFile of testFiles) {
 }
 
 console.log(`\nCONTRACT TEST BASELINE: ${testFiles.length}/${EXPECTED_BASELINE_TEST_COUNT} files passed`);
-

@@ -11,7 +11,7 @@ export function normalizeDocumentLanguage(value?: string): string | undefined {
   return /^[a-z]{2,3}$/.test(primary) ? primary : undefined;
 }
 
-/** Conservative deterministic fallback for the two product languages. */
+// Detects the two product languages without changing canonical source text.
 export function inferDocumentLanguage(textSamples: string[]): 'vi' | 'en' | 'unknown' {
   const text = textSamples.join('\n').slice(0, 40_000);
   if (!text.trim()) return 'unknown';

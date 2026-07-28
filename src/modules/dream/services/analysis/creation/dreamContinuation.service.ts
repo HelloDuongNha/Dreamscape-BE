@@ -3,6 +3,7 @@ import {
   buildDreamContinuationPrompt,
   selectFinalDreamScene,
 } from '../prompts/dreamContinuation.prompt';
+import { resolveDreamAnalysisModel } from '../grounding/dreamAnalysisQuality.service';
 
 export interface DreamContinuation {
   title: string;
@@ -21,7 +22,7 @@ export function isLongFormDreamContinuation(value: unknown): boolean {
   const text = String(value || '').trim();
   const wordCount = text.split(/\s+/u).filter(Boolean).length;
   const paragraphCount = text.split(/\n\s*\n/u).map(item => item.trim()).filter(Boolean).length;
-  return wordCount >= 240 && paragraphCount >= 4;
+  return wordCount >= 200 && paragraphCount >= 4;
 }
 
 function validateContinuation(value: any, narrative: string, strict = true): DreamContinuation {
@@ -103,6 +104,7 @@ export async function generateDreamContinuation(
   narrative: string,
   previousContinuations: DreamContinuation[] = [],
 ): Promise<DreamContinuation> {
+  const model = resolveDreamAnalysisModel();
   const prompt = buildDreamContinuationPrompt({
     narrative,
     previousContinuations: previousContinuations.slice(-3).map(item => item.continuation),
@@ -115,8 +117,10 @@ export async function generateDreamContinuation(
         prompt,
         undefined,
         {
+          model,
           temperature: 0.58,
           seed: Math.floor(Date.now() / 1000) + attempt,
+          numPredict: 3000,
         },
       );
       lastCandidate = result;
@@ -126,14 +130,18 @@ export async function generateDreamContinuation(
     }
   }
 
-  // A provider may return a good story while omitting our internal audit fields.
-  // Repair once before falling back, so a transient schema miss never becomes a user-visible 500.
+  // Repair a good story once when the provider omitted only internal audit fields.
   if (lastCandidate) {
     try {
       const repaired = await generateStructuredJson<Record<string, unknown>>(
         buildRepairPrompt(narrative, lastCandidate),
         undefined,
-        { temperature: 0.45, seed: Math.floor(Date.now() / 1000) + 2 },
+        {
+          model,
+          temperature: 0.45,
+          seed: Math.floor(Date.now() / 1000) + 2,
+          numPredict: 3000,
+        },
       );
       return validateContinuation(repaired, narrative, true);
     } catch (error) {

@@ -3,6 +3,7 @@ import type { SourceReviewInput } from '../../dto/sourceContribution.dto';
 import SourceContribution from '../../models/SourceContribution';
 import { approveSourceContribution } from './contributionApproval.service';
 import { rejectSourceContribution } from './contributionRejection.service';
+import { isReaderBuildInProgress } from './contributionApprovalPolicy.service';
 
 export async function reviewSourceContribution(
   id: string,
@@ -22,6 +23,16 @@ export async function reviewSourceContribution(
       body: {
         success: false,
         message: `This contribution has already been reviewed (status: ${contribution.reviewStatus}).`,
+      },
+    };
+  }
+  if (input.reviewStatus === 'approved' && isReaderBuildInProgress(contribution)) {
+    return {
+      status: 409,
+      body: {
+        success: false,
+        code: 'READER_IMPORT_IN_PROGRESS',
+        message: 'Bản đọc thông minh vẫn đang được dựng. Hãy chờ tác vụ hoàn tất trước khi duyệt tài liệu.',
       },
     };
   }

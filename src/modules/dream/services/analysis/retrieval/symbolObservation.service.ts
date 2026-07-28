@@ -38,6 +38,10 @@ export async function materializeDreamSymbolObservations(input: {
         $set: {
           userId: input.userId,
           displayLabel,
+          meaning: String(note?.meaning || '').trim(),
+          dreamEvidence: evidence,
+          relevance: Math.min(1, Math.max(0, Number(note?.relevance) || 0)),
+          symbolValence: Math.min(2, Math.max(-2, Number(note?.symbolValence) || 0)),
           noteIndex,
           contextFingerprint: createHash('sha256').update(evidence, 'utf8').digest('hex'),
           contextualTone: ['threatening', 'reassuring', 'ambivalent'].includes(note?.contextualTone)
@@ -61,6 +65,8 @@ export async function materializeDreamSymbolObservations(input: {
 export interface ObservedSymbolPattern {
   symbolKey: string;
   matchedLabels: string[];
+  recentMeanings: string[];
+  evidenceExamples: string[];
   personalDreamCount: number;
   publicDreamCount: number;
   toneCounts: Record<'threatening' | 'reassuring' | 'ambivalent' | 'neutral', number>;
@@ -83,6 +89,7 @@ export async function loadObservedSymbolPatterns(
   const rows = await DreamSymbolObservation.aggregate<{
     _id: { symbolKey: string; owner: 'personal' | 'public'; tone: ObservedTone };
     count: number;
+    observations: Array<{ label?: string; meaning?: string; evidence?: string }>;
   }>([
     { $match: {
       symbolKey: { $in: keys },
@@ -90,12 +97,22 @@ export async function loadObservedSymbolPatterns(
     } },
     { $project: {
       symbolKey: 1,
+      displayLabel: 1,
       contextualTone: 1,
+      meaning: 1,
+      dreamEvidence: 1,
       owner: { $cond: [{ $eq: ['$userId', userId] }, 'personal', 'public'] },
     } },
     { $group: {
       _id: { symbolKey: '$symbolKey', owner: '$owner', tone: '$contextualTone' },
       count: { $sum: 1 },
+      observations: {
+        $push: {
+          label: '$displayLabel',
+          meaning: '$meaning',
+          evidence: '$dreamEvidence',
+        },
+      },
     } },
   ]);
 
@@ -104,12 +121,25 @@ export async function loadObservedSymbolPatterns(
     const current = byKey.get(row._id.symbolKey) || {
       symbolKey: row._id.symbolKey,
       matchedLabels: labelsByKey.get(row._id.symbolKey) || [],
+      recentMeanings: [],
+      evidenceExamples: [],
       personalDreamCount: 0,
       publicDreamCount: 0,
       toneCounts: { threatening: 0, reassuring: 0, ambivalent: 0, neutral: 0 },
     };
     if (row._id.owner === 'personal') current.personalDreamCount += row.count;
     else current.publicDreamCount += row.count;
+    for (const observation of row.observations || []) {
+      if (observation.meaning && current.recentMeanings.length < 3) {
+        current.recentMeanings.push(String(observation.meaning));
+      }
+      if (observation.evidence && current.evidenceExamples.length < 3) {
+        current.evidenceExamples.push(String(observation.evidence));
+      }
+      if (observation.label && !current.matchedLabels.includes(String(observation.label))) {
+        current.matchedLabels.push(String(observation.label));
+      }
+    }
     const tone = row._id.tone;
     if (tone in current.toneCounts) current.toneCounts[tone] += row.count;
     byKey.set(row._id.symbolKey, current);

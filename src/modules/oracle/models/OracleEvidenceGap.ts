@@ -2,9 +2,10 @@ import mongoose, { Document, Schema, Types } from 'mongoose';
 
 export interface IOracleEvidenceGap extends Document {
   userId: Types.ObjectId;
-  threadId: Types.ObjectId;
-  turnId: Types.ObjectId;
+  threadId?: Types.ObjectId;
+  turnId?: Types.ObjectId;
   occurrenceTurnIds: Types.ObjectId[];
+  occurrenceDreamIds: Types.ObjectId[];
   claim: string;
   normalizedClaim: string;
   relatedClaims: string[];
@@ -21,9 +22,10 @@ export interface IOracleEvidenceGap extends Document {
 const OracleEvidenceGapSchema = new Schema<IOracleEvidenceGap>(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-    threadId: { type: Schema.Types.ObjectId, ref: 'OracleThread', required: true },
-    turnId: { type: Schema.Types.ObjectId, ref: 'OracleTurn', required: true },
+    threadId: { type: Schema.Types.ObjectId, ref: 'OracleThread' },
+    turnId: { type: Schema.Types.ObjectId, ref: 'OracleTurn' },
     occurrenceTurnIds: [{ type: Schema.Types.ObjectId, ref: 'OracleTurn' }],
+    occurrenceDreamIds: [{ type: Schema.Types.ObjectId, ref: 'Dream' }],
     claim: { type: String, required: true, maxlength: 1200 },
     normalizedClaim: { type: String, required: true, maxlength: 1200 },
     relatedClaims: [{ type: String, maxlength: 1200 }],
@@ -43,5 +45,7 @@ const OracleEvidenceGapSchema = new Schema<IOracleEvidenceGap>(
 
 OracleEvidenceGapSchema.index({ userId: 1, normalizedClaim: 1 });
 OracleEvidenceGapSchema.index({ status: 1, updatedAt: -1 });
+OracleEvidenceGapSchema.index({ occurrenceTurnIds: 1 });
+OracleEvidenceGapSchema.index({ occurrenceDreamIds: 1 });
 
 export default mongoose.model<IOracleEvidenceGap>('OracleEvidenceGap', OracleEvidenceGapSchema);

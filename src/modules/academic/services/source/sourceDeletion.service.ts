@@ -12,7 +12,8 @@ import {
   applyOracleSourceInvalidation,
   prepareOracleSourceInvalidation,
   rematchInvalidatedOracleTurns,
-} from '../../../oracle/services/oracleSourceInvalidation.service';
+} from '../../../oracle/services/lifecycle/oracleSourceInvalidation.service';
+import { recomputeRuleValidationScores } from '../../../rules_v3/services/evidence/ruleV3ValidationScore.service';
 
 export interface SourceDeletionResult {
   status: number;
@@ -48,12 +49,16 @@ export async function deleteSourceData(sourceId: string): Promise<SourceDeletion
 
 async function deleteContributions(contribution: any): Promise<SourceDeletionResult> {
   const contributions = await findDuplicateContributions(contribution);
+  const oracleInvalidation = await prepareOracleSourceInvalidation(
+    contributions.map((item) => String(item._id)),
+  );
   const plans = await prepareContributionCleanupPlans(contributions);
   const files = contributions.map(item => plainStoredFile(item.originalFile)).filter(Boolean) as StoredFile[];
   const deleted = emptyDeletionSummary({ contribution: contributions.length });
   const warnings: string[] = [];
 
   const databaseResult = await runOptionalTransaction(async session => {
+    await applyOracleSourceInvalidation(oracleInvalidation, session);
     for (const plan of plans) {
       mergeCleanupCounts(deleted, await deleteReaderOwnedDatabaseData(plan.owner, { session }));
     }
@@ -63,6 +68,15 @@ async function deleteContributions(contribution: any): Promise<SourceDeletionRes
     );
   });
   if (!databaseResult.success) return deletionFailure('Có lỗi xảy ra khi xóa đóng góp.', databaseResult.error);
+  await recomputeRuleValidationScores(oracleInvalidation.feedbackRuleIds);
+  try {
+    await rematchInvalidatedOracleTurns(
+      oracleInvalidation.turnIds,
+      oracleInvalidation.dreamIds,
+    );
+  } catch (error) {
+    warnings.push(`Không thể chạy lại đối chiếu Evidence Needed: ${String(error)}`);
+  }
 
   deleted.readerAssets = await deleteCleanupAssets(plans);
   deleted.originalFiles = await deleteUnreferencedStoredFiles(files, warnings);
@@ -106,8 +120,12 @@ async function deleteApprovedSource(source: any): Promise<SourceDeletionResult> 
     await AcademicSource.deleteOne({ _id: source._id }, session ? { session } : {});
   });
   if (!databaseResult.success) return deletionFailure('Có lỗi xảy ra khi xóa tài liệu.', databaseResult.error);
+  await recomputeRuleValidationScores(oracleInvalidation.feedbackRuleIds);
   try {
-    await rematchInvalidatedOracleTurns(oracleInvalidation.turnIds);
+    await rematchInvalidatedOracleTurns(
+      oracleInvalidation.turnIds,
+      oracleInvalidation.dreamIds,
+    );
   } catch (error) {
     warnings.push(`Không thể chạy lại đối chiếu Evidence Needed: ${String(error)}`);
   }

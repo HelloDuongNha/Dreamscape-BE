@@ -10,17 +10,7 @@ function median(values: number[]): number | null {
     : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-/**
- * Dream analysis ETA.
- *
- * First run:
- *   45s setup/retrieval + 0.06s per normalized input character. The prompt is
- *   compacted before generation, so raw narrative length is only a baseline.
- *
- * Later runs:
- *   30% baseline + 70% median processing seconds/character from the user's
- *   latest completed runs. Queue waiting time is excluded from the samples.
- */
+// Estimates processing time from input length and the user’s recent processing-only history.
 export async function estimateDreamAnalysisSeconds(
   userId: string | Types.ObjectId,
   narrative: string,
@@ -42,8 +32,7 @@ export async function estimateDreamAnalysisSeconds(
       String(item.content || ''),
       ...(Array.isArray(item.additions) ? item.additions.map((entry: any) => String(entry.content || '')) : []),
     ].join('\n').normalize('NFKC').trim().length;
-    // Legacy durationMs included queue waiting time; only use the new
-    // processing-only field for future estimates.
+    // Ignore legacy durations because they include time spent waiting in the queue.
     const durationMilliseconds = Number(item.analysisMetadata?.processingDurationMs);
     const durationSeconds = durationMilliseconds / 1000;
     return previousLength > 0 && Number.isFinite(durationSeconds) && durationSeconds > 0

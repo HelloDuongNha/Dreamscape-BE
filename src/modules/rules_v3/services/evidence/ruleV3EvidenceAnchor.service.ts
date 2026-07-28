@@ -49,10 +49,7 @@ function pushBoundedSpan(
   output.push({ evidenceId, chunkId, exactQuote, startOffset: start, endOffset: end, chunkContentHash });
 }
 
-/**
- * Builds immutable evidence choices directly from canonical chunk text.
- * The model chooses evidenceId; it never transcribes the quotation itself.
- */
+// Builds immutable evidence choices so providers select IDs instead of rewriting quotes.
 export function buildRuleV3EvidenceAnchors(chunks: RuleV3ProviderChunk[]): RuleV3EvidenceAnchor[] {
   const anchors: RuleV3EvidenceAnchor[] = [];
   for (const chunk of chunks) {

@@ -53,10 +53,7 @@ export function mapRuleV3Candidate(
     label: shortRuleLabel(rule),
     fullStatement: rule.statement,
     expandedExplanation: expandRuleExplanation(rule, rule.sourceLanguage),
-    expandedExplanations: {
-      vi: expandRuleExplanation(rule, 'vi'),
-      en: expandRuleExplanation(rule, 'en'),
-    },
+    expandedExplanations: sourceLanguageExplanation(rule, rule.sourceLanguage),
     probeBlueprint: buildCompositeProbeBlueprint(rule),
     group: 'dream_psychology',
     category: rule.claimType,
@@ -78,6 +75,8 @@ export function mapRuleV3Candidate(
     evidenceSummary: rule.statement,
     status: mappedStatus,
     evidenceCredibilityScore: score.evidenceScore,
+    sourceEvidenceScore: sourceScore.evidenceScore,
+    userValidationAdjustment: Number(rule.userValidationAdjustment) || 0,
     oracleUsefulnessScore: score.oracleUsefulnessScore,
     oracleEligible: score.oracleEligible,
     legitimacyScore: score.evidenceScore,
@@ -115,10 +114,7 @@ export function mapRuleV3Candidate(
       qualityAccepted: componentScores.find(item => item.sourceRuleId === String(component.sourceRuleId))?.score.qualityAccepted,
       supportingCitationCount: componentScores.find(item => item.sourceRuleId === String(component.sourceRuleId))?.score.supportingCitationCount,
       expandedExplanation: expandRuleExplanation(component, rule.sourceLanguage),
-      expandedExplanations: {
-        vi: expandRuleExplanation(component, 'vi'),
-        en: expandRuleExplanation(component, 'en'),
-      },
+      expandedExplanations: sourceLanguageExplanation(component, rule.sourceLanguage),
     })),
     ...((pooledEquivalentScore || weakestComponent) ? {
       scoreAggregation: {
@@ -138,6 +134,15 @@ export function mapRuleV3Candidate(
     createdAt: rule.createdAt,
     updatedAt: rule.updatedAt,
   };
+}
+
+// Labels only the language actually present; the UI translates the complete text when needed.
+function sourceLanguageExplanation(
+  component: any,
+  sourceLanguage: string,
+): Partial<Record<'vi' | 'en', string>> {
+  const language = String(sourceLanguage || '').toLowerCase().startsWith('vi') ? 'vi' : 'en';
+  return { [language]: expandRuleExplanation(component, language) };
 }
 
 // Viết rõ phạm vi kết luận mà không nâng một liên hệ thành quan hệ nhân quả.

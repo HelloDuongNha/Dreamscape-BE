@@ -18,12 +18,7 @@ import type {
 } from './symbolRetrieval.types';
 import { getSymbolVectorScores } from './symbolVectorSearch.service';
 
-/**
- * Public entry point for Dream symbol retrieval.
- *
- * Segmentation, query preparation, vector lookup, and ranking remain separate
- * capabilities; this service only coordinates them into one stable result.
- */
+// Coordinates segmentation, vector lookup and ranking without owning their logic.
 export type IRetrievedSymbol = RetrievedSymbol;
 export type IDreamSegments = DreamSegments;
 

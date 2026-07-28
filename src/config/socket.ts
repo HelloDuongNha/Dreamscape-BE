@@ -5,6 +5,8 @@ import Conversation from '../modules/messaging/models/Conversation';
 import Message, { IMessage } from '../modules/messaging/models/Message';
 import { Types } from 'mongoose';
 
+let activeSocketServer: SocketIOServer | null = null;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 /** Shape attached to the socket after successful JWT handshake */
@@ -106,6 +108,7 @@ export function initSocket(httpServer: HTTPServer): SocketIOServer {
     // Use WebSockets first, fall back to long-polling if needed
     transports: ['websocket', 'polling'],
   });
+  activeSocketServer = io;
 
   // ── JWT Middleware ───────────────────────────────────────────────────────────
   io.use(jwtHandshake);
@@ -266,4 +269,8 @@ export function initSocket(httpServer: HTTPServer): SocketIOServer {
   });
 
   return io;
+}
+
+export function getSocketServer(): SocketIOServer | null {
+  return activeSocketServer;
 }

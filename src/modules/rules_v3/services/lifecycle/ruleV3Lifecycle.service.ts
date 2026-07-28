@@ -19,10 +19,7 @@ export interface RemoveRuleV3SourceDataResult {
   runsRemoved: number;
 }
 
-/**
- * Resolve the approved-source/contribution aliases that may both own evidence
- * for the same academic source lifecycle.
- */
+// Resolves every approved-source and contribution ID that owns the same evidence.
 export async function resolveRuleV3SourceAliases(sourceId: string): Promise<mongoose.Types.ObjectId[]> {
   const aliases = new Map<string, mongoose.Types.ObjectId>();
   if (!mongoose.Types.ObjectId.isValid(sourceId)) return [];
@@ -41,11 +38,7 @@ export async function resolveRuleV3SourceAliases(sourceId: string): Promise<mong
   return [...aliases.values()];
 }
 
-/**
- * Remove evidence owned by a source without deleting a shared rule that still
- * has evidence from another source. Remaining shared rules are rescored and a
- * verified rule is demoted when its surviving evidence is no longer eligible.
- */
+// Removes one source's evidence, rescoring shared rules that still have other sources.
 export async function removeRuleV3SourceData(
   sourceId: string,
   options: RemoveRuleV3SourceDataOptions = {}

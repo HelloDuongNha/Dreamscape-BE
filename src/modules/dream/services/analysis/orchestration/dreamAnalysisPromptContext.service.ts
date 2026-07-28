@@ -62,7 +62,7 @@ export function buildDreamPromptContext(input: {
 
   const observedSymbolText = input.observedSymbolPatterns.length > 0
     ? input.observedSymbolPatterns.map(pattern =>
-      `- ${pattern.matchedLabels[0] || pattern.symbolKey}: ${pattern.personalDreamCount} prior personal occurrence(s), ${pattern.publicDreamCount} public occurrence(s); contextual tones ${JSON.stringify(pattern.toneCounts)}`,
+      `- ${pattern.matchedLabels[0] || pattern.symbolKey}: ${pattern.personalDreamCount} prior personal occurrence(s), ${pattern.publicDreamCount} public occurrence(s); contextual tones ${JSON.stringify(pattern.toneCounts)}\n  Prior interpretations: ${pattern.recentMeanings.join(' | ') || 'None'}\n  Earlier narrative evidence: ${pattern.evidenceExamples.join(' | ') || 'None'}`,
     ).join('\n')
     : 'None matched the current narrative';
 

@@ -4,12 +4,15 @@ import Notification from '../../../../social/models/Notification';
 import Dream, { IDream } from '../../../models/Dream';
 import { runDreamAnalysis } from '../orchestration/analyze.service';
 import { DreamAnalysisResult } from '../orchestration/dreamAnalysisOrchestration.types';
+import { buildDreamCompletionUpdate } from './dreamAnalysisCompletion.service';
 import { rollbackDreamAnalysisRun } from './dreamAnalysisRollback.service';
+import { queueDreamContinuation } from './dreamContinuationJob.service';
 import {
   clearDreamAnalysisController,
   registerDreamAnalysisController,
 } from './dreamAnalysisRuntime.service';
 import { syncDreamSymbolObservations } from './dreamSymbolObservationSync.service';
+import { syncDreamEvidenceNeeds } from './dreamEvidenceSync.service';
 
 interface ActiveAnalysisRun {
   dreamId: Types.ObjectId | string;
@@ -17,14 +20,10 @@ interface ActiveAnalysisRun {
   content: string;
   sleepContext: Record<string, any>;
   runId: string;
+  trigger: NonNullable<IDream['analysisRun']>['trigger'];
   analysisStartedAt: Date;
   processingStartedAt: Date;
   abortController: AbortController;
-}
-
-interface DreamCompletionUpdate {
-  $set: Record<string, unknown>;
-  $unset: Record<string, number>;
 }
 
 // Execute one queued analysis behind its run fence and commit only its own result.
@@ -43,7 +42,7 @@ export async function runBackgroundAnalysis(
     const result = await executeDreamAnalysis(run);
     const dream = await commitDreamAnalysis(run, result);
     if (!dream) return;
-    await finalizeCompletedDream(dream);
+    await finalizeCompletedDream(dream, run.trigger);
     logger.info(`Background analysis completed successfully for dream ${dreamId}`);
   } catch (error: unknown) {
     await handleAnalysisFailure(run, error);
@@ -86,7 +85,13 @@ async function startOwnedAnalysisRun(input: {
 
   const abortController = new AbortController();
   registerDreamAnalysisController(String(input.dreamId), input.runId, abortController);
-  return { ...input, analysisStartedAt, processingStartedAt, abortController };
+  return {
+    ...input,
+    trigger: queuedDream.analysisRun?.trigger || 'retry',
+    analysisStartedAt,
+    processingStartedAt,
+    abortController,
+  };
 }
 
 async function executeDreamAnalysis(run: ActiveAnalysisRun): Promise<DreamAnalysisResult> {
@@ -138,7 +143,7 @@ async function commitDreamAnalysis(
   const estimatedDurationSeconds = Number(
     pendingDream.analysisMetadata?.estimatedDurationSeconds,
   ) || null;
-  const update = buildCompletionUpdate({
+  const update = buildDreamCompletionUpdate({
     pendingDream,
     result,
     durationMs,
@@ -170,55 +175,13 @@ async function commitDreamAnalysis(
   return completedDream;
 }
 
-function buildCompletionUpdate(input: {
-  pendingDream: IDream;
-  result: DreamAnalysisResult;
-  durationMs: number;
-  estimatedDurationSeconds: number | null;
-  analysisStartedAt: Date;
-}): DreamCompletionUpdate {
-  return {
-    $set: {
-      ai_status: 'completed',
-      ai_result: input.result.aiAnalysis,
-      mood_tag: input.result.aiAnalysis.emotional_tone || '',
-      analysisEmbedding: input.result.analysisEmbedding,
-      retrievedContext: input.result.retrievedContext,
-      analysisMetadata: {
-        strategyUsed: input.result.strategyUsed,
-        llmModel: process.env.OLLAMA_MODEL || 'qwen2.5:14b',
-        embeddingModel: process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text',
-        ragTopK: input.result.retrievedContext.componentA.usedSymbols.length,
-        minSimilarityScore: parseFloat(process.env.SYMBOL_RAG_MIN_SCORE || '0.55'),
-        vectorBackend: input.result.retrievedContext.componentA.retrievalConfig.vectorBackend,
-        analysisVersion: '2.0.0-grounded',
-        currentStage: 'completed',
-        progress: 100,
-        statusMessage: 'Phân tích hoàn tất.',
-        currentMiniStep: 'Kết quả đã sẵn sàng.',
-        stageResults: input.pendingDream.analysisMetadata?.stageResults || {},
-        startedAt: input.analysisStartedAt,
-        generatedAt: new Date(),
-        durationMs: input.durationMs,
-        processingDurationMs: input.durationMs,
-        estimatedDurationSeconds: input.estimatedDurationSeconds,
-        timingDeltaSeconds: input.estimatedDurationSeconds === null
-          ? null
-          : Math.round(input.durationMs / 1000 - input.estimatedDurationSeconds),
-        hasUnanalyzedAdditions: false,
-      },
-      realLifeHypothesesFeedback: [],
-    },
-    $unset: {
-      analysisRun: 1,
-      analysisRollback: 1,
-      aiAnalysis: 1,
-    },
-  };
-}
-
-async function finalizeCompletedDream(dream: IDream): Promise<void> {
+async function finalizeCompletedDream(
+  dream: IDream,
+  trigger: NonNullable<IDream['analysisRun']>['trigger'],
+): Promise<void> {
   await syncDreamSymbolObservations(dream);
+  await syncDreamEvidenceNeeds(dream);
+  if (trigger !== 'citation_migration') await queueInitialDreamContinuation(dream);
   try {
     await Notification.create({
       recipientId: dream.userId,
@@ -228,6 +191,16 @@ async function finalizeCompletedDream(dream: IDream): Promise<void> {
     });
   } catch (error: unknown) {
     logger.warn(`Could not persist completion notification for dream ${dream._id}`, {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function queueInitialDreamContinuation(dream: IDream): Promise<void> {
+  try {
+    await queueDreamContinuation(dream, dream.userId);
+  } catch (error: unknown) {
+    logger.warn(`Could not queue the optional continuation for dream ${dream._id}`, {
       error: error instanceof Error ? error.message : String(error),
     });
   }

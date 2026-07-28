@@ -3,6 +3,10 @@ import {
   attachRuleQuestionContext,
   removeInternalAnalysisVocabulary,
 } from './dreamGroundingText.service';
+import {
+  sameEvidenceSource,
+  type EvidenceSourceIdentity,
+} from '../../../../../shared/evidence/citationClaim';
 
 interface ResponseQuestionContext {
   hypotheses: any[];
@@ -44,7 +48,7 @@ export function buildResponseQuestionContext(
   const storedHypotheses = Array.isArray(analysis.real_life_hypotheses)
     ? analysis.real_life_hypotheses
     : [];
-  const hypotheses = attachRuleQuestionContext(
+  const hypotheses = deduplicateDreamQuestionsBySource(attachRuleQuestionContext(
     storedHypotheses.flatMap((item: any) => {
       const linkedRuleIds = [...new Set<string>(
         (item?.ruleIds || [item?.ruleId])
@@ -98,7 +102,51 @@ export function buildResponseQuestionContext(
         ? { ruleScore: Number(linkedRule.evidenceScore) }
         : {}),
     };
-  });
+  }));
 
   return { hypotheses, ruleMap, sourceByRule };
+}
+
+// Keeps one verification question for each academic source.
+export function deduplicateDreamQuestionsBySource(questions: any[]): any[] {
+  const kept: any[] = [];
+  const usedSources: EvidenceSourceIdentity[] = [];
+  const usedFallbackKeys = new Set<string>();
+
+  for (const question of questions || []) {
+    const identities = questionSourceIdentities(question);
+    if (identities.length) {
+      if (identities.some((identity) =>
+        usedSources.some((used) => sameEvidenceSource(identity, used)))) {
+        continue;
+      }
+      usedSources.push(...identities);
+      kept.push(question);
+      continue;
+    }
+
+    const fallbackKey = String(
+      question?.verificationKey
+      || `${question?.ruleId || ''}:${question?.followUpQuestion || ''}`,
+    ).trim();
+    if (!fallbackKey || usedFallbackKeys.has(fallbackKey)) continue;
+    usedFallbackKeys.add(fallbackKey);
+    kept.push(question);
+  }
+  return kept;
+}
+
+function questionSourceIdentities(question: any): EvidenceSourceIdentity[] {
+  const identities: EvidenceSourceIdentity[] = (question?.sources || [])
+    .map((source: any) => ({
+      sourceId: String(source?.sourceId || '').trim(),
+      doi: String(source?.doi || '').trim(),
+    }))
+    .filter((source: EvidenceSourceIdentity) => source.sourceId || source.doi);
+  const validationSourceId = String(question?.validationSourceId || '').trim();
+  if (validationSourceId && !identities.some((source) =>
+    sameEvidenceSource(source, { sourceId: validationSourceId }))) {
+    identities.push({ sourceId: validationSourceId });
+  }
+  return identities;
 }

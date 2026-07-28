@@ -5,6 +5,10 @@ export interface IDreamSymbolObservation extends Document {
   userId: Types.ObjectId;
   symbolKey: string;
   displayLabel: string;
+  meaning: string;
+  dreamEvidence: string;
+  relevance: number;
+  symbolValence: number;
   noteIndex: number;
   contextFingerprint: string;
   contextualTone: 'threatening' | 'reassuring' | 'ambivalent' | 'neutral';
@@ -20,6 +24,10 @@ const DreamSymbolObservationSchema = new Schema<IDreamSymbolObservation>({
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   symbolKey: { type: String, required: true, trim: true },
   displayLabel: { type: String, required: true, trim: true },
+  meaning: { type: String, required: true, trim: true },
+  dreamEvidence: { type: String, required: true, trim: true },
+  relevance: { type: Number, required: true, min: 0, max: 1, default: 0 },
+  symbolValence: { type: Number, required: true, min: -2, max: 2, default: 0 },
   noteIndex: { type: Number, required: true, min: 0 },
   contextFingerprint: { type: String, required: true, match: /^[a-f0-9]{64}$/ },
   contextualTone: {

@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import AcademicChunk from '../../academic/models/AcademicChunk';
 import AcademicSource from '../../academic/models/AcademicSource';
-import { getOracleEvidenceGapMatchesForRule } from '../../oracle/services/oracleEvidenceGap.service';
+import { getOracleEvidenceGapMatchesForRule } from '../../oracle/services/evidence/oracleEvidenceReconciliation.service';
 import KnowledgeRuleV3 from '../models/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../models/KnowledgeRuleEvidence';
 import { parseRuleV3CandidateQuery } from '../dto';

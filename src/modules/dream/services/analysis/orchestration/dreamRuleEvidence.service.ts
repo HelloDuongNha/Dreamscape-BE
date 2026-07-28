@@ -39,10 +39,10 @@ export async function retrieveDreamRuleEvidence(
 
   const explanatoryRules = matchedRules.filter(canExplainPsychology);
   const questionRules = matchedRules.filter(canGenerateContextQuestion);
-  const usableRules = matchedRules.filter(rule => rule.applicationRole !== 'descriptive_pattern');
+  const usableRules = matchedRules;
   const linksByRule = new Map<string, any[]>();
   for (const link of validEvidenceLinks) {
-    const ruleId = link.ruleId.toString();
+    const ruleId = String(link.ruleId?._id || link.ruleId);
     linksByRule.set(ruleId, [...(linksByRule.get(ruleId) || []), link]);
   }
 
@@ -57,7 +57,14 @@ export async function retrieveDreamRuleEvidence(
   let totalEvidenceChars = 0;
 
   for (const rule of usableRules) {
-    const ruleLinks = (linksByRule.get(rule._id.toString()) || []).slice(0, 2);
+    const databaseRuleId = String(rule._id);
+    const publicRuleId = String(rule.ruleId || '');
+    const ruleLinks = [
+      ...(linksByRule.get(databaseRuleId) || []),
+      ...(publicRuleId ? (linksByRule.get(publicRuleId) || []) : []),
+    ].filter((link, index, links) =>
+      links.findIndex(candidate => String(candidate._id) === String(link._id)) === index,
+    ).slice(0, 2);
     if (ruleLinks.length === 0) continue;
 
     const ruleSources = ruleLinks.map(link => {
@@ -101,7 +108,8 @@ export async function retrieveDreamRuleEvidence(
 
     const truncatedRuleText = ruleText.substring(0, remainingChars);
     totalEvidenceChars += truncatedRuleText.length;
-    validSourcesMap.set(rule._id.toString(), sources);
+    validSourcesMap.set(databaseRuleId, sources);
+    if (publicRuleId) validSourcesMap.set(publicRuleId, sources);
     const authors = sources.map(source => {
       const names = source.authors || [];
       if (names.length === 0) return 'N/A';

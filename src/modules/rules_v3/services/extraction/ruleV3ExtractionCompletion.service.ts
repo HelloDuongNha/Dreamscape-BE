@@ -1,8 +1,9 @@
 import mongoose from 'mongoose';
 import { logger } from '../../../../infrastructure/logger';
-import { linkOracleEvidenceGapCandidatesForRules } from '../../../oracle/services/oracleEvidenceGap.service';
+import {
+  reconcileOracleEvidenceGapsForRuleIds,
+} from '../../../oracle/services/evidence/oracleEvidenceReconciliation.service';
 import AcademicRuleExtractionRunV3 from '../../models/AcademicRuleExtractionRun';
-import KnowledgeRuleV3 from '../../models/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../../models/KnowledgeRuleEvidence';
 import { autoMergePendingRuleV3Groups } from '../moderation/ruleV3Merge.service';
 import {
@@ -155,13 +156,7 @@ async function linkExtractedRulesToEvidenceGaps(
   ruleIds: mongoose.Types.ObjectId[],
 ): Promise<void> {
   if (ruleIds.length === 0) return;
-  const rules = await KnowledgeRuleV3.find({ _id: { $in: ruleIds } })
-    .select(
-      '_id ruleCode statement subject outcome conditions dreamFeatureTags '
-      + 'status evidenceScore supportingSourceCount compositeComponents',
-    )
-    .lean();
-  await linkOracleEvidenceGapCandidatesForRules(rules).catch((error) => {
+  await reconcileOracleEvidenceGapsForRuleIds(ruleIds).catch((error) => {
     logger.warn('Could not link newly extracted Rule V3 candidates to Oracle evidence gaps.', {
       runId,
       errorName: error instanceof Error ? error.name : 'Error',

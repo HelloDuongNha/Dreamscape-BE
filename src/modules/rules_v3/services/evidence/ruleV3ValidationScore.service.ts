@@ -152,6 +152,25 @@ export async function recomputeRuleValidationScores(ruleIds: string[]): Promise<
   return updates;
 }
 
+export async function removeRuleValidationFeedbackForOrigins(input: {
+  origin: 'oracle' | 'dream_analysis';
+  originIds: Array<Types.ObjectId | string>;
+}): Promise<RuleValidationScoreUpdate[]> {
+  const originIds = input.originIds.filter(Boolean);
+  if (!originIds.length) return [];
+  const rows = await RuleValidationFeedback.find({
+    origin: input.origin,
+    originId: { $in: originIds },
+  }).select('impacts.ruleId').lean();
+  const affectedRuleIds = [...new Set(rows.flatMap((row) =>
+    (row.impacts || []).map((impact) => impact.ruleId)))];
+  await RuleValidationFeedback.deleteMany({
+    origin: input.origin,
+    originId: { $in: originIds },
+  });
+  return recomputeRuleValidationScores(affectedRuleIds);
+}
+
 export async function setRuleValidationFeedback(input: {
   userId: Types.ObjectId;
   verificationKey: string;

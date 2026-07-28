@@ -125,7 +125,7 @@ export async function mergePendingRuleV3Group(selectedRuleId: string) {
   };
 }
 
-/** Tự động gộp các lập luận chờ duyệt vừa được pipeline tạo ra. */
+// Tự động gộp các lập luận chờ duyệt vừa được pipeline tạo ra.
 export async function autoMergePendingRuleV3Groups(
   seedRuleIds: Array<mongoose.Types.ObjectId | string>,
 ): Promise<RuleV3AutoMergeResult> {

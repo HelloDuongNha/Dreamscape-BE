@@ -101,14 +101,10 @@ export async function retrieveSimilarDreams(
     return { row, exact, lexical, preliminary: exact ? 1 : lexical };
   }).sort((a, b) => b.preliminary - a.preliminary);
 
-  // Repeated imports or test posts can contain the exact same narrative.
-  // Collapse them before ranking so duplicates neither monopolize the candidate
-  // window nor appear as several independent personal-history sources.
+  // Collapse repeated narratives before ranking so one story cannot fill the result window.
   const groupedPrelim = new Map<string, (typeof rankedPrelim)[number] & { duplicateCount: number }>();
   for (const item of rankedPrelim) {
-    // Keep own and public histories as separate privacy/provenance groups.
-    // Oracle can then prefer the user's own record when both contain the same
-    // narrative without counting either group several times.
+    // Keep personal and public copies separate so their provenance remains clear.
     const narrativeKey = `${isSameAuthor(item.row, userId) ? 'own' : 'public'}:${normalize(item.row.content)}`;
     const existing = groupedPrelim.get(narrativeKey);
     if (existing) {
@@ -119,8 +115,7 @@ export async function retrieveSimilarDreams(
   }
   const prelim = [...groupedPrelim.values()].slice(0, 16);
 
-  // Lazy migration: only embed the strongest old candidates. Future analyses
-  // reuse these vectors, so semantic matching does not repeatedly grow slower.
+  // Embed only the strongest legacy candidates and reuse those vectors later.
   for (const item of prelim.slice(0, 8)) {
     if (Array.isArray(item.row.analysisEmbedding) && item.row.analysisEmbedding.length) continue;
     try {

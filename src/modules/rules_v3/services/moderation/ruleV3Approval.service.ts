@@ -1,5 +1,5 @@
 import { generateEmbedding } from '../../../../infrastructure/llm.service';
-import { reconcileOracleEvidenceGapsForRule } from '../../../oracle/services/oracleEvidenceGap.service';
+import { reconcileOracleEvidenceGapsForRule } from '../../../oracle/services/evidence/oracleEvidenceReconciliation.service';
 import KnowledgeRuleV3 from '../../models/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../../models/KnowledgeRuleEvidence';
 import { areRuleV3ComponentsEvidenceEquivalent } from '../evidence/ruleV3Relationship.service';

@@ -19,10 +19,7 @@ export interface PreparedDreamReanalysis {
   response: unknown;
 }
 
-/**
- * Resets all analysis-derived state after a contextual edit and creates one
- * fenced, persistent run. The caller only has to enqueue the returned job.
- */
+// Creates one rollback-safe reanalysis run after the user changes Dream context.
 export async function prepareDreamReanalysis(
   dream: IDream,
   ownerId: Types.ObjectId,

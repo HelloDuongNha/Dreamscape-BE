@@ -13,10 +13,7 @@ export interface DreamAnalysisPromptInput {
   culturalAnalysisAllowed: boolean;
 }
 
-/**
- * Builds the model instruction only. Retrieval, validation and persistence stay
- * outside this file so prompt wording cannot silently change business rules.
- */
+// Builds only the model instruction; retrieval and validation remain separate.
 export function buildDreamAnalysisPrompt(input: DreamAnalysisPromptInput): string {
   return `
 You are DreamScape's evidence-constrained dream reflection engine.
@@ -75,6 +72,13 @@ Required JSON shape:
   "emotional_tone": "a short, specific mood label in the user's language",
   "emotional_valence": -2,
   "summary": "two concise factual sentences, without interpretation",
+  "evidence_claims": [
+    {
+      "contentPath": "core_analysis or interpretive_threads.0.reasoning",
+      "claimText": "one exact complete sentence copied from that field",
+      "supportRuleId": "retrieved rule id when that exact rule supports the sentence, otherwise omit"
+    }
+  ],
   "scientific_context_notes": [
     {
       "ruleId": "string",
@@ -122,7 +126,7 @@ Required JSON shape:
     { "suggestion": "string", "rationale": "string" }
   ],
   "confidence": 0.0,
-  "core_analysis": "one cohesive 180-320 word synthesis",
+  "core_analysis": "one cohesive synthesis proportional to the narrative",
   "disclaimer": "string"
 }
 
@@ -140,20 +144,30 @@ Reasoning and evidence rules:
 6. Every scientific note must use a retrieved rule, include exact narrative
    evidence and state a case-specific uncertainty boundary. Return no note when
    direct support is absent.
+   When a retrieved rule directly supports a general research claim that appears
+   in core_analysis or an interpretive thread, use it instead of ignoring the
+   available academic evidence.
 7. Every hypothesis must concern one unknown observable fact, use a retrieved
    rule, cite exact narrative evidence and be answerable Có/Không/Chưa biết.
    Ask fewer questions when fewer are defensible; never fill a quota.
-8. Return one or two interpretive threads. Each thread must connect at least
+8. Return two to four interpretive threads for a detailed narrative and one or
+   two for a short narrative. Each thread must connect at least
    two events in sequence, explain why their combination matters, and include a
    credible alternative explanation. Threads must develop a secondary angle
    rather than repeat core_analysis or list isolated symbol definitions.
 9. Symbolic notes must quote motifs that actually occur in the narrative.
-   Dictionary and personal history are context, not universal proof.
+   For a detailed dream, each meaning should use two or three natural
+   sentences that connect the motif to another event, change or waking
+   feeling in this specific narrative. Never return a one-line dictionary
+   definition. Dictionary and personal history are context, not universal
+   proof.
 10. Similar dreams are personal or public precedents, never scientific proof.
     Compare continuity and change without copying their interpretation.
 11. practical_reflections must be model-authored, low-risk and traceable to a
     hypothesis or observed sequence. Do not invent advice from a symbol alone.
-12. core_analysis must read as one connected interpretation, not a catalogue of
+12. core_analysis must contain 220-420 words for a detailed narrative and
+    120-240 words for a short narrative. It must read as one connected
+    interpretation, not a catalogue of
     symbols. Open with the strongest central pattern, then trace how the scene
     changes from situation -> pressure -> blocked response -> waking feeling.
     Explain what the combination contributes beyond paraphrasing the narrative,
@@ -176,13 +190,47 @@ Reasoning and evidence rules:
 16. Respect the lowest confidence cap among applied rules. If evidence is
     insufficient, lower confidence and return fewer claims rather than adding
     generic filler.
-17. Do not write empty phrases such as "phản ánh những cảm xúc và suy nghĩ
+17. evidence_claims is a location map, not a second analysis. List every
+    complete researchable sentence used in core_analysis or interpretive thread
+    reasoning. claimText must be copied exactly from the named field. Include
+    supportRuleId whenever a retrieved rule directly supports that exact
+    sentence; omit it only when no retrieved rule supports the claim, so the
+    citation layer can create [?]. Do not include observations, personal
+    reflections, symbolic interpretations, safety boundaries or suggestions.
+    Never write citation markers yourself; the server assigns them.
+18. Do not write empty phrases such as "phản ánh những cảm xúc và suy nghĩ
     không rõ ràng", "có thể là một thách thức", or merely rename a scene as an
     emotion. Every interpretive sentence must show a concrete connection
     between at least two supplied details or between a detail and a disclosed
     waking reaction.
-18. State the uncertainty boundary once, naturally, near the end of
+19. State the uncertainty boundary once, naturally, near the end of
     core_analysis. Do not repeat "không chắc", "cần xác nhận", or the dream
     disclaimer in the summary, threads, and each symbolic note.
 `;
+}
+
+// Requests one deeper rewrite when the first valid JSON answer is too shallow.
+export function buildDreamAnalysisDepthRepairPrompt(
+  originalPrompt: string,
+  candidate: unknown,
+): string {
+  return `${originalPrompt}
+
+[CANDIDATE_REQUIRING_DEPTH_REPAIR]
+${JSON.stringify(candidate)}
+[/CANDIDATE_REQUIRING_DEPTH_REPAIR]
+
+The candidate is structurally valid but too shallow for the supplied narrative.
+Rewrite the whole JSON object. Preserve grounded facts and exact source rule IDs,
+but develop a connected central interpretation and at least two distinct
+interpretive threads for a detailed narrative. Do not add generic filler,
+repeat the dream as a summary, invent waking-life facts, or weaken the evidence
+rules above. Keep at least two concrete symbolic notes for a detailed narrative;
+each note must have a meaningful two- or three-sentence explanation tied to its
+exact dream evidence and another event or waking feeling. A detailed narrative
+must contain at least two complete, general research claims in core_analysis or
+the interpretive threads and map both exact sentences in evidence_claims. When
+VERIFIED_EVIDENCE supports one of them, include its real supportRuleId. Leave
+supportRuleId absent for a research claim without direct support so the server
+can preserve it as [?]. Return JSON only.`;
 }

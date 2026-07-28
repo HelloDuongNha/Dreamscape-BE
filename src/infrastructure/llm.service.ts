@@ -1,4 +1,8 @@
 import { logger } from './logger';
+import type {
+  EvidenceClaimBinding,
+  EvidenceClaimContentPath,
+} from '../shared/evidence/citationClaim';
 
 export interface ILLMOutput {
   title: string;
@@ -6,6 +10,22 @@ export interface ILLMOutput {
   emotional_valence?: -2 | -1 | 0 | 1 | 2;
   emotional_tone_key?: 'urgent_conflicted' | 'anxious' | 'fearful' | 'sad' | 'calm' | 'mixed' | 'neutral';
   summary: string;
+  evidence_claims?: {
+    contentPath: EvidenceClaimContentPath;
+    claimText: string;
+    supportRuleId?: string;
+  }[];
+  citation_contract_version?: 1;
+  claim_bindings?: EvidenceClaimBinding[];
+  citations?: {
+    index: number;
+    sourceType: 'academic_source';
+    sourceId: string;
+    title: string;
+    year?: number;
+    excerpt: string;
+    detail?: string;
+  }[];
   scientific_context_notes: {
     ruleId: string;
     note: string;
@@ -53,16 +73,28 @@ export interface ILLMOutput {
   }[];
   real_life_hypotheses: {
     ruleId?: string | null;
+    ruleIds?: string[];
     hypothesis: string;
+    localizedHypothesis?: { vi: string; en: string };
     evidenceFromDream: string[];
     confidence: number;
     needsUserConfirmation: boolean;
     followUpQuestion: string;
+    localizedFollowUpQuestion?: { vi: string; en: string };
     reasonForAsking?: string;
+    localizedReasonForAsking?: { vi: string; en: string };
     ifYesMeaning?: string;
+    localizedIfYesMeaning?: { vi: string; en: string };
     ifNoMeaning?: string;
+    localizedIfNoMeaning?: { vi: string; en: string };
     questionType?: 'past' | 'present' | 'future';
     verificationKey?: string;
+    validationSourceId?: string;
+    validationExactQuote?: string;
+    userFeedback?: 'yes' | 'no' | 'unsure' | null;
+    ruleScore?: number;
+    ruleVoteDelta?: number;
+    ruleScoreDelta?: number;
     questionBasis?: 'academic_rule' | 'dream_sequence' | 'sleep_context';
     questionDimension?: string;
     answerSemantics?: {
@@ -185,6 +217,23 @@ export function normalizeLLMOutputShape(data: any): any {
         ...baseItem,
         confidence: Math.min(1, Math.max(0, Number(item.confidence) || 0)),
         ...(sources ? { sources } : {}),
+      }];
+    })
+    : [];
+  normalized.evidence_claims = Array.isArray(data.evidence_claims)
+    ? data.evidence_claims.flatMap((item: any) => {
+      if (!item || typeof item !== 'object') return [];
+      const contentPath = String(item.contentPath || '');
+      const claimText = String(item.claimText || '').trim();
+      if (!/^core_analysis$|^interpretive_threads\.\d+\.reasoning$/u.test(contentPath)
+        || claimText.length < 20) {
+        return [];
+      }
+      const supportRuleId = String(item.supportRuleId || '').trim();
+      return [{
+        contentPath,
+        claimText,
+        ...(supportRuleId ? { supportRuleId } : {}),
       }];
     })
     : [];
@@ -530,28 +579,33 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 export async function generateStructuredJson<T>(
   prompt: string,
   abortSignal?: AbortSignal,
-  options: { temperature?: number; seed?: number } = {},
+  options: { temperature?: number; seed?: number; numPredict?: number; model?: string } = {},
 ): Promise<T> {
   const baseUrl = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
-  const model = process.env.OLLAMA_MODEL || 'qwen2.5:14b';
+  const model = options.model || process.env.OLLAMA_MODEL || 'qwen2.5:14b';
   const timeoutMs = parseInt(process.env.OLLAMA_ANALYSIS_TIMEOUT || '0', 10);
   const temperature = options.temperature ?? Number(process.env.OLLAMA_DREAM_TEMPERATURE || '0');
   const seed = options.seed ?? parseInt(process.env.OLLAMA_DREAM_SEED || '42', 10);
 
   try {
     const response = await fetchWithTimeout(
-      `${baseUrl}/api/generate`,
+      `${baseUrl}/api/chat`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model,
-          prompt,
+          messages: [{ role: 'user', content: prompt }],
           format: 'json',
           stream: false,
+          think: false,
+          keep_alive: '30m',
           options: {
             temperature: Number.isFinite(temperature) ? temperature : 0,
             seed: Number.isFinite(seed) ? seed : 42,
+            ...(Number.isFinite(options.numPredict)
+              ? { num_predict: options.numPredict }
+              : {}),
           },
         }),
       },
@@ -560,16 +614,17 @@ export async function generateStructuredJson<T>(
     );
 
     if (!response.ok) {
-      throw new OllamaServiceError(`Ollama generate HTTP error: Status ${response.status}`, 503);
+      throw new OllamaServiceError(`Ollama chat HTTP error: Status ${response.status}`, 503);
     }
 
-    const data = await response.json() as { response?: string };
-    if (!data || typeof data.response !== 'string') {
-      throw new OllamaServiceError('Invalid response shape from Ollama generate endpoint', 502);
+    const data = await response.json() as { message?: { content?: string } };
+    const content = data?.message?.content;
+    if (typeof content !== 'string') {
+      throw new OllamaServiceError('Invalid response shape from Ollama chat endpoint', 502);
     }
 
     try {
-      return JSON.parse(data.response) as T;
+      return JSON.parse(content) as T;
     } catch (parseErr: any) {
       logger.error('Failed to parse LLM response string as JSON', parseErr);
       throw new OllamaServiceError('Ollama response is not valid JSON', 502);
@@ -587,10 +642,40 @@ export async function generateStructuredJson<T>(
 /**
  * Generate structured analysis from the compacted context prompt.
  */
-export async function generateAnalysis(prompt: string, abortSignal?: AbortSignal): Promise<ILLMOutput> {
-  const parsedResult = normalizeLLMOutputShape(
-    await generateStructuredJson<Record<string, unknown>>(prompt, abortSignal),
-  );
+export async function generateAnalysis(
+  prompt: string,
+  abortSignal?: AbortSignal,
+  options: { numPredict?: number; model?: string } = {},
+): Promise<ILLMOutput> {
+  let rawResult: Record<string, unknown>;
+  try {
+    rawResult = await generateStructuredJson<Record<string, unknown>>(
+      prompt,
+      abortSignal,
+      options,
+    );
+  } catch (error) {
+    const fallbackModel = process.env.OLLAMA_FALLBACK_MODEL || 'qwen2.5:14b';
+    const requestedModel = options.model || process.env.OLLAMA_MODEL || 'qwen2.5:14b';
+    const canRetryWithFallback = error instanceof OllamaServiceError
+      && error.statusCode === 503
+      && requestedModel !== fallbackModel
+      && !abortSignal?.aborted;
+    if (!canRetryWithFallback) throw error;
+
+    logger.warn('Primary Ollama model failed; retrying the same analysis with fallback model.', {
+      requestedModel,
+      fallbackModel,
+      error: error.message,
+    });
+    rawResult = await generateStructuredJson<Record<string, unknown>>(
+      prompt,
+      abortSignal,
+      { ...options, model: fallbackModel },
+    );
+  }
+
+  const parsedResult = normalizeLLMOutputShape(rawResult);
   if (!validateLLMOutput(parsedResult)) {
     throw new OllamaServiceError('Ollama response JSON does not conform to required output schema', 502);
   }

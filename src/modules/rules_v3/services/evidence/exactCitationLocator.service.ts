@@ -36,14 +36,7 @@ function sha256(text: string): string {
   return crypto.createHash('sha256').update(text).digest('hex');
 }
 
-/**
- * Pure deterministic function to search, verify, and slice the proposed quote in a text string.
- * This function performs no database connections.
- * 
- * Note on exactness: Slicing only returns 'canonical_exact' (for both direct exact matches
- * and whitespace-normalized matches). Provenance-aware exactness tags ('source_exact' or 
- * 'extraction_derived') must be assigned by a future provenance-aware caller, not this locator.
- */
+// Finds one exact canonical quote without reading or writing the database.
 export function locateCitationInText(
   chunkId: string,
   chunkText: string,
@@ -144,9 +137,7 @@ export function locateCitationInText(
   };
 }
 
-/**
- * Thin production wrapper that loads AcademicChunk.text and delegates to locateCitationInText.
- */
+// Loads canonical chunk text before running the pure quote locator.
 export async function locateExactCitation(
   chunkId: string,
   proposedQuote: string

@@ -79,6 +79,9 @@ export async function startRuleV3FullExtraction(
       provider,
       replaceExisting: options.replaceExisting === true,
     });
+    await updateAttemptRun(prepared.runId, prepared.attemptId, {
+      currentStage: 'queued',
+    });
     drainRuleV3Queue();
   }
   return { runId: prepared.runId, reused: false, status: 'pending' };
@@ -219,5 +222,12 @@ export async function cancelRuleV3FullExtraction(runId: string): Promise<boolean
 
 export async function getRuleV3FullRun(runId: string) {
   if (!mongoose.Types.ObjectId.isValid(runId)) return null;
-  return AcademicRuleExtractionRunV3.findById(runId).lean();
+  const run = await AcademicRuleExtractionRunV3.findById(runId).lean();
+  if (!run) return null;
+  const queuedKeys = [...queuedRuns.keys()];
+  const queueIndex = queuedKeys.findIndex((key) => key.startsWith(`${runId}:`));
+  return {
+    ...run,
+    queuePosition: queueIndex >= 0 ? queueIndex + 1 : 0,
+  };
 }

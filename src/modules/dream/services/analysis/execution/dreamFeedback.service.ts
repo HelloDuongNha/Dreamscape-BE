@@ -125,25 +125,27 @@ export async function applyDreamHypothesisFeedback(input: ApplyDreamFeedbackInpu
   refreshedAnalysis.feedback_changed_paths = feedbackChanges.paths;
   refreshedAnalysis.feedback_changed_fragments = feedbackChanges.fragments;
 
-  dream.ai_result = refreshedAnalysis;
-  dream.markModified('ai_result');
-  if (dream.aiAnalysis) {
-    dream.aiAnalysis = refreshedAnalysis;
-    dream.markModified('aiAnalysis');
+  let ruleScoreUpdates;
+  try {
+    ruleScoreUpdates = await setRuleValidationFeedback({
+      userId: new Types.ObjectId(userId),
+      verificationKey: verificationKey || `${ruleId}:${matchedIndex}`,
+      origin: 'dream_analysis',
+      originId: dream._id as Types.ObjectId,
+      questionText,
+      answer,
+      directRuleIds: linkedRuleIds,
+      sourceId: String(matchedHypothesis.validationSourceId || '').trim() || undefined,
+      exactQuote: String(matchedHypothesis.validationExactQuote || '').trim() || undefined,
+    });
+  } catch (error: any) {
+    if (error?.message === 'validation_has_no_current_direct_argument') {
+      throw new DreamFeedbackError(
+        'Nguồn hoặc lập luận của câu hỏi này không còn hiệu lực. Hãy tải lại bài viết.',
+      );
+    }
+    throw error;
   }
-  await dream.save();
-
-  const ruleScoreUpdates = await setRuleValidationFeedback({
-    userId: new Types.ObjectId(userId),
-    verificationKey: verificationKey || `${ruleId}:${matchedIndex}`,
-    origin: 'dream_analysis',
-    originId: dream._id as Types.ObjectId,
-    questionText,
-    answer,
-    directRuleIds: linkedRuleIds,
-    sourceId: String(matchedHypothesis.validationSourceId || '').trim() || undefined,
-    exactQuote: String(matchedHypothesis.validationExactQuote || '').trim() || undefined,
-  });
   const scoreByRule = new Map(ruleScoreUpdates.map((item: any) => [String(item.ruleId), item]));
   refreshedAnalysis.real_life_hypotheses = (refreshedAnalysis.real_life_hypotheses || [])
     .map((item: any) => {

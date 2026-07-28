@@ -7,13 +7,7 @@ export interface SymbolQuery {
   keywordSet: Set<string>;
 }
 
-/**
- * Builds language-agnostic lexical boundaries for exact matching.
- *
- * Semantic retrieval embeds the original narrative, so this function must not
- * translate, classify, or discard words. Exact aliases belong to DreamSymbol
- * data (`symbol`, `variants`, `canonicalSymbol`) rather than source code.
- */
+// Keeps every language intact while preparing exact symbol-match boundaries.
 export function prepareSymbolQuery(narrative: string): SymbolQuery {
   const normalizedText = narrative
     .normalize('NFKC')

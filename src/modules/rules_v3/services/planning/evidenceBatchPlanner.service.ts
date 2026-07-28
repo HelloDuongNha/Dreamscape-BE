@@ -19,10 +19,7 @@ function positiveInteger(value: number | undefined, fallback: number): number {
   return Number.isInteger(value) && Number(value) > 0 ? Number(value) : fallback;
 }
 
-/**
- * Creates deterministic, bounded evidence batches without changing chunk text.
- * Exact citation offsets therefore remain relative to the persisted canonical chunk.
- */
+// Creates bounded batches while preserving canonical text and citation offsets.
 export function planEvidenceBatches(
   extractionPlan: DocumentExtractionPlan,
   chunks: EvidenceChunkInput[],

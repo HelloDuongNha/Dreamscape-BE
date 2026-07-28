@@ -159,13 +159,7 @@ export interface RuleV3ConceptCluster {
   relationshipKinds: RuleV3Relationship[];
 }
 
-/**
- * Atomic rules remain independently reviewable and scoreable. This graph
- * groups rules only for presentation and synthesis: equivalent/contradictory
- * links, scope tensions, or claims grounded in the same canonical paragraph.
- * Merely sharing a generic subject such as "dreaming" is not enough to merge
- * database records.
- */
+// Groups meaningful rule relationships for review without merging database records.
 export function buildRuleV3ConceptClusters(inputs: RuleV3ClusterInput[]): Map<string, RuleV3ConceptCluster> {
   const parent = new Map(inputs.map(item => [item.id, item.id]));
   const edges: Array<{ left: string; right: string; relationship: RuleV3Relationship }> = [];

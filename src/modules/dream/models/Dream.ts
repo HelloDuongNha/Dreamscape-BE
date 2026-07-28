@@ -45,7 +45,7 @@ export interface IDream extends Document {
   continuationMetadata?: Record<string, any> | null;
   analysisRun?: {
     runId: string;
-    trigger: 'initial' | 'retry' | 'dream_addition' | 'addition_retry' | 'content_edit' | 'addition_edit' | 'ai_enable';
+    trigger: 'initial' | 'retry' | 'dream_addition' | 'addition_retry' | 'content_edit' | 'addition_edit' | 'ai_enable' | 'citation_migration';
     startedAt: Date;
     previousStatus?: IDream['ai_status'] | null;
     targetAdditionSequences?: number[];

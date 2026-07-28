@@ -7,11 +7,7 @@ function normalize(value: unknown): string {
   return String(value || '').replace(/\s+/gu, ' ').trim();
 }
 
-/**
- * Validates model-authored reflections without inventing advice in backend
- * code. Content belongs to the evidence-constrained model contract; this
- * boundary only enforces shape, useful length, deduplication, and UI limits.
- */
+// Validates model-authored reflections without inventing advice in backend code.
 export function sanitizePracticalReflections(value: unknown): PracticalReflection[] {
   if (!Array.isArray(value)) return [];
   const unique = new Map<string, PracticalReflection>();

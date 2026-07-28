@@ -10,6 +10,7 @@ import { estimateDreamAnalysisSeconds } from './dreamAnalysisTiming.service';
 export async function restartDreamAnalysis(
   dream: IDream,
   ownerId: Types.ObjectId,
+  options: { trigger?: 'citation_migration' } = {},
 ): Promise<unknown> {
   const narrative = composeDreamNarrative(dream.content, dream.additions || []);
   const startedAt = new Date();
@@ -17,7 +18,8 @@ export async function restartDreamAnalysis(
   const targetAdditionSequences = (dream.additions || [])
     .filter(addition => addition.analysisState === 'unanalyzed' || addition.analysisState === 'pending')
     .map(addition => addition.sequence);
-  const trigger = targetAdditionSequences.length > 0 ? 'addition_retry' : 'retry';
+  const trigger = options.trigger
+    || (targetAdditionSequences.length > 0 ? 'addition_retry' : 'retry');
   const previousStatus = dream.ai_status;
   const previousAnalysisMetadata = dream.analysisMetadata
     ? { ...(dream.analysisMetadata as Record<string, unknown>) }

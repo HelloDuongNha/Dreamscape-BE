@@ -13,7 +13,7 @@ import {
   prepareContribution,
 } from './contributionApprovalPreparation.service';
 import { recordApproval } from './contributionStats.service';
-import { reconcileOracleEvidenceGapsForSources } from '../../../oracle/services/oracleEvidenceGap.service';
+import { reconcileOracleEvidenceGapsForSources } from '../../../oracle/services/evidence/oracleEvidenceReconciliation.service';
 import {
   startAutomaticRuleV3Extraction,
   type AutomaticRuleExtractionStart,
@@ -51,7 +51,7 @@ export async function approveSourceContribution(
     { ...prepared, contribution },
     reviewerId,
   );
-  await preserveApprovedTitle(academicSource, prepared.metadata.title);
+  await preserveApprovedTitle(academicSource, title || prepared.metadata.title);
   const ruleExtraction = await startRuleExtractionBestEffort(academicSource);
   await reconcileEvidenceGapsBestEffort(academicSource, contribution);
   return buildApprovalResult(contribution, academicSource, outcome, ruleExtraction);
