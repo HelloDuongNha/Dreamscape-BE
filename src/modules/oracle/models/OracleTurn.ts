@@ -24,6 +24,8 @@ export interface IOracleTurn extends Document {
     percent: number;
     provider?: string;
     modelName?: string;
+    includedMessages?: number;
+    omittedMessages?: number;
   };
   runTiming?: {
     startedAt: Date;
@@ -113,6 +115,8 @@ const OracleTurnSchema = new Schema<IOracleTurn>(
       percent: { type: Number, min: 0, max: 100 },
       provider: { type: String, maxlength: 40 },
       modelName: { type: String, maxlength: 120 },
+      includedMessages: { type: Number, min: 0 },
+      omittedMessages: { type: Number, min: 0 },
     },
     runTiming: {
       startedAt: Date,

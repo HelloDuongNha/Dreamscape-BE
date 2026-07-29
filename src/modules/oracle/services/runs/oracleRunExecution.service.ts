@@ -17,6 +17,10 @@ import {
   generateFallbackSuggestions,
   prioritizeOracleSuggestions,
 } from '../presentation/oracleSuggestion.service';
+import {
+  buildOracleCreativeCanonPrompt,
+  repairOracleCreativeAnswerIfNeeded,
+} from '../presentation/oracleCreativeContinuation.service';
 import { loadOracleConversation } from './oracleConversation.service';
 import { appendOracleRunEvent } from './oracleRunEvent.service';
 import { completeOracleRun, failOracleRun } from '../persistence/oracleRunFinalization.service';
@@ -28,6 +32,7 @@ import {
   type OracleExecutionMode,
 } from '../providers/oraclePrompt.service';
 import { resolveOracleExecutionMode } from './oracleIntentRouting.service';
+import { compactOracleContext } from './oracleContextCompaction.service';
 import { estimateOracleRunDuration } from './oracleRunTiming.service';
 import {
   sanitizeOracleUnresolvedMarkers,
@@ -71,6 +76,8 @@ export async function executeOracleRun(runId: Types.ObjectId): Promise<void> {
       provider: generation.provider,
       modelName: generation.model,
       preparationStartedAt: generation.preparationStartedAt,
+      includedMessages: generation.includedMessages,
+      omittedMessages: generation.omittedMessages,
       expectedMinMs: generation.estimate.minMs,
       expectedMaxMs: generation.estimate.maxMs,
     });
@@ -145,9 +152,23 @@ async function prepareRunContext(run: IOracleRun, signal: AbortSignal) {
   const model = adapter.modelOverride || (adapter.name === 'openai_compatible'
     ? String(process.env.ORACLE_EXTERNAL_MODEL || resolveOracleModel(mode))
     : resolveOracleModel(mode));
+  const contextWindow = Math.max(4096, Number(process.env.ORACLE_CONTEXT_WINDOW) || 32768);
+  const maxOutputTokens = mode === 'chat' ? 600 : 1400;
+  const systemPrompt = [
+    buildOracleSystemPrompt(mode),
+    mode === 'creative_continuation' ? buildOracleCreativeCanonPrompt(messages) : '',
+  ].filter(Boolean).join('\n\n');
+  const compactedContext = compactOracleContext({
+    messages,
+    contextWindow,
+    systemPrompt,
+    groundingPrompt: grounding.promptContext,
+    maxOutputTokens,
+  });
   const workload = {
     inputChars: latestUserText.length,
-    contextChars: messages.reduce((total, message) => total + message.content.length, 0),
+    contextChars: compactedContext.messages
+      .reduce((total, message) => total + message.content.length, 0),
     retrievalChars: grounding.promptContext.length,
     citationCount: grounding.citations.length,
   };
@@ -167,7 +188,7 @@ async function prepareRunContext(run: IOracleRun, signal: AbortSignal) {
     },
   );
   return {
-    messages,
+    messages: compactedContext.messages,
     mode,
     latestUserText,
     groundingText,
@@ -175,7 +196,11 @@ async function prepareRunContext(run: IOracleRun, signal: AbortSignal) {
     adapter,
     model,
     estimate,
-    routingPromptTokens: routing.promptTokens,
+    contextWindow,
+    maxOutputTokens,
+    systemPrompt,
+    includedMessages: compactedContext.includedMessages,
+    omittedMessages: compactedContext.omittedMessages,
   };
 }
 
@@ -183,7 +208,7 @@ async function generateOracleAnswer(input: {
   run: IOracleRun;
   runId: Types.ObjectId;
   controller: AbortController;
-  messages: Awaited<ReturnType<typeof loadOracleConversation>>;
+  messages: ReturnType<typeof compactOracleContext>['messages'];
   mode: OracleExecutionMode;
   latestUserText: string;
   groundingText: string;
@@ -195,9 +220,12 @@ async function generateOracleAnswer(input: {
   adapter: Awaited<ReturnType<typeof resolveOracleModelAdapter>>;
   model: string;
   estimate: { minMs: number; maxMs: number };
-  routingPromptTokens: number;
+  contextWindow: number;
+  maxOutputTokens: number;
+  systemPrompt: string;
+  includedMessages: number;
+  omittedMessages: number;
 }) {
-  const contextWindow = Math.max(4096, Number(process.env.ORACLE_CONTEXT_WINDOW) || 32768);
   let rawAnswer = '';
   let preparationStartedAt: Date | undefined;
   const onText = async (text: string) => {
@@ -211,7 +239,7 @@ async function generateOracleAnswer(input: {
     model: input.model,
     signal: input.controller.signal,
     messages: [
-      { role: 'system', content: buildOracleSystemPrompt(input.mode) },
+      { role: 'system', content: input.systemPrompt },
       {
         role: 'system',
         content: `Runtime metadata: provider=${input.adapter.name}; model=${input.model}. Use this only when the user asks about the active provider or model.`,
@@ -219,16 +247,36 @@ async function generateOracleAnswer(input: {
       ...(input.grounding.promptContext
         ? [{ role: 'system' as const, content: input.grounding.promptContext }]
         : []),
+      ...(input.omittedMessages
+        ? [{
+          role: 'system' as const,
+          content: `${input.omittedMessages} older conversation messages were omitted to keep this request within the model context window. Do not claim to remember their details.`,
+        }]
+        : []),
       ...input.messages,
     ],
-    contextWindow,
-    maxOutputTokens: input.mode === 'chat' ? 600 : 1400,
+    contextWindow: input.contextWindow,
+    maxOutputTokens: input.maxOutputTokens,
     onText,
   });
   const finalized = finalizeModelAnswer(rawAnswer);
   if (!finalized.answer.trim()) throw new Error('oracle_model_empty_answer');
 
   let answer = finalizeGroundedAnswer(finalized.answer, input);
+  let repairPromptTokens = 0;
+  if (input.mode === 'creative_continuation') {
+    const repaired = await repairOracleCreativeAnswerIfNeeded({
+      answer,
+      adapter: input.adapter,
+      model: input.model,
+      signal: input.controller.signal,
+      contextWindow: input.contextWindow,
+      maxOutputTokens: input.maxOutputTokens,
+      vietnamese: isVietnameseText(input.latestUserText),
+    });
+    answer = repaired.answer;
+    repairPromptTokens = repaired.promptTokens;
+  }
   const generatedSuggestions = finalized.suggestions.length
     ? finalized.suggestions
     : await generateFallbackSuggestions({
@@ -259,12 +307,14 @@ async function generateOracleAnswer(input: {
     answer,
     citations: compacted.citations,
     suggestedPrompts,
-    promptTokens: modelResult.promptTokens + input.routingPromptTokens,
-    contextWindow,
+    promptTokens: modelResult.promptTokens + repairPromptTokens,
+    contextWindow: input.contextWindow,
     provider: input.adapter.name,
     model: input.model,
     estimate: input.estimate,
     preparationStartedAt,
+    includedMessages: input.includedMessages,
+    omittedMessages: input.omittedMessages,
   };
 }
 

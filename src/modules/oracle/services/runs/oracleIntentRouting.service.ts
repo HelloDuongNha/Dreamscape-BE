@@ -15,7 +15,6 @@ interface OracleIntentRoutingInput {
 
 interface OracleIntentRoutingResult {
   mode: OracleExecutionMode;
-  promptTokens: number;
 }
 
 // Uses the model only when an older dream could otherwise contaminate a new conversational turn.
@@ -24,7 +23,7 @@ export async function resolveOracleExecutionMode(
 ): Promise<OracleIntentRoutingResult> {
   const immediateMode = inferOracleMode(input.messages);
   if (immediateMode !== 'chat' || !hasEarlierDreamContext(input.messages)) {
-    return { mode: immediateMode, promptTokens: 0 };
+    return { mode: immediateMode };
   }
 
   try {
@@ -34,7 +33,7 @@ export async function resolveOracleExecutionMode(
     logger.warn('Oracle intent routing failed; using normal conversation mode.', {
       error: String(error),
     });
-    return { mode: 'chat', promptTokens: 0 };
+    return { mode: 'chat' };
   }
 }
 
@@ -44,7 +43,7 @@ async function classifyContextDependentTurn(
   for (const responseFormat of ['json', undefined] as const) {
     let raw = '';
     try {
-      const result = await input.adapter.generate({
+      await input.adapter.generate({
         model: input.model,
         signal: input.signal,
         contextWindow: 4096,
@@ -69,15 +68,12 @@ async function classifyContextDependentTurn(
         ],
         onText: async (text) => { raw += text; },
       });
-      return {
-        mode: parseMode(raw),
-        promptTokens: result.promptTokens,
-      };
+      return { mode: parseMode(raw) };
     } catch (error) {
       if (input.signal.aborted || !responseFormat) throw error;
     }
   }
-  return { mode: 'chat', promptTokens: 0 };
+  return { mode: 'chat' };
 }
 
 function hasEarlierDreamContext(messages: OracleConversationMessage[]): boolean {

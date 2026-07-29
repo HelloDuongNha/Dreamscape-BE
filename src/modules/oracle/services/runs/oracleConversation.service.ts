@@ -23,15 +23,15 @@ export async function loadOracleConversation(
   const byId = new Map(turns.map((turn) => [String(turn._id), turn]));
   const ancestry: typeof turns = [];
   let current = byId.get(String(leafTurnId));
-  while (current && ancestry.length < 40) {
+  while (current && ancestry.length < 80) {
     ancestry.push(current);
     current = current.parentTurnId ? byId.get(String(current.parentTurnId)) : undefined;
   }
   const selectedTurns = ancestry.length > 1
-    ? ancestry.reverse().slice(-20)
+    ? ancestry.reverse().slice(-80)
     : turns.reverse()
       .filter((turn) => turn.sequence <= (ancestry[0]?.sequence || Number.MAX_SAFE_INTEGER))
-      .slice(-20);
+      .slice(-80);
   return selectedTurns
     .map((turn) => ({
       role: turn.role as 'user' | 'assistant',

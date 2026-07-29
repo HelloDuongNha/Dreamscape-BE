@@ -39,16 +39,18 @@ export async function generateFallbackSuggestions(input: {
   answer: string;
   languageHint: string;
 }): Promise<string[]> {
+  let bestSuggestions: string[] = [];
   for (const responseFormat of ['json', undefined] as const) {
     try {
       const raw = await requestSuggestions(input, responseFormat);
       const suggestions = parseSuggestions(raw);
-      if (suggestions.length) return suggestions;
+      if (suggestions.length >= 2) return suggestions;
+      if (suggestions.length > bestSuggestions.length) bestSuggestions = suggestions;
     } catch {
       // Retry plain-text mode because some compatible providers reject response_format.
     }
   }
-  return [];
+  return [...new Set([...bestSuggestions, ...defaultUserSuggestions(input)])].slice(0, 4);
 }
 
 function extractFinalQuestion(answer: string): string | null {
@@ -160,6 +162,9 @@ async function requestSuggestions(
         content: [
           `Write in ${input.languageHint}.`,
           'Generate 2 to 4 concrete one-click follow-up messages that this user would genuinely want to send next.',
+          'Write every item as the USER speaking to Oracle, never as Oracle speaking to or questioning the user.',
+          'Prefer a direct request such as "Explain the other meanings with examples" or a first-person reply such as "I am not sure yet."',
+          'Do not write offers such as "Would you like me to...", advice beginning with "If you want...", or clarification questions aimed at the user.',
           'Every item must build on a specific detail in the supplied exchange, be useful or intriguing, and differ in purpose.',
           'Never ask the user to repeat information already supplied.',
           'Never invent an experience, decision, preference, feeling, event, or biographical fact on the user’s behalf.',
@@ -187,6 +192,60 @@ function parseSuggestions(raw: string): string[] {
   return [...new Set(suggestions
     .filter((item): item is string => typeof item === 'string')
     .map((item) => item.replace(/\s+/gu, ' ').trim())
-    .filter((item) => item.length >= 2 && item.length <= 110))]
+    .filter((item) => item.length >= 2 && item.length <= 110)
+    .filter(isUserAuthoredSuggestion))]
     .slice(0, 4);
+}
+
+// Rejects suggestions written in Oracle's voice instead of the user's voice.
+function isUserAuthoredSuggestion(suggestion: string): boolean {
+  const assistantVoice = [
+    /(?:^|[.!?]\s*)bạn\s+có\s+muốn\s+(?:mình|tôi)\b/iu,
+    /(?:^|[.!?]\s*)bạn\s+đang\s+(?:muốn|tìm|hỏi|quan\s+tâm|đề\s+cập)\b[\s\S]*\?$/iu,
+    /^nếu\s+bạn\s+(?:muốn|thích|cần|quan\s+tâm)\b/iu,
+    /^tôi\s+(?:chưa|không)\s+rõ(?:\s|[,.:;!?])[\s\S]*bạn(?:\s|[,.:;!?]|$)/iu,
+    /(?:^|[.!?]\s*)would\s+you\s+like\s+me\s+to\b/iu,
+    /(?:^|[.!?]\s*)are\s+you\s+(?:trying|looking|asking|interested)\b[\s\S]*\?$/iu,
+    /^if\s+you\s+(?:want|like|need|are\s+interested)\b/iu,
+    /^i(?:'m|\s+am)\s+not\s+sure\b[\s\S]*\byou\b/iu,
+  ];
+  return !assistantVoice.some((pattern) => pattern.test(suggestion));
+}
+
+function defaultUserSuggestions(
+  input: Parameters<typeof generateFallbackSuggestions>[0],
+): string[] {
+  const vietnamese = /[ăâđêôơưà-ỹ]/iu.test(input.userText)
+    || input.languageHint.toLocaleLowerCase().includes('vietnamese');
+  const definitionTarget = input.userText
+    .match(/^(.{1,60}?)\s+(?:là|nghĩa\s+là)\s+gì\s*[?.!]*$/iu)?.[1]
+    ?.trim();
+  if (vietnamese && definitionTarget) {
+    return [
+      `Giải thích các nghĩa phổ biến của “${definitionTarget}” và cho ví dụ.`,
+      `“${definitionTarget}” có nghĩa gì trong tiếng lóng hoặc trên Internet?`,
+      `So sánh nghĩa của “${definitionTarget}” trong các ngữ cảnh khác nhau.`,
+    ];
+  }
+  const englishDefinitionTarget = input.userText
+    .match(/^what\s+(?:does|is)\s+(.{1,60}?)(?:\s+mean)?\s*[?.!]*$/iu)?.[1]
+    ?.trim();
+  if (!vietnamese && englishDefinitionTarget) {
+    return [
+      `Explain the common meanings of “${englishDefinitionTarget}” with examples.`,
+      `What does “${englishDefinitionTarget}” mean in Internet slang?`,
+      `Compare how “${englishDefinitionTarget}” is used in different contexts.`,
+    ];
+  }
+  return vietnamese
+    ? [
+      'Giải thích rõ hơn ý chính vừa nêu.',
+      'Cho tôi một ví dụ cụ thể.',
+      'Có cách hiểu nào khác không?',
+    ]
+    : [
+      'Explain the main point more clearly.',
+      'Give me a concrete example.',
+      'Are there other ways to understand this?',
+    ];
 }

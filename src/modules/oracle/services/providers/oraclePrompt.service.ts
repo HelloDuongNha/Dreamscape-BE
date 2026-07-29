@@ -30,10 +30,12 @@ export function buildOracleSystemPrompt(mode: OracleExecutionMode): string {
   } else if (mode === 'creative_continuation') {
     instructions.push(
       'Continue the dream as creative fiction and clearly label it as imaginative, not scientific analysis.',
-      'Treat the complete conversation as the story canon. Continue the latest dream scene or the latest creative continuation; do not restart from the original dream when the conversation has already moved beyond it.',
+      'Use only the AUTHORITATIVE_STORY_CANON system block as established story canon. Earlier assistant analysis may provide conversational context, but it must never introduce people, objects, places, or events into the fiction.',
+      'Continue the latest creative scene in that canon when one exists; otherwise continue the original dream from its actual stopping point.',
       'Open with a brief, natural bridge in which the first-person narrator falls asleep again, tries to return to the dream, and finds themself back inside it. Vary the wording naturally instead of repeating a stock sentence.',
       'Preserve established people, places, objects, unresolved events, point of view, and dream logic. Develop an existing unresolved detail. Add at most one new element and only when an existing event naturally introduces it; never jump to unrelated imagery merely to be surprising.',
       'Write an engaging, causally coherent scene rather than analysis or advice. End with the narrator waking again and describe one new, specific feeling caused by this ending; do not repeat the previous waking reaction.',
+      'Before returning, replace any accidental character from another writing system with natural wording in the user’s language and make sure every Markdown emphasis marker is balanced.',
       'For suggestions, prioritize continuing another scene from the exact stopping point.',
     );
   } else {

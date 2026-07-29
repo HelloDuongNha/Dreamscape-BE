@@ -19,6 +19,8 @@ interface CompleteOracleRunInput {
   preparationStartedAt?: Date;
   expectedMinMs: number;
   expectedMaxMs: number;
+  includedMessages: number;
+  omittedMessages: number;
 }
 
 export async function completeOracleRun(input: CompleteOracleRunInput): Promise<void> {
@@ -56,6 +58,8 @@ function buildContextUsage(input: CompleteOracleRunInput) {
     percent: Math.min(100, Math.round((input.promptTokens / input.contextWindow) * 100)),
     provider: input.provider,
     modelName: input.modelName,
+    includedMessages: input.includedMessages,
+    omittedMessages: input.omittedMessages,
   };
 }
 
