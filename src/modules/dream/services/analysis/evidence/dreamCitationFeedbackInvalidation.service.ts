@@ -1,6 +1,6 @@
 import type {
   OracleSourceInvalidationPlan,
-} from './oracleSourceInvalidationPlan.service';
+} from '../../../../oracle/services/lifecycle/oracleSourceInvalidationPlan.service';
 
 // Removes feedback for deleted questions while preserving another source for the same rule.
 export function filterDreamFeedbackAfterSourceInvalidation(

@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import test, { after, before, beforeEach } from 'node:test';
+import jwt from 'jsonwebtoken';
 import mongoose, { Types } from 'mongoose';
+import { io as createSocketClient, type Socket as ClientSocket } from 'socket.io-client';
+import app from '../../src/app';
+import { initSocket } from '../../src/config/socket';
 import Conversation from '../../src/modules/messaging/models/Conversation';
 import Message from '../../src/modules/messaging/models/Message';
 import User from '../../src/modules/identity/models/User';
@@ -25,10 +30,21 @@ if (databaseConfigured) {
   process.env.MONGODB_TEST_URI = messagingDatabaseUri.toString();
 }
 
+let server: http.Server;
+let socketServer: ReturnType<typeof initSocket>;
+let baseUrl = '';
+
 before(async () => {
   if (!databaseConfigured) return;
   configureTestKeys();
+  process.env.JWT_SECRET = 'messaging-integration-jwt-secret';
   await connectTestDatabase();
+  server = http.createServer(app);
+  socketServer = initSocket(server);
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Messaging test server did not bind.');
+  baseUrl = `http://127.0.0.1:${address.port}`;
 });
 
 beforeEach(async () => {
@@ -47,6 +63,12 @@ after(async () => {
     Conversation.deleteMany({}),
     Message.deleteMany({}),
   ]);
+  await new Promise<void>(resolve => socketServer.close(() => resolve()));
+  if (server.listening) {
+    await new Promise<void>((resolve, reject) => {
+      server.close(error => error ? reject(error) : resolve());
+    });
+  }
   await disconnectTestDatabase();
 });
 
@@ -189,6 +211,98 @@ test('migration is dry-run safe, idempotent, verifiable, and explicitly reversib
   assert.equal(rawMessage?.ciphertext, undefined);
 });
 
+test('HTTP history decrypts only after conversation membership is verified', { skip: !databaseConfigured }, async () => {
+  const fixture = await createTransportFixture();
+  const secretText = 'HTTP-only participant message';
+  await persistEncryptedMessage({
+    conversationId: fixture.conversation._id as Types.ObjectId,
+    senderId: fixture.sender._id as Types.ObjectId,
+    content: secretText,
+  });
+
+  const participantResponse = await requestJson(
+    `/api/conversations/messages/${fixture.conversation._id}`,
+    tokenFor(fixture.recipient._id, fixture.recipientSessionId),
+  );
+  assert.equal(participantResponse.status, 200);
+  assert.equal(participantResponse.body.data.length, 1);
+  assert.equal(participantResponse.body.data[0].content, secretText);
+
+  const outsiderResponse = await requestJson(
+    `/api/conversations/messages/${fixture.conversation._id}`,
+    tokenFor(fixture.outsider._id, fixture.outsiderSessionId),
+  );
+  assert.equal(outsiderResponse.status, 403);
+  assert.equal(outsiderResponse.body.data, undefined);
+});
+
+test('Socket.IO handshake, send, delivery and seen events preserve authorization and ciphertext', { skip: !databaseConfigured }, async () => {
+  const fixture = await createTransportFixture();
+  const clients: ClientSocket[] = [];
+  const secretText = 'Socket transport private message';
+
+  try {
+    const rejected = createSocketClient(baseUrl, {
+      auth: { token: 'invalid-token' },
+      autoConnect: false,
+      transports: ['websocket'],
+    });
+    clients.push(rejected);
+    const rejectedError = waitForEvent<Error>(rejected, 'connect_error');
+    rejected.connect();
+    assert.match((await rejectedError).message, /Unauthorized/);
+
+    const sender = await connectSocket(
+      tokenFor(fixture.sender._id, fixture.senderSessionId),
+    );
+    const recipient = await connectSocket(
+      tokenFor(fixture.recipient._id, fixture.recipientSessionId),
+    );
+    const outsider = await connectSocket(
+      tokenFor(fixture.outsider._id, fixture.outsiderSessionId),
+    );
+    clients.push(sender, recipient, outsider);
+
+    const deniedJoin = waitForEvent<{ code: string }>(outsider, 'error_message');
+    outsider.emit('join_room', { conversationId: String(fixture.conversation._id) });
+    assert.equal((await deniedJoin).code, 'conversation_access_denied');
+
+    const senderMessage = waitForEvent<any>(sender, 'receive_message');
+    const recipientMessage = waitForEvent<any>(recipient, 'receive_message');
+    sender.emit('send_message', {
+      conversationId: String(fixture.conversation._id),
+      content: secretText,
+      tempId: 'transport-temp-id',
+    });
+
+    const [senderPayload, recipientPayload] = await Promise.all([
+      senderMessage,
+      recipientMessage,
+    ]);
+    assert.equal(senderPayload.content, secretText);
+    assert.equal(senderPayload.tempId, 'transport-temp-id');
+    assert.equal(recipientPayload.content, secretText);
+    assert.equal(recipientPayload.tempId, undefined);
+
+    const raw = await mongoose.connection.collection('messages').findOne({
+      _id: new Types.ObjectId(String(senderPayload._id)),
+    });
+    assert.equal(raw?.content, undefined);
+    assert.notEqual(raw?.ciphertext, secretText);
+
+    const delivered = waitForEvent<any>(sender, 'message_status_updated');
+    recipient.emit('message_delivered', { messageId: String(senderPayload._id) });
+    assert.equal((await delivered).status, 'delivered');
+
+    const seen = waitForEvent<any>(sender, 'message_status_updated');
+    recipient.emit('mark_as_seen', { conversationId: String(fixture.conversation._id) });
+    assert.equal((await seen).status, 'seen');
+    assert.equal((await Message.findById(senderPayload._id))!.status, 'seen');
+  } finally {
+    clients.forEach(client => client.disconnect());
+  }
+});
+
 async function createConversationFixture() {
   const sender = await User.create({
     username: '@message_sender',
@@ -208,6 +322,105 @@ async function createConversationFixture() {
     updated_at: new Date(),
   });
   return { sender, recipient, conversation };
+}
+
+async function createTransportFixture() {
+  const senderSessionId = new Types.ObjectId();
+  const recipientSessionId = new Types.ObjectId();
+  const outsiderSessionId = new Types.ObjectId();
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const [sender, recipient, outsider] = await Promise.all([
+    User.create({
+      username: '@transport_sender',
+      display_name: 'Transport Sender',
+      email: 'transport-sender@example.test',
+      password: 'MessagePass9',
+      sessions: [{ _id: senderSessionId, authenticatedAt: now, lastActive: now }],
+      loginHistory: [today],
+    }),
+    User.create({
+      username: '@transport_recipient',
+      display_name: 'Transport Recipient',
+      email: 'transport-recipient@example.test',
+      password: 'MessagePass9',
+      sessions: [{ _id: recipientSessionId, authenticatedAt: now, lastActive: now }],
+      loginHistory: [today],
+    }),
+    User.create({
+      username: '@transport_outsider',
+      display_name: 'Transport Outsider',
+      email: 'transport-outsider@example.test',
+      password: 'MessagePass9',
+      sessions: [{ _id: outsiderSessionId, authenticatedAt: now, lastActive: now }],
+      loginHistory: [today],
+    }),
+  ]);
+  const conversation = await Conversation.create({
+    participant_ids: [sender._id, recipient._id],
+    last_message: '',
+    updated_at: now,
+  });
+  return {
+    sender,
+    recipient,
+    outsider,
+    conversation,
+    senderSessionId,
+    recipientSessionId,
+    outsiderSessionId,
+  };
+}
+
+function tokenFor(userId: unknown, sessionId: Types.ObjectId): string {
+  return jwt.sign(
+    { id: String(userId), sessionId: String(sessionId) },
+    process.env.JWT_SECRET!,
+    { expiresIn: '5m' },
+  );
+}
+
+async function requestJson(
+  path: string,
+  token: string,
+): Promise<{ status: number; body: any }> {
+  const response = await fetch(`${baseUrl}${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return {
+    status: response.status,
+    body: await response.json(),
+  };
+}
+
+async function connectSocket(token: string): Promise<ClientSocket> {
+  const client = createSocketClient(baseUrl, {
+    auth: { token },
+    autoConnect: false,
+    transports: ['websocket'],
+  });
+  const connected = waitForEvent<void>(client, 'connect');
+  client.connect();
+  await connected;
+  return client;
+}
+
+function waitForEvent<T>(
+  socket: ClientSocket,
+  event: string,
+  timeoutMs = 3_000,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.off(event, onEvent);
+      reject(new Error(`Timed out waiting for Socket.IO event: ${event}`));
+    }, timeoutMs);
+    const onEvent = (value: T) => {
+      clearTimeout(timer);
+      resolve(value);
+    };
+    socket.once(event, onEvent);
+  });
 }
 
 function configureTestKeys(): void {

@@ -3,7 +3,7 @@ import { logger } from '../../../../../infrastructure/logger';
 import { sanitizePracticalReflections } from '../assembly/practicalReflection.service';
 import {
   appendDreamVerificationQuestion,
-} from '../../../../oracle/services/evidence/oracleEvidenceDreamQuestion.service';
+} from '../evidence/dreamCitationQuestion.service';
 import {
   buildGroundedDreamTitle,
   buildGroundedMotifExplanation,
@@ -193,15 +193,13 @@ function groundQuestionsAndProse(analysis: ILLMOutput, context: OutputContext): 
   }
 }
 
-// Uses the same rule-backed question contract as Oracle, one question per cited source.
+// Uses the same rule-backed question contract as Oracle, one question per rule/excerpt.
 function buildAcademicVerificationQuestions(context: OutputContext): any[] {
   const result = { real_life_hypotheses: [] as any[] };
-  const usedSourceIds = new Set<string>();
   for (const rule of context.matchedRules) {
     if (result.real_life_hypotheses.length >= 4) break;
     const ruleId = String(rule.ruleId || rule._id || '');
-    const evidence = (context.validEvidenceMap.get(ruleId) || [])
-      .find(item => !usedSourceIds.has(item.sourceId));
+    const evidence = (context.validEvidenceMap.get(ruleId) || [])[0];
     if (!evidence) continue;
     const source = (context.validSourcesMap.get(ruleId) || [])
       .find(item => String(item.sourceId || '') === evidence.sourceId);
@@ -221,7 +219,6 @@ function buildAcademicVerificationQuestions(context: OutputContext): any[] {
       evidence.sourceId,
       [findRuleNarrativeEvidence(rule, context.dreamNarrative)],
     );
-    usedSourceIds.add(evidence.sourceId);
   }
   return result.real_life_hypotheses;
 }

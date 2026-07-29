@@ -6,13 +6,13 @@ import { loadOracleEvidenceUsageExcerpts } from './oracleEvidenceUsage.service';
 import {
   canonicalizeOracleEvidenceClaim,
   isResearchableOracleEvidenceClaim,
-} from './oracleEvidenceClaim.service';
+} from '../../../../shared/evidence/evidenceClaim';
 import { localizeOracleEvidenceClaim } from './oracleEvidenceLocalization.service';
 import { pruneNonResearchableOracleEvidenceGaps } from './oracleEvidenceMaintenance.service';
 import {
   evidenceGapRuleSimilarity,
   oracleEvidenceClaimClusterKey,
-} from './oracleEvidenceMatching.service';
+} from '../../../../shared/evidence/evidenceClaimMatching';
 import { pruneOrphanedEvidenceOccurrences } from './oracleEvidenceLifecycle.service';
 
 export async function listOracleEvidenceGapRecords(input: {

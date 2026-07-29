@@ -4,11 +4,11 @@ import {
   writeEvidenceClaimMarker,
   type EvidenceClaimBinding,
   type EvidenceSourceIdentity,
-} from '../../../../shared/evidence/citationClaim';
-import { invalidateOracleCitationMarker } from '../evidence/oracleEvidenceClaim.service';
+} from '../../../../../shared/evidence/citationClaim';
+import { invalidateOracleCitationMarker } from '../../../../../shared/evidence/evidenceClaim';
 import type {
   OracleSourceInvalidationPlan,
-} from './oracleSourceInvalidationPlan.service';
+} from '../../../../oracle/services/lifecycle/oracleSourceInvalidationPlan.service';
 
 // Reopens only claims and questions tied to the removed source.
 export function invalidateDreamAnalysis(

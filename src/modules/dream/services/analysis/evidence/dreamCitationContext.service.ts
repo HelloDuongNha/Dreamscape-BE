@@ -1,4 +1,6 @@
-import type { EvidenceGapRuleInput } from './oracleEvidenceRuleSupport.service';
+import type {
+  EvidenceGapRuleInput,
+} from '../../../../oracle/services/evidence/oracleEvidenceRuleSupport.service';
 
 type RuleSupport = {
   source: any;

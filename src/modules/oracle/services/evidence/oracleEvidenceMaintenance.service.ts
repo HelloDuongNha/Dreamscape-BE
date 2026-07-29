@@ -5,8 +5,8 @@ import {
   cleanOracleEvidenceClaim,
   isResearchableOracleEvidenceClaim,
   normalizeOracleEvidenceText,
-} from './oracleEvidenceClaim.service';
-import { oracleEvidenceClaimClusterKey } from './oracleEvidenceMatching.service';
+} from '../../../../shared/evidence/evidenceClaim';
+import { oracleEvidenceClaimClusterKey } from '../../../../shared/evidence/evidenceClaimMatching';
 
 export async function pruneNonResearchableOracleEvidenceGaps(): Promise<void> {
   const rows = await OracleEvidenceGap.find({})

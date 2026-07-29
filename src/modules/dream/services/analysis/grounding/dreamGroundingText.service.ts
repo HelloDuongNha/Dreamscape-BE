@@ -26,12 +26,6 @@ export type DreamEmotionToneKey =
 
 export type ContextualTone = 'threatening' | 'reassuring' | 'ambivalent' | 'neutral';
 
-export function resolveQuestionRuleIds(hypothesis: any): string[] {
-  return [...new Set<string>((hypothesis?.ruleIds || [hypothesis?.ruleId])
-    .map((id: unknown) => String(id || '').trim())
-    .filter(Boolean))];
-}
-
 export function deriveDreamEmotionTone(_narrative: string): {
   key: DreamEmotionToneKey;
   label: string;

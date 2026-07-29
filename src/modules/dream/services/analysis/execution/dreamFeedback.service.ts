@@ -1,12 +1,14 @@
 import { Types } from 'mongoose';
 import { setRuleValidationFeedback } from '../../../../rules_v3/services/evidence/ruleV3ValidationScore.service';
 import {
+  resolveEvidenceQuestionRuleIds,
+} from '../../../../../shared/evidence/evidenceQuestion';
+import {
   buildFeedbackChangeSet,
   buildFeedbackConclusion,
   buildFeedbackRevision,
   enrichScientificNotesForResponse,
   reconcileAlternateQuestionAfterFeedback,
-  resolveQuestionRuleIds,
 } from '../grounding/dreamAnalysisGrounding.service';
 import { syncDreamSymbolObservations } from './dreamSymbolObservationSync.service';
 
@@ -49,7 +51,7 @@ export async function applyDreamHypothesisFeedback(input: ApplyDreamFeedbackInpu
 
   const isClearingAnswer = answer === null;
   const questionText = matchedHypothesis.followUpQuestion;
-  const linkedRuleIds = resolveQuestionRuleIds(matchedHypothesis);
+  const linkedRuleIds = resolveEvidenceQuestionRuleIds(matchedHypothesis);
   const ruleId = linkedRuleIds[0];
   if (!ruleId) {
     throw new DreamFeedbackError(

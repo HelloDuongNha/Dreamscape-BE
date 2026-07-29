@@ -1,4 +1,4 @@
-import Dream from '../../../dream/models/Dream';
+import Dream from '../../../models/Dream';
 import {
   createEvidenceClaimId,
   evidenceClaimContentPaths,
@@ -7,30 +7,30 @@ import {
   writeEvidenceClaimMarker,
   type EvidenceClaimBinding,
   type EvidenceClaimContentPath,
-} from '../../../../shared/evidence/citationClaim';
-import { cleanOracleEvidenceClaim } from './oracleEvidenceClaim.service';
-import { oracleEvidenceClaimClusterKey } from './oracleEvidenceMatching.service';
+} from '../../../../../shared/evidence/citationClaim';
+import { cleanOracleEvidenceClaim } from '../../../../../shared/evidence/evidenceClaim';
+import { oracleEvidenceClaimClusterKey } from '../../../../../shared/evidence/evidenceClaimMatching';
 import {
   loadRuleEvidenceSupport,
   type EvidenceGapRuleInput,
-} from './oracleEvidenceRuleSupport.service';
+} from '../../../../oracle/services/evidence/oracleEvidenceRuleSupport.service';
 import {
   ORACLE_CITATION_QUESTION_VERSION,
-} from '../presentation/oracleRulePresentation.service';
+} from '../../../../oracle/services/presentation/oracleRulePresentation.service';
 import {
   appendDreamVerificationQuestion,
-} from './oracleEvidenceDreamQuestion.service';
+} from './dreamCitationQuestion.service';
 import {
   addResolvedEvidenceToDreamContext,
-} from './oracleEvidenceDreamContext.service';
+} from './dreamCitationContext.service';
 import {
   emitDreamCitationStateChanged,
-} from './oracleEvidenceDreamNotification.service';
+} from './dreamCitationNotification.service';
 import {
   appendDreamCitation,
   appendDreamScientificNote,
   collectDreamCitationRecords,
-} from './oracleEvidenceDreamPresentation.service';
+} from './dreamCitationPresentation.service';
 
 export async function resolveEvidenceGapInDreamPosts(
   gap: {

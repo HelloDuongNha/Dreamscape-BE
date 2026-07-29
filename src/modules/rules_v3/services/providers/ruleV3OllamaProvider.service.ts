@@ -36,6 +36,9 @@ export class RuleV3OllamaProvider implements RuleV3GenerationProvider {
           model: this.modelName,
           prompt,
           format: OLLAMA_JSON_SCHEMA,
+          // Structured extraction must be returned through `response`.
+          // Thinking-capable models otherwise place the JSON in `thinking`.
+          think: false,
           stream: false,
           options: {
             temperature: 0

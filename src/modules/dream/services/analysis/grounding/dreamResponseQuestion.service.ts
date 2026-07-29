@@ -120,20 +120,23 @@ function appendMissingSourceQuestions(
   evidenceLinks: any[],
 ): any[] {
   const next = [...hypotheses];
-  const usedSources = new Set(
-    next.flatMap(item => (item.sources || []).map((source: any) => String(source?.sourceId || ''))),
+  const usedVerificationKeys = new Set(
+    next.map(item => String(item?.verificationKey || '')).filter(Boolean),
   );
   for (const link of evidenceLinks || []) {
     if (next.length >= 4) break;
     const ruleId = String(link?.ruleId || '').trim();
     const sourceId = String(link?.sourceId || '').trim();
     const rule = ruleMap.get(ruleId);
-    if (!rule || !sourceId || usedSources.has(sourceId)) continue;
+    if (!rule || !sourceId) continue;
     const source = (sourceByRule.get(ruleId) || []).find(
       item => String(item?.sourceId || '') === sourceId,
     );
     if (!source) continue;
     const evidenceId = String(link?.evidenceId || link?.chunkIds?.[0] || '').trim();
+    const verificationKey = `${ruleId}:${evidenceId}`
+      + `:dream-citation-${ORACLE_CITATION_QUESTION_VERSION}`;
+    if (usedVerificationKeys.has(verificationKey)) continue;
     const question = buildOracleCitationVerificationQuestion(rule);
     const statement = localizeOracleRuleStatement(rule);
     next.push({
@@ -161,7 +164,7 @@ function appendMissingSourceQuestions(
       answerSemantics: { yes: 'supports', no: 'weakens', unsure: 'unresolved' },
       needsUserConfirmation: true,
       questionBasis: 'academic_rule',
-      verificationKey: `${ruleId}:${evidenceId}:dream-citation-${ORACLE_CITATION_QUESTION_VERSION}`,
+      verificationKey,
       validationSourceId: sourceId,
       validationExactQuote: String(link?.chunkPreview || ''),
       sources: [{
@@ -173,7 +176,7 @@ function appendMissingSourceQuestions(
         : {}),
       userFeedback: null,
     });
-    usedSources.add(sourceId);
+    usedVerificationKeys.add(verificationKey);
   }
   return deduplicateDreamQuestionsBySource(next);
 }

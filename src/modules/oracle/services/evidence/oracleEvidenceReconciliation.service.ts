@@ -2,11 +2,13 @@ import { Types } from 'mongoose';
 import KnowledgeRuleV3 from '../../../rules_v3/models/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../../../rules_v3/models/KnowledgeRuleEvidence';
 import OracleEvidenceGap from '../../models/OracleEvidenceGap';
-import { isResearchableOracleEvidenceClaim } from './oracleEvidenceClaim.service';
-import { resolveEvidenceGapInDreamPosts } from './oracleEvidenceDreamResolution.service';
+import { isResearchableOracleEvidenceClaim } from '../../../../shared/evidence/evidenceClaim';
+import {
+  resolveEvidenceGapInDreamPosts,
+} from '../../../dream/services/analysis/evidence/dreamCitationResolution.service';
 import { localizeOracleEvidenceClaim, type LocalizedOracleEvidenceClaim } from './oracleEvidenceLocalization.service';
 import { pruneNonResearchableOracleEvidenceGaps } from './oracleEvidenceMaintenance.service';
-import { evidenceGapRuleSimilarity } from './oracleEvidenceMatching.service';
+import { evidenceGapRuleSimilarity } from '../../../../shared/evidence/evidenceClaimMatching';
 import {
   buildEvidenceGapRuleText,
   CANDIDATE_CLAIM_MATCH,

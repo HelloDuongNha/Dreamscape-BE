@@ -2,8 +2,10 @@ import {
   buildOracleCitationVerificationQuestion,
   localizeOracleRuleStatement,
   ORACLE_CITATION_QUESTION_VERSION,
-} from '../presentation/oracleRulePresentation.service';
-import type { EvidenceGapRuleInput } from './oracleEvidenceRuleSupport.service';
+} from '../../../../oracle/services/presentation/oracleRulePresentation.service';
+import type {
+  EvidenceGapRuleInput,
+} from '../../../../oracle/services/evidence/oracleEvidenceRuleSupport.service';
 
 type RuleSupport = {
   source: any;

@@ -12,7 +12,7 @@ import {
   RuleV3RawExtractionPlan,
 } from './ruleV3FullExtraction.types';
 
-const ENGINE_VERSION = 'rule-v3-full-3';
+const ENGINE_VERSION = 'rule-v3-full-4';
 const PROMPT_VERSION = 'rule-v3-evidence-ref-2';
 const MAX_ATTEMPT_HISTORY = 10;
 

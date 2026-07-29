@@ -1,5 +1,5 @@
-import { cleanOracleEvidenceClaim } from './oracleEvidenceClaim.service';
-import { oracleEvidenceClaimClusterKey } from './oracleEvidenceMatching.service';
+import { cleanOracleEvidenceClaim } from '../../../../shared/evidence/evidenceClaim';
+import { oracleEvidenceClaimClusterKey } from '../../../../shared/evidence/evidenceClaimMatching';
 
 export interface LocalizedOracleEvidenceClaim {
   key: string;

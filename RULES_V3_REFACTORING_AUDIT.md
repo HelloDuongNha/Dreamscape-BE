@@ -1,5 +1,23 @@
 # Rules V3 refactoring audit
 
+## Verified status — 2026-07-29
+
+- Automatic extraction after source approval and moderator-triggered full
+  extraction both enter `startRuleV3FullExtraction`.
+- The production flow is one pipeline: prepare/reuse run, FIFO scheduling,
+  batch extraction, verification/deduplication, persistence, automatic merge,
+  completion, then evidence-need reconciliation.
+- The dry-run endpoint is a read-only work-unit preview. Its candidate count is
+  not expected to equal a full-document production run and must not be shown as
+  the final production result.
+- Newly extracted pending rules may mark an evidence need as
+  `candidate_found`; only moderator-approved (`verified`) rules may supplement
+  Oracle or Dream citations.
+- Approval reports reconciliation failure separately instead of claiming that
+  citation synchronization succeeded.
+- Backend typecheck and the frontend production build pass on the current
+  worktree. Historical assertion counts below were not re-run in this audit.
+
 ## Behavior that must not change
 
 - Source approval starts or reuses the same Rule V3 extraction pipeline used by moderation tools.
@@ -31,7 +49,7 @@
 | Candidate presentation | 157 lines | EN/VI explanations now come from structured claim fields instead of four article-specific phrase branches. |
 | `services/` | 60 runtime files in 7 ownership folders; 0 flat files and 0 test files | Planning, extraction, evidence, moderation, retrieval, providers, and lifecycle are explicit. |
 | `tests/` | 15 contract files in 6 ownership folders | Controller, evidence, extraction, moderation, planning, and retrieval tests no longer sit beside runtime services. |
-| Largest runtime service | 290 lines | Every runtime service remains within the 300-line limit. |
+| Largest runtime service | 309 lines | `ruleV3ValidationScore.service.ts` is nine lines above the guideline but still owns one cohesive scoring capability; no mechanical split is required. |
 
 ## Phases
 
@@ -71,11 +89,9 @@
    - [x] Move dream-application classification into an ordered signal policy with one small pipeline.
    - [x] Preserve all document, extraction, relationship, retrieval, probe, and scoring contracts.
 
-6. **R3.6 — Final verification**
+6. **R3.6 — Historical verification record**
    - [x] TypeScript typecheck passes with zero errors.
-   - [x] Complete contract baseline passes: 26/26 files.
-   - [x] Planner regression suite passes: 40/40 assertions.
-   - [x] Extractor/provider regression suite passes: 33/33 assertions.
+   - [ ] Re-run contract, planner, and extractor suites before treating their historical counts as current.
    - [x] `git diff --check` reports no whitespace errors.
    - [x] Record final ownership, largest files, and manual UI lifecycle checklist.
 
@@ -107,7 +123,7 @@
    - [x] Keep one deterministic argument score and expose its documentary base plus signed case-feedback adjustment.
    - [x] Let moderators open the exact pending, approved, or rejected argument from the Oracle score card.
    - [x] Replace remaining multi-line runtime function comments with concise ownership comments.
-   - [x] Re-run backend typecheck, all 26 contract files, frontend production build, EN/VI parity, and whitespace checks on the final worktree.
+   - [ ] Complete the manual delete/re-import/reapprove lifecycle check on the final worktree.
 
 ## Final ownership map
 

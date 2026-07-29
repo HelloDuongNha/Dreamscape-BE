@@ -3,10 +3,10 @@ import OracleTurn from '../../models/OracleTurn';
 import OracleThread from '../../models/OracleThread';
 import {
   cleanOracleEvidenceClaim,
-} from './oracleEvidenceClaim.service';
+} from '../../../../shared/evidence/evidenceClaim';
 import {
   evidenceGapRuleSimilarity,
-} from './oracleEvidenceMatching.service';
+} from '../../../../shared/evidence/evidenceClaimMatching';
 
 export interface OracleEvidenceUsageExcerpt {
   surfaceType: 'oracle' | 'dream_analysis';

@@ -1,5 +1,32 @@
 # Oracle refactoring audit
 
+## Verified status — 2026-07-29
+
+This audit was re-opened after the citation lifecycle exposed behavior that the
+previous “completed” checklist had not actually verified.
+
+- `executeOracleRun` is the single production pipeline: claim run, retrieve
+  conversation and grounding, call the provider, validate/finalize citations,
+  capture Evidence Needed, persist, and publish events.
+- Claim normalization and claim matching used by both Oracle and Dream now live
+  in `src/shared/evidence/`.
+- Dream citation presentation, questions, resolution, notification, and source
+  invalidation now belong to `src/modules/dream/services/analysis/evidence/`;
+  Oracle no longer owns those Dream adapters.
+- Reconciliation may expose pending rules as candidates, but only a `verified`
+  rule may replace `[?]`, create a citation question, or resolve an evidence
+  need.
+- Reconnect now refreshes the visible Dream and active Oracle thread so a
+  missed socket event does not leave stale citation state on screen.
+- Backend typecheck and the frontend production build pass on the current
+  worktree. No database-writing migration or mass Dream reanalysis was run.
+
+Known debt remains: `src/shared/evidence/evidenceClaim.ts` and
+`evidenceClaimMatching.ts` still contain bounded bilingual concept patterns.
+They are centralized and shared, but they have not yet been replaced by a
+fully structured multilingual representation. The earlier audit statement
+claiming all phrase clusters were removed was inaccurate.
+
 ## Audit boundary
 
 - This document is a read-only audit and roadmap. No Oracle runtime behavior is changed in this step.
@@ -23,7 +50,8 @@
 ## Code standard
 
 - Controllers translate HTTP input/output only and stay below 200 lines.
-- Runtime services stay below 300 lines and have one clear owner.
+- Runtime services should target 300 lines and always have one clear owner;
+  ownership and pipeline readability take precedence over a mechanical split.
 - The main orchestration function appears first and reads as the complete pipeline.
 - Conditional branches call named functions; invalid input and terminal states return early.
 - DTOs own request parsing and validation instead of controllers or services.
@@ -88,7 +116,7 @@
 
 5. **O5 — Evidence-gap lifecycle**
    - [x] Split the 1,133-line service into focused evidence lifecycle services used by Academic, Rules V3, Dream, and Oracle.
-   - [x] Replace example-shaped phrase clusters with a structured bilingual claim fingerprint and constrained relationship matching.
+   - [ ] Replace the remaining bounded bilingual concept patterns with a structured multilingual representation without changing current matches.
    - [x] Keep `unresolved`, `candidate_found`, and `resolved` as explicit states.
    - [x] Preserve deletion reset, duplicate merging, automatic re-linking, private-chat protection, and citation patching.
 
@@ -113,19 +141,19 @@
    - [x] Confirm no flat Oracle runtime service or test remains.
    - [x] Replace long generated comments with concise one-line ownership comments.
    - [x] Reduce unjustified `any` values and document any boundary that must remain dynamic.
-   - [x] Re-run every automated lifecycle check and hand off the manual UI lifecycle checklist.
+   - [ ] Run the manual delete/re-import lifecycle checklist on the current data set.
 
 ## Verification after every phase
 
-### Automated
+### Automated commands that currently exist
 
 - Backend: `npm run typecheck`
-- Oracle persistence: `npm run test:oracle-persistence`
-- Backend contracts: `npm run test:all-contracts`
+- Backend route contract: `npm run verify:route-contract`
 - Frontend production build: `npm run build`
-- Frontend EN/VI parity: `npm run test:i18n`
-- Frontend Oracle shell: `npm run test:oracle-shell`
 - Both repositories: `git diff --check`
+
+The older Oracle-specific test scripts listed here did not exist in the
+current `package.json` and therefore must not be reported as passing.
 
 ### Manual UI
 
@@ -149,7 +177,8 @@
 
 ## Definition of done
 
-- All controllers are below 200 lines and all runtime services are below 300 lines.
+- All controllers are below 200 lines; runtime services have one clear owner and
+  stay close to the 300-line guideline.
 - DTOs contain real parsers and no placeholder-only file remains.
 - Oracle runtime files and tests are grouped by responsibility with no compatibility shells.
 - No example-specific keyword list is used as a substitute for semantic handling.

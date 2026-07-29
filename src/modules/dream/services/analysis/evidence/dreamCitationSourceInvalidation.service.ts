@@ -1,20 +1,20 @@
 import type { ClientSession } from 'mongoose';
-import Dream from '../../../dream/models/Dream';
-import RuleValidationFeedback from '../../../rules_v3/models/RuleValidationFeedback';
+import Dream from '../../../models/Dream';
+import RuleValidationFeedback from '../../../../rules_v3/models/RuleValidationFeedback';
 import type {
   OracleSourceInvalidationPlan,
-} from './oracleSourceInvalidationPlan.service';
+} from '../../../../oracle/services/lifecycle/oracleSourceInvalidationPlan.service';
 import {
   filterDreamFeedbackAfterSourceInvalidation,
-} from './oracleDreamFeedbackInvalidation.service';
+} from './dreamCitationFeedbackInvalidation.service';
 import {
   invalidateStoredDreamAnalysis,
   pruneDreamRetrievedContext,
-} from './oracleDreamAnalysisInvalidation.service';
+} from './dreamCitationInvalidation.service';
 
 export {
   invalidateDreamAnalysis,
-} from './oracleDreamAnalysisInvalidation.service';
+} from './dreamCitationInvalidation.service';
 
 // Reverts Dream citations, questions and stored version context in one transaction.
 export async function invalidateDreamCitations(

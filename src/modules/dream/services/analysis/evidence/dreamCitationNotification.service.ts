@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
-import { getSocketServer } from '../../../../config/socket';
-import Dream from '../../../dream/models/Dream';
+import { getSocketServer } from '../../../../../config/socket';
+import Dream from '../../../models/Dream';
 
 export const DREAM_CITATION_STATE_CHANGED = 'dream_citation_state_changed';
 

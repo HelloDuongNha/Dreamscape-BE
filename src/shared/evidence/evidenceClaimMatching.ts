@@ -2,7 +2,7 @@ import {
   canonicalizeOracleEvidenceClaim,
   cleanOracleEvidenceClaim,
   normalizeOracleEvidenceText,
-} from './oracleEvidenceClaim.service';
+} from './evidenceClaim';
 
 const STOP_WORDS = new Set([
   'khi', 'của', 'và', 'là', 'thì', 'trong', 'những', 'được', 'một', 'này', 'bạn',

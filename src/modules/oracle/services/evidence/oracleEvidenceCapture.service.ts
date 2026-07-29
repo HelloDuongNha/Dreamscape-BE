@@ -7,8 +7,8 @@ import {
   isResearchableOracleEvidenceClaim,
   normalizeOracleEvidenceText,
   sanitizeOracleUnresolvedMarkers,
-} from './oracleEvidenceClaim.service';
-import { oracleEvidenceClaimClusterKey } from './oracleEvidenceMatching.service';
+} from '../../../../shared/evidence/evidenceClaim';
+import { oracleEvidenceClaimClusterKey } from '../../../../shared/evidence/evidenceClaimMatching';
 import { removeEvidenceOccurrences } from './oracleEvidenceLifecycle.service';
 import { resolveCapturedEvidenceGap } from './oracleEvidenceResolution.service';
 import {

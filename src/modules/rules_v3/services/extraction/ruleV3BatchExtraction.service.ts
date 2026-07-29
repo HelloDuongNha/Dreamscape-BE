@@ -27,6 +27,7 @@ export async function extractRuleV3Batches(
   let rawCandidateCount = 0;
   let rejectedCandidateCount = 0;
   let processedBatches = 0;
+  let schemaInvalidBatchCount = 0;
 
   for (const batch of input.raw.evidencePlan.batches) {
     if (input.abortSignal.aborted) throw new Error('user_cancelled');
@@ -35,7 +36,7 @@ export async function extractRuleV3Batches(
 
     const result = await extractOneBatch(input, batch, unit).catch(async (error: any) => {
       if (error?.message !== 'provider_schema_invalid') throw error;
-      rejectedCandidateCount += 1;
+      schemaInvalidBatchCount += 1;
       appendRejectionDiagnostic(rejectionDiagnostics, {
         batchId: batch.batchId,
         reasonCode: 'provider_schema_invalid',
@@ -79,6 +80,10 @@ export async function extractRuleV3Batches(
       rejectedCandidateCount,
       rejectionDiagnostics,
     });
+  }
+
+  if (processedBatches > 0 && schemaInvalidBatchCount === processedBatches) {
+    throw new Error('provider_schema_invalid');
   }
 
   return {

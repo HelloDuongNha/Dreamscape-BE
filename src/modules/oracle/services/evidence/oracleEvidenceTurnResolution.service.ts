@@ -9,7 +9,7 @@ import {
 import {
   cleanOracleEvidenceClaim,
   sanitizeOracleUnresolvedMarkers,
-} from './oracleEvidenceClaim.service';
+} from '../../../../shared/evidence/evidenceClaim';
 import {
   loadRuleEvidenceSupport,
   type EvidenceGapRuleInput,

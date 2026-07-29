@@ -8,19 +8,19 @@ import {
   captureOracleEvidenceGaps,
 } from '../evidence/oracleEvidenceCapture.service';
 import { collectDreamEvidenceRecord } from '../../../../shared/evidence/dreamEvidenceRecord';
-import { invalidateOracleCitationMarker } from '../evidence/oracleEvidenceClaim.service';
+import { invalidateOracleCitationMarker } from '../../../../shared/evidence/evidenceClaim';
 import {
   invalidateDreamAnalysis,
   invalidateDreamCitations,
   invalidateDreamRecordCitationState,
-} from './oracleDreamSourceInvalidation.service';
+} from '../../../dream/services/analysis/evidence/dreamCitationSourceInvalidation.service';
 import {
   prepareOracleSourceInvalidation,
   type OracleSourceInvalidationPlan,
 } from './oracleSourceInvalidationPlan.service';
 import {
   emitDreamCitationStatesChanged,
-} from '../evidence/oracleEvidenceDreamNotification.service';
+} from '../../../dream/services/analysis/evidence/dreamCitationNotification.service';
 import {
   emitOracleCitationStatesChanged,
 } from '../evidence/oracleEvidenceTurnNotification.service';

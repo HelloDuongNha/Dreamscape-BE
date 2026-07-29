@@ -2,11 +2,11 @@ import {
   sameEvidenceSource,
   type EvidenceCitationRecord,
   type EvidenceClaimBinding,
-} from '../../../../shared/evidence/citationClaim';
+} from '../../../../../shared/evidence/citationClaim';
 import {
   loadRuleEvidenceSupport,
   type EvidenceGapRuleInput,
-} from './oracleEvidenceRuleSupport.service';
+} from '../../../../oracle/services/evidence/oracleEvidenceRuleSupport.service';
 
 type RuleSupport = NonNullable<
   Awaited<ReturnType<typeof loadRuleEvidenceSupport>>

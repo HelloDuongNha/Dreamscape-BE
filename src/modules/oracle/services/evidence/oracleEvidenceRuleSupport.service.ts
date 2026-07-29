@@ -3,7 +3,7 @@ import AcademicSource from '../../../academic/models/AcademicSource';
 import SourceContribution from '../../../academic/models/SourceContribution';
 import KnowledgeRuleEvidenceV3 from '../../../rules_v3/models/KnowledgeRuleEvidence';
 import { retrieveApprovedRuleV3 } from '../../../rules_v3/services/retrieval/ruleV3Retrieval.service';
-import { evidenceGapRuleSimilarity } from './oracleEvidenceMatching.service';
+import { evidenceGapRuleSimilarity } from '../../../../shared/evidence/evidenceClaimMatching';
 
 export interface EvidenceGapRuleInput {
   _id: Types.ObjectId;

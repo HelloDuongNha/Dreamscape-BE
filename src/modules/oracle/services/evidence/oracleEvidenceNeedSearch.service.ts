@@ -1,8 +1,8 @@
 import { inferDocumentLanguage } from '../../../rules_v3/services/planning/documentLanguage.service';
 import OracleEvidenceGap from '../../models/OracleEvidenceGap';
-import { isResearchableOracleEvidenceClaim } from './oracleEvidenceClaim.service';
+import { isResearchableOracleEvidenceClaim } from '../../../../shared/evidence/evidenceClaim';
 import { localizeOracleEvidenceClaim } from './oracleEvidenceLocalization.service';
-import { evidenceGapRuleSimilarity } from './oracleEvidenceMatching.service';
+import { evidenceGapRuleSimilarity } from '../../../../shared/evidence/evidenceClaimMatching';
 
 export async function findOracleEvidenceNeedsForTexts(
   texts: string[],

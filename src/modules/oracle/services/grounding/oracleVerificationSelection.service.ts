@@ -1,5 +1,7 @@
 import type { OracleCitation } from '../oracle.types';
-import { resolveQuestionRuleIds } from '../../../dream/services/analysis/grounding/dreamAnalysisGrounding.service';
+import {
+  resolveEvidenceQuestionRuleIds,
+} from '../../../../shared/evidence/evidenceQuestion';
 import type { OracleGrounding } from './oracleGrounding.service';
 
 export function selectGroundedVerificationQuestions(
@@ -16,7 +18,7 @@ export function selectGroundedVerificationQuestions(
   }
   return questions
     .map((question) => {
-      const ruleIds = resolveQuestionRuleIds(question);
+      const ruleIds = resolveEvidenceQuestionRuleIds(question);
       const citationIndex = citationIndexBySourceId.get(String(question.sourceId || ''))
         || ruleIds
           .map((ruleId) => citationIndexByRuleId.get(ruleId))

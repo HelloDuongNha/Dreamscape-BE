@@ -139,14 +139,6 @@ export const isModerator = (req: Request, res: Response, next: NextFunction): vo
   const moderatorIds = moderatorIdsStr.split(',').map((id) => id.trim()).filter(Boolean);
   const isIncluded = moderatorIds.includes(userId);
 
-  if (process.env.NODE_ENV !== 'production') {
-    const hasEnv = !!process.env.MODERATOR_USER_IDS;
-    console.log(`[moderation] currentUserId=${userId}`);
-    console.log(`[moderation] hasModeratorEnv=${hasEnv}`);
-    console.log(`[moderation] moderatorIdsCount=${moderatorIds.length}`);
-    console.log(`[moderation] isModerator=${isIncluded}`);
-  }
-
   if (isIncluded) {
     next();
   } else {

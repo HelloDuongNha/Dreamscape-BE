@@ -1,6 +1,8 @@
 import KnowledgeRuleV3 from '../../../rules_v3/models/KnowledgeRule';
 import OracleEvidenceGap from '../../models/OracleEvidenceGap';
-import { resolveEvidenceGapInDreamPosts } from './oracleEvidenceDreamResolution.service';
+import {
+  resolveEvidenceGapInDreamPosts,
+} from '../../../dream/services/analysis/evidence/dreamCitationResolution.service';
 import {
   findGroundedRuleForClaim,
   type EvidenceGapRuleInput,

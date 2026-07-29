@@ -51,7 +51,7 @@ export const getConversations = async (req: Request, res: Response): Promise<voi
   }
 };
 
-// ─── GET /api/messages/:conversationId ───────────────────────────────────────
+// ─── GET /api/conversations/messages/:conversationId ────────────────────────
 
 /**
  * Returns the last 50 messages for a specific conversation, ordered oldest→newest

@@ -13,21 +13,21 @@ import {
 import {
   canonicalizeOracleEvidenceClaim,
   isResearchableOracleEvidenceClaim,
-} from '../../../../oracle/services/evidence/oracleEvidenceClaim.service';
+} from '../../../../../shared/evidence/evidenceClaim';
 import {
   localizeOracleEvidenceClaim,
 } from '../../../../oracle/services/evidence/oracleEvidenceLocalization.service';
 import {
   evidenceGapRuleSimilarity,
   oracleEvidenceClaimClusterKey,
-} from '../../../../oracle/services/evidence/oracleEvidenceMatching.service';
+} from '../../../../../shared/evidence/evidenceClaimMatching';
 import {
   buildEvidenceGapRuleText,
   DIRECT_CLAIM_MATCH,
 } from '../../../../oracle/services/evidence/oracleEvidenceRuleSupport.service';
 import {
   appendDreamVerificationQuestion,
-} from '../../../../oracle/services/evidence/oracleEvidenceDreamQuestion.service';
+} from '../evidence/dreamCitationQuestion.service';
 import {
   markUnsupportedInterpretations,
 } from '../../../../oracle/services/presentation/oracleAnswerFinalization.service';

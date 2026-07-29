@@ -4,7 +4,7 @@ import {
 } from '../../../../../infrastructure/llm.service';
 import {
   isResearchableOracleEvidenceClaim,
-} from '../../../../oracle/services/evidence/oracleEvidenceClaim.service';
+} from '../../../../../shared/evidence/evidenceClaim';
 export interface DreamAnalysisDepth {
   acceptable: boolean;
   coreWordCount: number;
