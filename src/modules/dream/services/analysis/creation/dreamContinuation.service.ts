@@ -3,7 +3,6 @@ import {
   buildDreamContinuationPrompt,
   selectFinalDreamScene,
 } from '../prompts/dreamContinuation.prompt';
-import { resolveDreamAnalysisModel } from '../grounding/dreamAnalysisQuality.service';
 
 export interface DreamContinuation {
   title: string;
@@ -14,6 +13,8 @@ export interface DreamContinuation {
   inspirations?: Array<{ dreamId: string; title: string; similarity: number }>;
 }
 
+const activeContinuationControllers = new Map<string, AbortController>();
+
 function normalizeForComparison(value: string): string {
   return value.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLocaleLowerCase('vi');
 }
@@ -22,7 +23,7 @@ export function isLongFormDreamContinuation(value: unknown): boolean {
   const text = String(value || '').trim();
   const wordCount = text.split(/\s+/u).filter(Boolean).length;
   const paragraphCount = text.split(/\n\s*\n/u).map(item => item.trim()).filter(Boolean).length;
-  return wordCount >= 200 && paragraphCount >= 4;
+  return wordCount >= 240 && paragraphCount >= 4;
 }
 
 function validateContinuation(value: any, narrative: string, strict = true): DreamContinuation {
@@ -103,8 +104,8 @@ Keep the candidate's strongest ideas, but repair continuity. Continue only from 
 export async function generateDreamContinuation(
   narrative: string,
   previousContinuations: DreamContinuation[] = [],
+  abortSignal?: AbortSignal,
 ): Promise<DreamContinuation> {
-  const model = resolveDreamAnalysisModel();
   const prompt = buildDreamContinuationPrompt({
     narrative,
     previousContinuations: previousContinuations.slice(-3).map(item => item.continuation),
@@ -115,12 +116,10 @@ export async function generateDreamContinuation(
     try {
       const result = await generateStructuredJson<Record<string, unknown>>(
         prompt,
-        undefined,
+        abortSignal,
         {
-          model,
           temperature: 0.58,
           seed: Math.floor(Date.now() / 1000) + attempt,
-          numPredict: 3000,
         },
       );
       lastCandidate = result;
@@ -130,18 +129,14 @@ export async function generateDreamContinuation(
     }
   }
 
-  // Repair a good story once when the provider omitted only internal audit fields.
+  // A provider may return a good story while omitting our internal audit fields.
+  // Repair once before falling back, so a transient schema miss never becomes a user-visible 500.
   if (lastCandidate) {
     try {
       const repaired = await generateStructuredJson<Record<string, unknown>>(
         buildRepairPrompt(narrative, lastCandidate),
-        undefined,
-        {
-          model,
-          temperature: 0.45,
-          seed: Math.floor(Date.now() / 1000) + 2,
-          numPredict: 3000,
-        },
+        abortSignal,
+        { temperature: 0.45, seed: Math.floor(Date.now() / 1000) + 2 },
       );
       return validateContinuation(repaired, narrative, true);
     } catch (error) {
@@ -156,4 +151,24 @@ export async function generateDreamContinuation(
     }
   }
   throw lastError;
+}
+
+export function registerDreamContinuationController(
+  runId: string,
+  controller: AbortController,
+): void {
+  activeContinuationControllers.set(runId, controller);
+}
+
+export function clearDreamContinuationController(
+  runId: string,
+  controller: AbortController,
+): void {
+  if (activeContinuationControllers.get(runId) === controller) {
+    activeContinuationControllers.delete(runId);
+  }
+}
+
+export function abortDreamContinuationExecution(runId: string): void {
+  activeContinuationControllers.get(runId)?.abort();
 }

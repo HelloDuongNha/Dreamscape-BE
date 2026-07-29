@@ -11,10 +11,12 @@ import {
   type EvidenceClaimContentPath,
 } from '../../../../../shared/evidence/citationClaim';
 import {
+  canonicalizeOracleEvidenceClaim,
   isResearchableOracleEvidenceClaim,
 } from '../../../../oracle/services/evidence/oracleEvidenceClaim.service';
 import {
   evidenceGapRuleSimilarity,
+  oracleEvidenceClaimClusterKey,
 } from '../../../../oracle/services/evidence/oracleEvidenceMatching.service';
 import {
   buildEvidenceGapRuleText,
@@ -53,8 +55,8 @@ export function groundDreamCitationClaims(
   }
 
   for (const candidate of candidates) {
-    const binding = createBinding(candidate);
     const rule = findSupportingRule(candidate, context.citableRules);
+    const binding = createBinding(candidate, rule);
     const ruleId = String(rule?.ruleId || rule?._id || '');
     const source = ruleId ? context.validSourcesMap.get(ruleId)?.[0] : undefined;
     const evidence = ruleId
@@ -104,6 +106,7 @@ export function groundDreamCitationClaims(
         },
       },
       String(source.sourceId),
+      [candidate.claimText],
     );
   }
 
@@ -158,10 +161,18 @@ function findSupportingRule(candidate: DreamEvidenceClaimCandidate, rules: any[]
   return ranked[0]?.similarity >= DIRECT_CLAIM_MATCH ? ranked[0].rule : null;
 }
 
-function createBinding(candidate: DreamEvidenceClaimCandidate): EvidenceClaimBinding {
+function createBinding(
+  candidate: DreamEvidenceClaimCandidate,
+  rule?: any,
+): EvidenceClaimBinding {
+  const evidenceClaim = canonicalizeOracleEvidenceClaim(
+    String(rule?.statement || rule?.ruleStatement || candidate.claimText),
+  );
   return {
     claimId: createEvidenceClaimId(candidate.contentPath, candidate.claimText),
     claimText: candidate.claimText,
+    evidenceClaim,
+    evidenceClaimKey: oracleEvidenceClaimClusterKey(evidenceClaim),
     contentPath: candidate.contentPath,
     status: 'unresolved',
   };

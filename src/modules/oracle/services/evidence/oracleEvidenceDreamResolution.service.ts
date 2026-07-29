@@ -9,6 +9,7 @@ import {
   type EvidenceClaimContentPath,
 } from '../../../../shared/evidence/citationClaim';
 import { cleanOracleEvidenceClaim } from './oracleEvidenceClaim.service';
+import { oracleEvidenceClaimClusterKey } from './oracleEvidenceMatching.service';
 import {
   loadRuleEvidenceSupport,
   type EvidenceGapRuleInput,
@@ -172,47 +173,64 @@ export function resolveDreamAnalysisCitation(
     ? analysis.scientific_context_notes
     : [];
   const sourceId = String(support.source._id);
-  const binding = findClaimBinding(analysis, variants);
-  if (!binding) return false;
+  const bindings = findClaimBindings(analysis, variants);
+  if (!bindings.length) return false;
   const citations = collectDreamCitationRecords(analysis, notes);
-  const resolved = resolveEvidenceClaim(binding, {
-    source: {
-      sourceId,
-      doi: String((support.source as any).doi || (support.source as any).metadata?.doi || ''),
-    },
-    ruleId: String(rule._id),
-    evidenceId: String(support.evidence._id),
-    verificationKey: `${String(rule._id)}:${String(support.evidence._id)}`
-      + `:dream-citation-${ORACLE_CITATION_QUESTION_VERSION}`,
-  }, citations);
-  if (!writeEvidenceClaimMarker(analysis, resolved)) return false;
-  replaceStoredBinding(analysis, resolved);
-  appendDreamCitation(analysis, resolved, rule, support);
+  const resolvedBindings = bindings
+    .map((binding) => resolveEvidenceClaim(binding, {
+      source: {
+        sourceId,
+        doi: String((support.source as any).doi || (support.source as any).metadata?.doi || ''),
+      },
+      ruleId: String(rule._id),
+      evidenceId: String(support.evidence._id),
+      verificationKey: `${String(rule._id)}:${String(support.evidence._id)}`
+        + `:dream-citation-${ORACLE_CITATION_QUESTION_VERSION}`,
+    }, citations))
+    .filter((binding) => writeEvidenceClaimMarker(analysis, binding));
+  if (!resolvedBindings.length) return false;
+  for (const binding of resolvedBindings) replaceStoredBinding(analysis, binding);
+  appendDreamCitation(analysis, resolvedBindings[0], rule, support);
   appendDreamScientificNote(notes, rule, support, sourceId);
-  appendDreamVerificationQuestion(analysis, rule, support, sourceId);
+  appendDreamVerificationQuestion(
+    analysis,
+    rule,
+    support,
+    sourceId,
+    resolvedBindings.map((binding) => binding.claimText),
+  );
   analysis.scientific_context_notes = notes;
   return true;
 }
 
-function findClaimBinding(analysis: any, variants: string[]): EvidenceClaimBinding | null {
+function findClaimBindings(analysis: any, variants: string[]): EvidenceClaimBinding[] {
   const normalizedVariants = new Set(variants.map(normalizeClaim));
-  const stored = (analysis.claim_bindings || []).find((binding: EvidenceClaimBinding) =>
+  const clusterKeys = new Set(variants.map(oracleEvidenceClaimClusterKey).filter(Boolean));
+  const stored = (analysis.claim_bindings || []).filter((binding: EvidenceClaimBinding) =>
     binding.status === 'unresolved'
-    && normalizedVariants.has(normalizeClaim(binding.claimText)));
-  if (stored) return stored;
+    && (
+      Boolean(binding.evidenceClaimKey && clusterKeys.has(binding.evidenceClaimKey))
+      || clusterKeys.has(oracleEvidenceClaimClusterKey(
+        binding.evidenceClaim || binding.claimText,
+      ))
+      || normalizedVariants.has(normalizeClaim(binding.evidenceClaim || binding.claimText))
+      || normalizedVariants.has(normalizeClaim(binding.claimText))
+    ));
+  if (stored.length) return stored;
 
+  const recovered: EvidenceClaimBinding[] = [];
   for (const contentPath of evidenceClaimContentPaths(analysis)) {
     const text = readEvidenceClaimContent(analysis, contentPath);
     const variant = variants.find((item) => claimHasUnresolvedMarker(text, item));
     if (!variant) continue;
-    return {
+    recovered.push({
       claimId: createEvidenceClaimId(contentPath, variant),
       claimText: variant,
       contentPath,
       status: 'unresolved',
-    };
+    });
   }
-  return null;
+  return recovered;
 }
 
 function replaceStoredBinding(analysis: any, binding: EvidenceClaimBinding): void {

@@ -2,9 +2,13 @@ import crypto from 'crypto';
 import type { Types } from 'mongoose';
 import type { IDream } from '../../../models/Dream';
 import { mapDreamResponse, composeDreamNarrative } from '../../content/dreamNarrative.service';
-import { enqueueDreamAnalysis } from './dreamAnalysisQueue.service';
+import {
+  discardQueuedDreamAnalysis,
+  enqueueDreamAnalysis,
+} from './dreamAnalysisQueue.service';
 import { runBackgroundAnalysis } from './dreamAnalysisRunner.service';
 import { estimateDreamAnalysisSeconds } from './dreamAnalysisTiming.service';
+import { cancelDreamContinuation } from './dreamContinuationJob.service';
 
 // Creates a fenced retry run while preserving enough state for cancellation rollback.
 export async function restartDreamAnalysis(
@@ -12,6 +16,25 @@ export async function restartDreamAnalysis(
   ownerId: Types.ObjectId,
   options: { trigger?: 'citation_migration' } = {},
 ): Promise<unknown> {
+  const continuationRunId = String(dream.continuationMetadata?.runId || '').trim();
+  const continuationStatus = String(dream.continuationMetadata?.status || '');
+  if (continuationRunId && ['queued', 'running'].includes(continuationStatus)) {
+    cancelDreamContinuation(continuationRunId);
+    discardQueuedDreamAnalysis({
+      dreamId: String(dream._id),
+      userId: String(ownerId),
+      runId: `continuation:${continuationRunId}`,
+    });
+    dream.continuationMetadata = {
+      ...(dream.continuationMetadata as any),
+      status: 'cancelled',
+      progress: 0,
+      queuePosition: 0,
+      statusMessage: 'Đã dừng phần 2 để ưu tiên phân tích chính.',
+      completedAt: new Date(),
+    };
+    dream.markModified('continuationMetadata');
+  }
   const narrative = composeDreamNarrative(dream.content, dream.additions || []);
   const startedAt = new Date();
   const runId = crypto.randomUUID();

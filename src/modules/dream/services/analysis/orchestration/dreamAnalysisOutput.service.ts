@@ -15,16 +15,13 @@ import {
   isGroundedDreamTitle,
   polishGeneratedDreamProse,
   removeInternalAnalysisVocabulary,
-  sanitizeInterpretiveThreads,
   sanitizeGeneratedHypotheses,
+  sanitizeInterpretiveThreads,
   sanitizeUnsupportedDreamClaims,
 } from '../grounding/dreamAnalysisGrounding.service';
 import { SimilarDreamMatch } from '../retrieval/similarDreamRetrieval.service';
 import { IRetrievedSymbol } from '../retrieval/symbolRetrieval.service';
 import { normalizeObjectPunctuation } from './dreamAnalysisNormalization.service';
-import {
-  groundDreamCitationClaims,
-} from '../grounding/dreamCitationGrounding.service';
 
 interface OutputContext {
   rawAnalysis: ILLMOutput;
@@ -34,7 +31,6 @@ interface OutputContext {
   matchedRules: any[];
   explanatoryRules: any[];
   questionRules: any[];
-  citableRules: any[];
   validSourcesMap: Map<string, any[]>;
   validEvidenceMap: Map<string, Array<{ sourceId: string; chunkId: string; quote: string }>>;
   culturalProfileUsed: boolean;
@@ -143,38 +139,64 @@ function groundScientificNotes(analysis: ILLMOutput, context: OutputContext): vo
 
 function groundQuestionsAndProse(analysis: ILLMOutput, context: OutputContext): void {
   if (!context.culturalProfileUsed) analysis.cultural_symbolic_notes = [];
-  const validRuleIds = new Set(
-    context.questionRules.map((rule) => String(rule.ruleId || rule._id)),
-  );
-  const generatedQuestions = sanitizeGeneratedHypotheses(
-    Array.isArray(analysis.real_life_hypotheses) ? analysis.real_life_hypotheses : [],
-    context.dreamNarrative,
-    context.wakingReactionText,
-    validRuleIds,
-  );
-  analysis.real_life_hypotheses = attachRuleQuestionContext(
-    generatedQuestions,
-    context.questionRules,
-  ).map((question: any) => {
-    const ruleId = String(question.ruleId || '');
-    const evidence = context.validEvidenceMap.get(ruleId)?.[0];
-    return {
-      ...question,
-      sources: deduplicateAcademicSources(context.validSourcesMap.get(ruleId) || []),
-      ...(evidence
-        ? {
-          validationSourceId: evidence.sourceId,
-          validationExactQuote: evidence.quote,
-        }
-        : {}),
-    };
-  });
+  if (!Array.isArray(analysis.real_life_hypotheses)) analysis.real_life_hypotheses = [];
+  {
+    const validRuleIds = new Set<string>(
+      context.questionRules.map(rule => String(rule.ruleId || rule._id)),
+    );
+    const questions = sanitizeGeneratedHypotheses(
+      analysis.real_life_hypotheses,
+      context.dreamNarrative,
+      context.wakingReactionText,
+      validRuleIds,
+    );
+    const uniqueQuestions = new Map<string, any>();
+    for (const question of questions) {
+      const key = String(question.verificationKey || `${question.ruleId}:${question.followUpQuestion}`);
+      if (!uniqueQuestions.has(key)) uniqueQuestions.set(key, question);
+    }
+    analysis.real_life_hypotheses = attachRuleQuestionContext(
+      [...uniqueQuestions.values()].slice(0, 4),
+      context.questionRules,
+    ).map((question: any) => {
+      const ruleId = String(question.ruleId || '');
+      const evidence = (context.validEvidenceMap.get(ruleId) || [])[0];
+      return {
+        ...question,
+        sources: deduplicateAcademicSources(context.validSourcesMap.get(ruleId) || []),
+        ...(evidence ? { validationSourceId: evidence.sourceId, validationExactQuote: evidence.quote } : {}),
+      };
+    });
+    if (analysis.real_life_hypotheses.length === 0 && context.questionRules.length > 0
+      && context.wakingReactionText.trim()) {
+      const rule = context.questionRules[0];
+      const evidence = findNarrativeSentenceForSymbol(
+        context.wakingReactionText,
+        context.dreamNarrative,
+      ) || context.dreamNarrative.split(/(?<=[.!?])\s+/u).find(Boolean) || context.dreamNarrative;
+      analysis.real_life_hypotheses = attachRuleQuestionContext([{
+        ruleId: String(rule.ruleId || rule._id),
+        hypothesis: 'Cảm xúc còn lại khi tỉnh dậy có thể đang liên quan đến một hoàn cảnh hiện tại cần được làm rõ.',
+        followUpQuestion: 'Ngoài đời, cảm giác còn lại sau khi tỉnh dậy có đang gắn với một việc hoặc quyết định cụ thể gần đây không?',
+        reasonForAsking: 'Câu hỏi này kiểm tra xem cảm xúc được kể sau khi tỉnh dậy có một hoàn cảnh đời thực tương ứng hay chỉ thuộc về mạch của giấc mơ.',
+        ifYesMeaning: 'Câu trả lời Có làm hướng liên hệ với hoàn cảnh hiện tại đáng được xem xét thêm.',
+        ifNoMeaning: 'Câu trả lời Không làm giảm ưu tiên của hướng liên hệ với một hoàn cảnh hiện tại cụ thể.',
+        evidenceFromDream: [evidence],
+        questionType: 'present',
+        needsUserConfirmation: true,
+      }], context.questionRules);
+    }
+  }
   analysis.scientific_context_notes = (analysis.scientific_context_notes || []).map((note: any) => {
+    const linkedEvidence = (analysis.real_life_hypotheses || [])
+      .filter((item: any) => String(item?.ruleId || '') === String(note?.ruleId || ''))
+      .flatMap((item: any) => item.evidenceFromDream || []);
     return {
       ...note,
       matchedDreamDetails: collectScientificDreamEvidence(
         { note: note.note, dreamEvidence: note.matchedDreamDetails },
         context.dreamNarrative,
+        linkedEvidence,
       ),
     };
   });
@@ -257,11 +279,6 @@ export function finalizeDreamAnalysisOutput(context: OutputContext): ILLMOutput 
   }
   groundScientificNotes(analysis, context);
   groundQuestionsAndProse(analysis, context);
-  groundDreamCitationClaims(analysis, {
-    citableRules: context.citableRules,
-    validSourcesMap: context.validSourcesMap,
-    validEvidenceMap: context.validEvidenceMap,
-  });
   attachSimilarDreams(analysis, context.similarDreams);
   return analysis;
 }

@@ -21,6 +21,7 @@ export function appendDreamVerificationQuestion(
   rule: EvidenceGapRuleInput,
   support: RuleSupport,
   sourceId: string,
+  evidenceFromDream: string[] = [],
 ): void {
   const hypotheses = Array.isArray(analysis.real_life_hypotheses)
     ? analysis.real_life_hypotheses
@@ -46,7 +47,7 @@ export function appendDreamVerificationQuestion(
     ruleIds: [String(rule._id)],
     hypothesis: statement.vi || String(rule.statement || ''),
     localizedHypothesis: statement,
-    evidenceFromDream: [],
+    evidenceFromDream: [...new Set(evidenceFromDream.map(String).filter(Boolean))],
     confidence: Math.min(1, Math.max(0, Number(rule.evidenceScore || 0) / 100)),
     followUpQuestion: question.vi,
     localizedFollowUpQuestion: question,

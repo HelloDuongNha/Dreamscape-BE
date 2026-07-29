@@ -2,6 +2,7 @@ import type { IDream } from '../../../models/Dream';
 import type {
   DreamAnalysisResult,
 } from '../orchestration/dreamAnalysisOrchestration.types';
+import { resolveDreamAnalysisModel } from '../grounding/dreamAnalysisQuality.service';
 
 export interface DreamCompletionUpdate {
   $set: Record<string, unknown>;
@@ -32,7 +33,7 @@ export function buildDreamCompletionUpdate(
       retrievedContext: input.result.retrievedContext,
       analysisMetadata: {
         strategyUsed: input.result.strategyUsed,
-        llmModel: process.env.OLLAMA_MODEL || 'qwen2.5:14b',
+        llmModel: resolveDreamAnalysisModel(),
         embeddingModel: process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text',
         ragTopK: input.result.retrievedContext.componentA.usedSymbols.length,
         minSimilarityScore: parseFloat(process.env.SYMBOL_RAG_MIN_SCORE || '0.55'),

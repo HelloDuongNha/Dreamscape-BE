@@ -579,7 +579,13 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 export async function generateStructuredJson<T>(
   prompt: string,
   abortSignal?: AbortSignal,
-  options: { temperature?: number; seed?: number; numPredict?: number; model?: string } = {},
+  options: {
+    temperature?: number;
+    seed?: number;
+    numCtx?: number;
+    numPredict?: number;
+    model?: string;
+  } = {},
 ): Promise<T> {
   const baseUrl = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
   const model = options.model || process.env.OLLAMA_MODEL || 'qwen2.5:14b';
@@ -603,6 +609,9 @@ export async function generateStructuredJson<T>(
           options: {
             temperature: Number.isFinite(temperature) ? temperature : 0,
             seed: Number.isFinite(seed) ? seed : 42,
+            ...(Number.isFinite(options.numCtx)
+              ? { num_ctx: options.numCtx }
+              : {}),
             ...(Number.isFinite(options.numPredict)
               ? { num_predict: options.numPredict }
               : {}),
@@ -645,7 +654,7 @@ export async function generateStructuredJson<T>(
 export async function generateAnalysis(
   prompt: string,
   abortSignal?: AbortSignal,
-  options: { numPredict?: number; model?: string } = {},
+  options: { numCtx?: number; numPredict?: number; model?: string } = {},
 ): Promise<ILLMOutput> {
   let rawResult: Record<string, unknown>;
   try {

@@ -26,13 +26,13 @@ export async function reviewSourceContribution(
       },
     };
   }
-  if (input.reviewStatus === 'approved' && isReaderBuildInProgress(contribution)) {
+  if (isReaderBuildInProgress(contribution)) {
     return {
       status: 409,
       body: {
         success: false,
         code: 'READER_IMPORT_IN_PROGRESS',
-        message: 'Bản đọc thông minh vẫn đang được dựng. Hãy chờ tác vụ hoàn tất trước khi duyệt tài liệu.',
+        message: 'Bản đọc thông minh vẫn đang được dựng. Hãy chờ tác vụ hoàn tất trước khi duyệt hoặc từ chối tài liệu.',
       },
     };
   }

@@ -34,7 +34,10 @@ export function evidenceGapRuleSimilarity(gapClaim: string, ruleText: string): n
   const bilingualConcept = bilingualConceptSimilarity(gapClaim, ruleText);
   const gapCluster = oracleEvidenceClaimClusterKey(gapClaim);
   const ruleCluster = oracleEvidenceClaimClusterKey(ruleText);
-  if (gapCluster.includes('__') && gapCluster !== ruleCluster) {
+  if (
+    (gapCluster.includes('__') || ruleCluster.includes('__'))
+    && gapCluster !== ruleCluster
+  ) {
     return Math.min(0.24, Math.max(lexical, canonicalLexical, bilingualConcept));
   }
   const relationMatch = gapCluster && gapCluster === ruleCluster ? 0.72 : 0;
@@ -57,12 +60,17 @@ export function oracleEvidenceClaimClusterKey(claim: string): string {
   const lateNight = has(/cuối đêm|gần sáng|(?:phần\s+)?cuối(?:\s+của)?\s+giấc ngủ|later in the night|later in the sleep period|late in sleep|final quartile/iu);
   const insight = has(/bất ngờ|sáng tỏ|tìm ra giải pháp|surpris|insight|eureka/iu);
   const informationProcessing = has(/xử lý thông tin|information processing/iu);
+  const futureConstruction = has(
+    /tái kết hợp|kết hợp.+(?:cấu trúc|kịch bản)|xây dựng.+kịch bản|mô phỏng.+tương lai|recombin|construct.+(?:scenario|future)|future simulation/iu,
+  );
 
   if (action && anxiety && reduction) return 'relation:action-planning__outcome:stress-reduction';
   if (sleepOrDream && future && lateNight) return 'context:late-sleep__outcome:future-oriented-dream-prevalence';
   if (sleepOrDream && weakAssociation && creativity) return 'mechanism:weak-association__outcome:creative-divergent-thinking';
   if (sleepOrDream && insight && informationProcessing) return 'mechanism:sleep-information-processing__outcome:insight-or-surprise';
-  if (memory && sleepOrDream && future) return 'mechanism:memory-recombination__context:future-oriented-dream';
+  if ((memory || futureConstruction) && sleepOrDream && future) {
+    return 'mechanism:memory-recombination__context:future-oriented-dream';
+  }
   if (memory && sleepOrDream) return 'mechanism:memory-incorporation__context:dream';
   if (work && anxiety && (intrusion || sleepOrDream || memory)) return 'context:work-pressure__outcome:sleep-or-memory-intrusion';
   if (anxiety && creativity) return 'state:anxiety__outcome:creative-coping-or-improvisation';

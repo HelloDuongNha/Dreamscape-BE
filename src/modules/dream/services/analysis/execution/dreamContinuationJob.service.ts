@@ -2,7 +2,13 @@ import { randomUUID } from 'crypto';
 import type { Types } from 'mongoose';
 import Dream, { type IDream } from '../../../models/Dream';
 import { logger } from '../../../../../infrastructure/logger';
-import { generateDreamContinuation, type DreamContinuation } from '../creation/dreamContinuation.service';
+import {
+  abortDreamContinuationExecution,
+  clearDreamContinuationController,
+  generateDreamContinuation,
+  registerDreamContinuationController,
+  type DreamContinuation,
+} from '../creation/dreamContinuation.service';
 import { composeDreamNarrative } from '../../content/dreamNarrative.service';
 import { enqueueDreamAnalysis } from './dreamAnalysisQueue.service';
 
@@ -41,6 +47,8 @@ async function updateProgress(
 
 async function runContinuation(dreamId: string, runId: string) {
   const startedAt = Date.now();
+  const abortController = new AbortController();
+  registerDreamContinuationController(runId, abortController);
   try {
     const dream = await Dream.findById(dreamId);
     if (!dream) throw new Error('Dream not found.');
@@ -48,7 +56,11 @@ async function runContinuation(dreamId: string, runId: string) {
     const narrative = composeDreamNarrative(dream.content || '', dream.additions || []);
     const versions = continuationVersions(dream);
     await updateProgress(dreamId, runId, 48, 'Đang viết một diễn biến mới...');
-    const continuation = await generateDreamContinuation(narrative, versions);
+    const continuation = await generateDreamContinuation(
+      narrative,
+      versions,
+      abortController.signal,
+    );
     await updateProgress(dreamId, runId, 88, 'Đang kiểm tra mạch truyện và đoạn tỉnh giấc...');
 
     const history = [...versions, continuation].slice(-12);
@@ -76,13 +88,17 @@ async function runContinuation(dreamId: string, runId: string) {
     logger.error(`Dream continuation ${runId} failed`, error);
     await Dream.updateOne({ _id: dreamId, 'continuationMetadata.runId': runId }, {
       $set: {
-        'continuationMetadata.status': 'failed',
+        'continuationMetadata.status': abortController.signal.aborted ? 'cancelled' : 'failed',
         'continuationMetadata.progress': 0,
-        'continuationMetadata.statusMessage': 'Không thể viết phần tiếp theo. Bạn có thể thử lại.',
+        'continuationMetadata.statusMessage': abortController.signal.aborted
+          ? 'Đã dừng phần 2 để ưu tiên phân tích chính.'
+          : 'Không thể viết phần tiếp theo. Bạn có thể thử lại.',
         'continuationMetadata.completedAt': new Date(),
         'continuationMetadata.durationMs': Date.now() - startedAt,
       },
     });
+  } finally {
+    clearDreamContinuationController(runId, abortController);
   }
 }
 
@@ -113,6 +129,10 @@ export function enqueueRecoveredDreamContinuation(
   runId: string,
 ): boolean {
   return enqueueDreamContinuationRun(dreamId, userId, runId);
+}
+
+export function cancelDreamContinuation(runId: string): void {
+  abortDreamContinuationExecution(runId);
 }
 
 function enqueueDreamContinuationRun(

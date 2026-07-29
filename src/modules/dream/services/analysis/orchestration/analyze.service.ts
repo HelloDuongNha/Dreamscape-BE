@@ -1,15 +1,9 @@
 import mongoose from 'mongoose';
 import { logger } from '../../../../../infrastructure/logger';
 import { generateAnalysis, ILLMOutput } from '../../../../../infrastructure/llm.service';
-import {
-  buildDreamAnalysisDepthRepairPrompt,
-  buildDreamAnalysisPrompt,
-} from '../prompts/dreamAnalysis.prompt';
-import {
-  assessDreamAnalysisDepth,
-  resolveDreamAnalysisModel,
-  selectDeeperDreamAnalysis,
-} from '../grounding/dreamAnalysisQuality.service';
+import { generateDreamContinuation } from '../creation/dreamContinuation.service';
+import { resolveDreamAnalysisModel } from '../grounding/dreamAnalysisQuality.service';
+import { buildDreamAnalysisPrompt } from '../prompts/dreamAnalysis.prompt';
 import {
   DreamAnalysisProgress,
   DreamAnalysisReporter,
@@ -17,6 +11,7 @@ import {
   DreamAnalysisStage,
 } from './dreamAnalysisOrchestration.types';
 import { finalizeDreamAnalysisOutput } from './dreamAnalysisOutput.service';
+import { groundDreamCitationClaims } from '../grounding/dreamCitationGrounding.service';
 import { buildDreamAnalysisResult } from './dreamAnalysisResult.service';
 import {
   buildDreamProfilePrompt,
@@ -179,20 +174,7 @@ async function generateGroundedAnalysis(
     'Mô hình đang tổng hợp các mạch diễn giải có căn cứ...',
     'Đang nối chuỗi sự kiện, cảm xúc, trường hợp tương đồng và phần tri thức đã kiểm chứng.',
   );
-  const firstAnalysis = finalizeGeneratedDreamAnalysis(
-    await callDreamAnalysisModel(prompt, request.abortSignal),
-    context,
-    rules,
-    profile,
-  );
-  const analysis = await repairShallowDreamAnalysis(
-    firstAnalysis,
-    prompt,
-    context.dreamNarrative,
-    rules.usableRules.length > 0,
-    repaired => finalizeGeneratedDreamAnalysis(repaired, context, rules, profile),
-    request.abortSignal,
-  );
+  const rawAnalysis = await callDreamAnalysisModel(prompt, request.abortSignal);
   await report(
     'generating_analysis',
     82,
@@ -207,22 +189,7 @@ async function generateGroundedAnalysis(
     'Đang đối chiếu chi tiết với lời kể, gắn nguồn và bỏ các kết luận vượt quá bằng chứng.',
   );
 
-  await report(
-    'finalizing',
-    92,
-    'Đang hoàn thiện kết quả phân tích...',
-    'Đang lưu các lập luận, nguồn trích dẫn và câu hỏi đã kiểm chứng.',
-  );
-  return analysis;
-}
-
-function finalizeGeneratedDreamAnalysis(
-  rawAnalysis: ILLMOutput,
-  context: RetrievedDreamContext,
-  rules: RetrievedRuleEvidence,
-  profile: DreamProfilePrompt,
-): ILLMOutput {
-  return finalizeDreamAnalysisOutput({
+  const analysis = finalizeDreamAnalysisOutput({
     rawAnalysis,
     dreamNarrative: context.dreamNarrative,
     wakingReactionText: context.wakingReactionText,
@@ -230,12 +197,24 @@ function finalizeGeneratedDreamAnalysis(
     matchedRules: rules.matchedRules,
     explanatoryRules: rules.explanatoryRules,
     questionRules: rules.questionRules,
-    citableRules: rules.usableRules,
     validSourcesMap: rules.validSourcesMap,
     validEvidenceMap: rules.validEvidenceMap,
     culturalProfileUsed: profile.culturalProfileUsed,
     similarDreams: context.similarDreamResult.matches,
   });
+  groundDreamCitationClaims(analysis, {
+    citableRules: rules.usableRules,
+    validSourcesMap: rules.validSourcesMap,
+    validEvidenceMap: rules.validEvidenceMap,
+  });
+  await report(
+    'finalizing',
+    92,
+    'Đang viết phần tiếp theo của giấc mơ...',
+    'Phần phân tích đã hoàn tất; đang dùng bộ sáng tác riêng để nối tiếp câu chuyện.',
+  );
+  analysis.creative_continuation = await generateDreamContinuation(context.dreamNarrative);
+  return analysis;
 }
 
 async function callDreamAnalysisModel(
@@ -245,6 +224,7 @@ async function callDreamAnalysisModel(
   try {
     const analysis = await generateAnalysis(prompt, abortSignal, {
       model: resolveDreamAnalysisModel(),
+      numCtx: resolveDreamAnalysisContextWindow(),
       numPredict: 3200,
     });
     analysis.analysis_mode = 'llm_grounded';
@@ -257,49 +237,13 @@ async function callDreamAnalysisModel(
   }
 }
 
-async function repairShallowDreamAnalysis(
-  analysis: ILLMOutput,
-  originalPrompt: string,
-  narrative: string,
-  hasCitableRules: boolean,
-  finalize: (analysis: ILLMOutput) => ILLMOutput,
-  abortSignal?: AbortSignal,
-): Promise<ILLMOutput> {
-  if (assessDreamAnalysisDepth(analysis, narrative, hasCitableRules).acceptable) {
-    return analysis;
-  }
-  let repaired: ILLMOutput;
-  try {
-    repaired = finalize(
-      await callDreamAnalysisModel(
-        buildDreamAnalysisDepthRepairPrompt(originalPrompt, analysis),
-        abortSignal,
-      ),
-    );
-  } catch (error) {
-    logger.warn('Dream analysis depth repair failed.', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return analysis;
-  }
-
-  const selected = selectDeeperDreamAnalysis(
-    analysis,
-    repaired,
-    narrative,
-    hasCitableRules,
+function resolveDreamAnalysisContextWindow(): number {
+  return Math.max(
+    4096,
+    Number(process.env.DREAM_CONTEXT_WINDOW)
+      || Number(process.env.ORACLE_CONTEXT_WINDOW)
+      || 32768,
   );
-  const selectedDepth = assessDreamAnalysisDepth(
-    selected,
-    narrative,
-    hasCitableRules,
-  );
-  if (!selectedDepth.acceptable) {
-    logger.warn('Dream analysis remained below the preferred depth after repair.', {
-      depth: selectedDepth,
-    });
-  }
-  return selected;
 }
 
 function createProgressReporter(

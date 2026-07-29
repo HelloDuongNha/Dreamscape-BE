@@ -87,21 +87,51 @@ async function invalidateOracleTurns(
       .map((citation) => citation.index);
     if (!invalidIndexes.length) continue;
     turn.contentBlocks = turn.contentBlocks.map((block) => {
-      const text = invalidIndexes.reduce(
+      const invalidatedText = invalidIndexes.reduce(
         (value, index) => invalidateOracleCitationMarker(value, index),
         block.text,
       );
+      const text = compactOracleCitationMarkers(
+        invalidatedText,
+        turn.citations.filter(
+          (citation) => !plan.sourceIds.includes(String(citation.sourceId)),
+        ),
+      );
       return text === block.text ? block : { ...block, text };
     });
-    turn.citations = turn.citations.filter(
+    turn.citations = compactOracleCitations(turn.citations.filter(
       (citation) => !plan.sourceIds.includes(String(citation.sourceId)),
-    );
+    ));
     turn.markModified('contentBlocks');
     turn.markModified('citations');
     await turn.save(session ? { session } : {});
     affectedTurnIds.push(turn._id as Types.ObjectId);
   }
   return affectedTurnIds;
+}
+
+function compactOracleCitations<T extends { index: number }>(citations: T[]): T[] {
+  return [...citations]
+    .sort((left, right) => left.index - right.index)
+    .map((citation, index) => {
+      citation.index = index + 1;
+      return citation;
+    });
+}
+
+function compactOracleCitationMarkers(
+  text: string,
+  citations: Array<{ index: number }>,
+): string {
+  const indexes = new Map(
+    [...citations]
+      .sort((left, right) => left.index - right.index)
+      .map((citation, index) => [citation.index, index + 1]),
+  );
+  return text.replace(/\[(\d+)\]/gu, (marker, rawIndex: string) => {
+    const nextIndex = indexes.get(Number(rawIndex));
+    return nextIndex ? `[${nextIndex}]` : marker;
+  });
 }
 
 async function removeInvalidFeedback(

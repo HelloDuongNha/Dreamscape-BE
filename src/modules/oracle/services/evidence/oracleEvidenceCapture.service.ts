@@ -81,7 +81,9 @@ export function collectDreamEvidenceClaims(
   if (bindings) {
     return [...new Map(bindings
       .filter((binding) => binding.status === 'unresolved')
-      .map((binding) => cleanOracleEvidenceClaim(binding.claimText))
+      .map((binding) => cleanOracleEvidenceClaim(
+        binding.evidenceClaim || binding.claimText,
+      ))
       .filter(isResearchableOracleEvidenceClaim)
       .map((claim) => [normalizeOracleEvidenceText(claim), claim]))
       .values()];

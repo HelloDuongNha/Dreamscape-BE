@@ -114,6 +114,8 @@ export function canonicalizeOracleEvidenceClaim(claim: string): string {
   const lateNight = /cuối đêm|gần sáng|(?:phần\s+)?cuối(?:\s+của)?\s+giấc ngủ|later in the night|later in the sleep period|late in sleep|final quartile/iu.test(value);
   const insight = /bất ngờ|tìm ra giải pháp|khoảnh khắc sáng tỏ|surpris|insight|eureka/iu.test(value);
   const informationProcessing = /xử lý thông tin|information processing/iu.test(value);
+  const futureConstruction = /tái kết hợp|kết hợp.+(?:cấu trúc|kịch bản)|xây dựng.+kịch bản|mô phỏng.+tương lai|recombin|construct.+(?:scenario|future)|future simulation/iu
+    .test(value);
 
   if (dream && future && lateNight) {
     return vietnamese
@@ -130,7 +132,7 @@ export function canonicalizeOracleEvidenceClaim(claim: string): string {
       ? 'Xử lý thông tin trong giấc ngủ có thể liên quan đến cảm giác sáng tỏ hoặc bất ngờ khi tỉnh dậy.'
       : 'Information processing during sleep may be associated with insight or surprise upon awakening.';
   }
-  if (memory && (dream || brain) && future) {
+  if ((memory || futureConstruction) && (dream || brain) && future) {
     return vietnamese
       ? 'Nội dung giấc mơ có thể tái kết hợp ký ức quá khứ với mối quan tâm hoặc nhiệm vụ tương lai.'
       : 'Dream content may recombine past memories with future concerns or anticipated tasks.';

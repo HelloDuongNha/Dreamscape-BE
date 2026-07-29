@@ -17,6 +17,8 @@ export interface EvidenceSourceIdentity {
 export interface EvidenceClaimBinding {
   claimId: string;
   claimText: string;
+  evidenceClaim?: string;
+  evidenceClaimKey?: string;
   contentPath: EvidenceClaimContentPath;
   status: EvidenceClaimStatus;
   source?: EvidenceSourceIdentity;
@@ -153,6 +155,8 @@ export function invalidateEvidenceClaims(
     return {
       claimId: binding.claimId,
       claimText: binding.claimText,
+      ...(binding.evidenceClaim ? { evidenceClaim: binding.evidenceClaim } : {}),
+      ...(binding.evidenceClaimKey ? { evidenceClaimKey: binding.evidenceClaimKey } : {}),
       contentPath: binding.contentPath,
       status: 'unresolved',
     };
