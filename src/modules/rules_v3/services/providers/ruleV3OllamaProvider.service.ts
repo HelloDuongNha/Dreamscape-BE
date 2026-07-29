@@ -8,13 +8,14 @@ import {
 } from './ruleV3ProviderResponseValidator.service';
 import { OLLAMA_JSON_SCHEMA } from './ruleV3ProviderContract.service';
 import { buildRuleV3ExtractionPrompt } from './ruleV3ExtractionPrompt.service';
+import { DEFAULT_OLLAMA_MODEL } from '../../../../infrastructure/llm.service';
 
 export class RuleV3OllamaProvider implements RuleV3GenerationProvider {
   name = 'ollama' as const;
   modelName: string;
 
   constructor(modelName?: string) {
-    this.modelName = modelName || process.env.RULE_V3_OLLAMA_MODEL || 'qwen2.5:14b';
+    this.modelName = modelName || process.env.RULE_V3_OLLAMA_MODEL || DEFAULT_OLLAMA_MODEL;
   }
 
   async generateCandidates(

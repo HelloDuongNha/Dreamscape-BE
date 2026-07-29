@@ -1,3 +1,5 @@
+import { DEFAULT_OLLAMA_MODEL } from '../../../../infrastructure/llm.service';
+
 export type OracleExecutionMode = 'chat' | 'dream_analysis' | 'creative_continuation';
 
 // Builds the provider prompt without owning model execution.
@@ -39,11 +41,11 @@ export function resolveOracleModel(mode: OracleExecutionMode): string {
   if (mode === 'chat') {
     return process.env.ORACLE_OLLAMA_CHAT_MODEL
       || process.env.ORACLE_OLLAMA_MODEL
-      || 'qwen2.5:14b';
+      || DEFAULT_OLLAMA_MODEL;
   }
   return process.env.ORACLE_OLLAMA_ANALYSIS_MODEL
     || process.env.ORACLE_OLLAMA_MODEL
-    || 'qwen3.6:27b';
+    || DEFAULT_OLLAMA_MODEL;
 }
 
 export function inferOracleMode(

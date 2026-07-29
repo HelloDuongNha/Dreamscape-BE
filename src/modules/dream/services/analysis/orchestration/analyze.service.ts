@@ -285,8 +285,7 @@ async function callDreamAnalysisModel(
 
 function resolveDreamRepairModel(): string {
   return process.env.DREAM_OLLAMA_REPAIR_MODEL
-    || process.env.OLLAMA_FALLBACK_MODEL
-    || 'qwen2.5:14b';
+    || resolveDreamAnalysisModel();
 }
 
 function resolveDreamAnalysisContextWindow(): number {

@@ -15,6 +15,7 @@ interface DreamRuleEvidenceResult {
   evidenceLinksAudit: any[];
   validSourcesMap: Map<string, any[]>;
   validEvidenceMap: Map<string, Array<{
+    evidenceId: string;
     sourceId: string;
     chunkId: string;
     quote: string;
@@ -49,6 +50,7 @@ export async function retrieveDreamRuleEvidence(
   const evidenceLinksAudit: any[] = [];
   const validSourcesMap = new Map<string, any[]>();
   const validEvidenceMap = new Map<string, Array<{
+    evidenceId: string;
     sourceId: string;
     chunkId: string;
     quote: string;
@@ -94,6 +96,7 @@ export async function retrieveDreamRuleEvidence(
     const sources = deduplicateAcademicSources(ruleSources);
     const ruleId = String(rule.ruleId || rule._id);
     const evidenceItems = ruleLinks.map(link => ({
+      evidenceId: String(link._id),
       sourceId: String(link.chunkId.sourceId._id),
       chunkId: String(link.chunkId._id),
       quote: String(link.quote || '').trim(),

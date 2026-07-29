@@ -4,6 +4,8 @@ import type {
   EvidenceClaimContentPath,
 } from '../shared/evidence/citationClaim';
 
+export const DEFAULT_OLLAMA_MODEL = 'qwen3.5:9b';
+
 export interface ILLMOutput {
   title: string;
   emotional_tone: string;
@@ -588,7 +590,7 @@ export async function generateStructuredJson<T>(
   } = {},
 ): Promise<T> {
   const baseUrl = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434';
-  const model = options.model || process.env.OLLAMA_MODEL || 'qwen2.5:14b';
+  const model = options.model || process.env.OLLAMA_MODEL || DEFAULT_OLLAMA_MODEL;
   const timeoutMs = parseInt(process.env.OLLAMA_ANALYSIS_TIMEOUT || '0', 10);
   const temperature = options.temperature ?? Number(process.env.OLLAMA_DREAM_TEMPERATURE || '0');
   const seed = options.seed ?? parseInt(process.env.OLLAMA_DREAM_SEED || '42', 10);
@@ -670,8 +672,8 @@ export async function generateAnalysis(
       options,
     );
   } catch (error) {
-    const fallbackModel = process.env.OLLAMA_FALLBACK_MODEL || 'qwen2.5:14b';
-    const requestedModel = options.model || process.env.OLLAMA_MODEL || 'qwen2.5:14b';
+    const fallbackModel = process.env.OLLAMA_FALLBACK_MODEL || DEFAULT_OLLAMA_MODEL;
+    const requestedModel = options.model || process.env.OLLAMA_MODEL || DEFAULT_OLLAMA_MODEL;
     const canRetryWithFallback = error instanceof OllamaServiceError
       && error.statusCode === 503
       && requestedModel !== fallbackModel

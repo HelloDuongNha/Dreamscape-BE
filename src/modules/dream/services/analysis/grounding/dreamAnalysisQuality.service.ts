@@ -1,4 +1,7 @@
-import type { ILLMOutput } from '../../../../../infrastructure/llm.service';
+import {
+  DEFAULT_OLLAMA_MODEL,
+  type ILLMOutput,
+} from '../../../../../infrastructure/llm.service';
 import {
   isResearchableOracleEvidenceClaim,
 } from '../../../../oracle/services/evidence/oracleEvidenceClaim.service';
@@ -13,12 +16,10 @@ export interface DreamAnalysisDepth {
   linkedEvidenceClaimCount: number;
 }
 
-// Keeps post analysis and Oracle on the same capable model unless Dream has an explicit override.
+// Keeps Dream analysis independent from Oracle while still allowing an explicit deployment override.
 export function resolveDreamAnalysisModel(): string {
   return process.env.DREAM_OLLAMA_ANALYSIS_MODEL
-    || process.env.ORACLE_OLLAMA_ANALYSIS_MODEL
-    || process.env.ORACLE_OLLAMA_MODEL
-    || 'qwen3.6:27b';
+    || DEFAULT_OLLAMA_MODEL;
 }
 
 // Checks whether the analysis depth is proportional to the supplied narrative.

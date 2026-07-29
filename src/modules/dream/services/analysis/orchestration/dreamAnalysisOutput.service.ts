@@ -2,7 +2,9 @@ import { ILLMOutput } from '../../../../../infrastructure/llm.service';
 import { logger } from '../../../../../infrastructure/logger';
 import { sanitizePracticalReflections } from '../assembly/practicalReflection.service';
 import {
-  attachRuleQuestionContext,
+  appendDreamVerificationQuestion,
+} from '../../../../oracle/services/evidence/oracleEvidenceDreamQuestion.service';
+import {
   buildGroundedDreamTitle,
   buildGroundedMotifExplanation,
   buildRuleScientificFallback,
@@ -15,7 +17,6 @@ import {
   isGroundedDreamTitle,
   polishGeneratedDreamProse,
   removeInternalAnalysisVocabulary,
-  sanitizeGeneratedHypotheses,
   sanitizeInterpretiveThreads,
   sanitizeUnsupportedDreamClaims,
 } from '../grounding/dreamAnalysisGrounding.service';
@@ -32,7 +33,12 @@ interface OutputContext {
   explanatoryRules: any[];
   questionRules: any[];
   validSourcesMap: Map<string, any[]>;
-  validEvidenceMap: Map<string, Array<{ sourceId: string; chunkId: string; quote: string }>>;
+  validEvidenceMap: Map<string, Array<{
+    evidenceId: string;
+    sourceId: string;
+    chunkId: string;
+    quote: string;
+  }>>;
   culturalProfileUsed: boolean;
   similarDreams: SimilarDreamMatch[];
 }
@@ -139,54 +145,7 @@ function groundScientificNotes(analysis: ILLMOutput, context: OutputContext): vo
 
 function groundQuestionsAndProse(analysis: ILLMOutput, context: OutputContext): void {
   if (!context.culturalProfileUsed) analysis.cultural_symbolic_notes = [];
-  if (!Array.isArray(analysis.real_life_hypotheses)) analysis.real_life_hypotheses = [];
-  {
-    const validRuleIds = new Set<string>(
-      context.questionRules.map(rule => String(rule.ruleId || rule._id)),
-    );
-    const questions = sanitizeGeneratedHypotheses(
-      analysis.real_life_hypotheses,
-      context.dreamNarrative,
-      context.wakingReactionText,
-      validRuleIds,
-    );
-    const uniqueQuestions = new Map<string, any>();
-    for (const question of questions) {
-      const key = String(question.verificationKey || `${question.ruleId}:${question.followUpQuestion}`);
-      if (!uniqueQuestions.has(key)) uniqueQuestions.set(key, question);
-    }
-    analysis.real_life_hypotheses = attachRuleQuestionContext(
-      [...uniqueQuestions.values()].slice(0, 4),
-      context.questionRules,
-    ).map((question: any) => {
-      const ruleId = String(question.ruleId || '');
-      const evidence = (context.validEvidenceMap.get(ruleId) || [])[0];
-      return {
-        ...question,
-        sources: deduplicateAcademicSources(context.validSourcesMap.get(ruleId) || []),
-        ...(evidence ? { validationSourceId: evidence.sourceId, validationExactQuote: evidence.quote } : {}),
-      };
-    });
-    if (analysis.real_life_hypotheses.length === 0 && context.questionRules.length > 0
-      && context.wakingReactionText.trim()) {
-      const rule = context.questionRules[0];
-      const evidence = findNarrativeSentenceForSymbol(
-        context.wakingReactionText,
-        context.dreamNarrative,
-      ) || context.dreamNarrative.split(/(?<=[.!?])\s+/u).find(Boolean) || context.dreamNarrative;
-      analysis.real_life_hypotheses = attachRuleQuestionContext([{
-        ruleId: String(rule.ruleId || rule._id),
-        hypothesis: 'Cảm xúc còn lại khi tỉnh dậy có thể đang liên quan đến một hoàn cảnh hiện tại cần được làm rõ.',
-        followUpQuestion: 'Ngoài đời, cảm giác còn lại sau khi tỉnh dậy có đang gắn với một việc hoặc quyết định cụ thể gần đây không?',
-        reasonForAsking: 'Câu hỏi này kiểm tra xem cảm xúc được kể sau khi tỉnh dậy có một hoàn cảnh đời thực tương ứng hay chỉ thuộc về mạch của giấc mơ.',
-        ifYesMeaning: 'Câu trả lời Có làm hướng liên hệ với hoàn cảnh hiện tại đáng được xem xét thêm.',
-        ifNoMeaning: 'Câu trả lời Không làm giảm ưu tiên của hướng liên hệ với một hoàn cảnh hiện tại cụ thể.',
-        evidenceFromDream: [evidence],
-        questionType: 'present',
-        needsUserConfirmation: true,
-      }], context.questionRules);
-    }
-  }
+  analysis.real_life_hypotheses = buildAcademicVerificationQuestions(context);
   analysis.scientific_context_notes = (analysis.scientific_context_notes || []).map((note: any) => {
     const linkedEvidence = (analysis.real_life_hypotheses || [])
       .filter((item: any) => String(item?.ruleId || '') === String(note?.ruleId || ''))
@@ -232,6 +191,53 @@ function groundQuestionsAndProse(analysis: ILLMOutput, context: OutputContext): 
     analysis.emotional_tone_key = emotion.key;
     analysis.emotional_tone = emotion.label;
   }
+}
+
+// Uses the same rule-backed question contract as Oracle, one question per cited source.
+function buildAcademicVerificationQuestions(context: OutputContext): any[] {
+  const result = { real_life_hypotheses: [] as any[] };
+  const usedSourceIds = new Set<string>();
+  for (const rule of context.matchedRules) {
+    if (result.real_life_hypotheses.length >= 4) break;
+    const ruleId = String(rule.ruleId || rule._id || '');
+    const evidence = (context.validEvidenceMap.get(ruleId) || [])
+      .find(item => !usedSourceIds.has(item.sourceId));
+    if (!evidence) continue;
+    const source = (context.validSourcesMap.get(ruleId) || [])
+      .find(item => String(item.sourceId || '') === evidence.sourceId);
+    if (!source) continue;
+
+    appendDreamVerificationQuestion(
+      result,
+      rule,
+      {
+        source: { ...source, _id: source.sourceId },
+        evidence: {
+          _id: evidence.evidenceId,
+          chunkId: evidence.chunkId,
+          exactQuote: evidence.quote,
+        },
+      },
+      evidence.sourceId,
+      [findRuleNarrativeEvidence(rule, context.dreamNarrative)],
+    );
+    usedSourceIds.add(evidence.sourceId);
+  }
+  return result.real_life_hypotheses;
+}
+
+function findRuleNarrativeEvidence(rule: any, narrative: string): string {
+  const anchors = [
+    ...(rule.dreamFeatureTags || []),
+    rule.factor,
+    rule.outcome,
+    rule.subject,
+  ].map((item: unknown) => String(item || '').trim()).filter(Boolean);
+  for (const anchor of anchors) {
+    const evidence = findNarrativeSentenceForSymbol(anchor, narrative);
+    if (evidence) return evidence;
+  }
+  return narrative.split(/(?<=[.!?])\s+/u).find(Boolean) || narrative;
 }
 
 function attachSimilarDreams(analysis: ILLMOutput, similarDreams: SimilarDreamMatch[]): void {

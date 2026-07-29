@@ -113,20 +113,7 @@ Required JSON shape:
   "cultural_symbolic_notes": [
     { "source": "string", "note": "string" }
   ],
-  "real_life_hypotheses": [
-    {
-      "ruleId": "string",
-      "hypothesis": "falsifiable unknown waking-life fact",
-      "evidenceFromDream": ["exact quote"],
-      "confidence": 0.0,
-      "needsUserConfirmation": true,
-      "followUpQuestion": "one natural yes/no question",
-      "reasonForAsking": "one clear sentence of at least 45 characters",
-      "ifYesMeaning": "one clear sentence of at least 35 characters",
-      "ifNoMeaning": "one clear sentence of at least 35 characters",
-      "questionType": "past, present, or future"
-    }
-  ],
+  "real_life_hypotheses": [],
   "interpretive_threads": [
     {
       "title": "string",
@@ -160,9 +147,9 @@ Reasoning and evidence rules:
    When a retrieved rule directly supports a general research claim that appears
    in core_analysis or an interpretive thread, use it instead of ignoring the
    available academic evidence.
-7. Every hypothesis must concern one unknown observable fact, use a retrieved
-   rule, cite exact narrative evidence and be answerable Có/Không/Chưa biết.
-   Ask fewer questions when fewer are defensible; never fill a quota.
+7. Return real_life_hypotheses as an empty array. The server creates localized
+   Có/Không/Chưa biết questions deterministically from the exact retrieved rule,
+   source and excerpt so Dream and Oracle use the same verification contract.
 8. Return two to four interpretive threads for a detailed narrative and one or
    two for a short narrative. Each thread must connect at least
    two events in sequence, explain why their combination matters, and include a

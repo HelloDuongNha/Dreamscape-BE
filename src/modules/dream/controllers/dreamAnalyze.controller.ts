@@ -1,12 +1,16 @@
 import type { Request, Response } from 'express';
 import { Types } from 'mongoose';
 import Dream from '../models/Dream';
-import { OllamaServiceError } from '../../../infrastructure/llm.service';
+import {
+  DEFAULT_OLLAMA_MODEL,
+  OllamaServiceError,
+} from '../../../infrastructure/llm.service';
 import { logger } from '../../../infrastructure/logger';
 import { runDreamAnalysis } from '../services/analysis/orchestration/analyze.service';
 import { mapDreamResponse } from '../services/content/dreamNarrative.service';
 import { syncDreamSymbolObservations } from '../services/analysis/execution/dreamSymbolObservationSync.service';
 import { syncDreamEvidenceNeeds } from '../services/analysis/execution/dreamEvidenceSync.service';
+import { queueDreamContinuation } from '../services/analysis/execution/dreamContinuationJob.service';
 import { parseAnalyzeDreamRequest } from '../dto/dreamAnalyze.dto';
 
 // Runs the synchronous analysis endpoint and saves only a validated result.
@@ -39,7 +43,7 @@ export async function analyzeDream(req: Request, res: Response): Promise<void> {
       retrievedContext,
       analysisMetadata: {
         strategyUsed,
-        llmModel: process.env.OLLAMA_MODEL || 'qwen2.5:14b',
+        llmModel: process.env.OLLAMA_MODEL || DEFAULT_OLLAMA_MODEL,
         embeddingModel: process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text',
         ragTopK: retrievedContext.componentA.usedSymbols.length,
         minSimilarityScore: parseFloat(process.env.SYMBOL_RAG_MIN_SCORE || '0.55'),
@@ -52,13 +56,14 @@ export async function analyzeDream(req: Request, res: Response): Promise<void> {
     await savedDream.save();
     await syncDreamSymbolObservations(savedDream);
     await syncDreamEvidenceNeeds(savedDream);
+    await queueDreamContinuation(savedDream, savedDream.userId);
     logger.info('Dream analysis pipeline completed and saved successfully', {
       dreamId: String(savedDream._id),
       userId,
       rulesCount: retrievedContext.componentD.appliedRules.length,
       symbolsCount: retrievedContext.componentA.usedSymbols.length,
       strategyUsed,
-      modelUsed: process.env.OLLAMA_MODEL || 'qwen2.5:14b',
+      modelUsed: process.env.OLLAMA_MODEL || DEFAULT_OLLAMA_MODEL,
       validationStatus: 'passed',
     });
 
