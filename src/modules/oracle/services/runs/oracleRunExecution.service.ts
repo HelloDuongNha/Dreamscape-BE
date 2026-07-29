@@ -44,6 +44,7 @@ export function abortOracleRun(runId: string): void {
   activeRuns.get(runId)?.abort();
 }
 
+// Execute one queued Oracle run through grounding, generation, citation finalization, and persistence.
 export async function executeOracleRun(runId: Types.ObjectId): Promise<void> {
   const execution = claimLocalExecution(runId);
   if (!execution) return;
@@ -128,6 +129,7 @@ async function claimPersistedRun(runId: Types.ObjectId): Promise<IOracleRun | nu
   return run;
 }
 
+// Prepare the grounded context shared by the answer generator and citation resolver.
 async function prepareRunContext(run: IOracleRun, signal: AbortSignal) {
   const messages = await loadOracleConversation(run.threadId, run.userId, run.userTurnId);
   const latestUserText = [...messages].reverse()
@@ -204,6 +206,7 @@ async function prepareRunContext(run: IOracleRun, signal: AbortSignal) {
   };
 }
 
+// Generate the narrative answer from the grounded context without mutating run state.
 async function generateOracleAnswer(input: {
   run: IOracleRun;
   runId: Types.ObjectId;
@@ -318,6 +321,7 @@ async function generateOracleAnswer(input: {
   };
 }
 
+// Normalize citations and remove unsupported verification boilerplate before persistence.
 function finalizeGroundedAnswer(
   rawAnswer: string,
   input: Parameters<typeof generateOracleAnswer>[0],

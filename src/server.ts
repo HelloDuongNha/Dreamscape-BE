@@ -10,6 +10,11 @@ import { recoverPendingDreamAnalysisQueue } from './modules/dream/services/analy
 import {
   assertMessagingSecurityConfigured,
 } from './modules/messaging/services/crypto/messagingCrypto.service';
+import {
+  closeRedis,
+  initializeRedis,
+} from './infrastructure/redis/redisConnection';
+import mongoose from 'mongoose';
 
 const PORT = Number(process.env.PORT) || 5000;
 
@@ -19,6 +24,7 @@ const startServer = async (): Promise<void> => {
 
   // 2. Connect to MongoDB before accepting traffic
   await connectDB();
+  await initializeRedis();
   await recoverInterruptedReaderReplacements();
   await recoverIncompleteRuleV3Replacements();
   await recoverPendingDreamAnalysisQueue(runBackgroundAnalysis);
@@ -42,6 +48,20 @@ const startServer = async (): Promise<void> => {
     console.log(`🌍 Environment  → ${process.env.NODE_ENV ?? 'development'}`);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   });
+
+  const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
+    console.log(`\n${signal} received. Closing DreamScape services...`);
+    httpServer.close(async () => {
+      await Promise.allSettled([
+        closeRedis(),
+        mongoose.disconnect(),
+      ]);
+      process.exit(0);
+    });
+  };
+
+  process.once('SIGINT', () => void shutdown('SIGINT'));
+  process.once('SIGTERM', () => void shutdown('SIGTERM'));
 };
 
 startServer().catch((err: Error) => {

@@ -52,6 +52,7 @@ async function updateAttemptRun(runId: string, attemptId: string, update: Record
   return run;
 }
 
+// Start one serialized Rules V3 extraction attempt and return its queue/reuse state.
 export async function startRuleV3FullExtraction(
   inputId: string,
   provider: RuleV3GenerationProvider,
@@ -92,6 +93,7 @@ function isAttemptScheduled(runId: string, attemptId: string): boolean {
   return activeRuns.has(activeKey) || queuedRuns.has(activeKey);
 }
 
+// Drain queued extraction requests strictly one at a time.
 function drainRuleV3Queue(): void {
   if (activeRuns.size > 0) return;
   const next = queuedRuns.values().next().value as QueuedRuleV3Run | undefined;
@@ -120,6 +122,7 @@ function drainRuleV3Queue(): void {
   activeRuns.set(next.activeKey, { task, controller });
 }
 
+// Execute extraction batches, normalize model output, and persist candidate rules.
 async function executeRuleV3FullExtraction(
   runId: string,
   attemptId: string,

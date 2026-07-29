@@ -51,18 +51,36 @@ export function ensureRuleBackedFinalQuestion(
   }>,
   vietnamese: boolean,
 ): string {
-  const selected = verificationQuestions.find((item) => item.question.trim());
-  if (!selected) return answer;
+  const answerWithoutStaleVerification = removeTrailingVerificationQuestion(answer);
+  const usedCitationIndices = collectUsedCitationIndices(answerWithoutStaleVerification);
+  const selected = verificationQuestions.find((item) =>
+    item.question.trim() && usedCitationIndices.has(item.citationIndex));
+  if (!selected) return answerWithoutStaleVerification;
+
   const selectedQuestion = (
     vietnamese ? selected.localizedQuestion?.vi : selected.localizedQuestion?.en
   )?.trim() || selected.question.trim();
-  const withoutUnboundFinalQuestion = answer
-    .replace(/\n{2,}(?:[^\n]|\n(?!\n)){1,700}\?\s*$/u, '')
-    .trim();
   const prefix = vietnamese
     ? `Để kiểm tra cách lập luận [${selected.citationIndex}] áp dụng vào trường hợp này:`
     : `To test whether argument [${selected.citationIndex}] applies to this case:`;
-  return `${withoutUnboundFinalQuestion}\n\n${prefix} ${selectedQuestion}`;
+  return `${answerWithoutStaleVerification}\n\n${prefix} ${selectedQuestion}`;
+}
+
+function removeTrailingVerificationQuestion(answer: string): string {
+  return answer
+    .replace(
+      /\n{2,}\*{0,2}(?:Để kiểm tra cách lập luận|To test whether argument)\b[\s\S]{0,700}\?\*{0,2}\s*$/iu,
+      '',
+    )
+    .trim();
+}
+
+function collectUsedCitationIndices(answer: string): Set<number> {
+  return new Set(
+    [...answer.matchAll(/\[(\d+)\]/gu)]
+      .map((match) => Number(match[1]))
+      .filter(Number.isInteger),
+  );
 }
 
 export function compactUsedCitations(
