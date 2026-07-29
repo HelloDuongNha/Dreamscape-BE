@@ -39,6 +39,7 @@ export interface DreamCitationGroundingContext {
   citableRules: any[];
   validSourcesMap: Map<string, any[]>;
   validEvidenceMap: Map<string, Array<{
+    evidenceId: string;
     sourceId: string;
     chunkId: string;
     quote: string;
@@ -56,6 +57,7 @@ interface ResolvedDreamClaimSupport {
   ruleId: string;
   source: any;
   evidence: {
+    evidenceId: string;
     sourceId: string;
     chunkId: string;
     quote: string;
@@ -103,8 +105,8 @@ export function groundDreamCitationClaims(
     const resolved = resolveEvidenceClaim(binding, {
       source: { sourceId: String(source.sourceId), doi: source.doi },
       ruleId,
-      evidenceId: String(evidence.chunkId),
-      verificationKey: `${ruleId}:${String(evidence.chunkId)}`
+      evidenceId: String(evidence.evidenceId || evidence.chunkId),
+      verificationKey: `${ruleId}:${String(evidence.evidenceId || evidence.chunkId)}`
         + `:dream-citation-${ORACLE_CITATION_QUESTION_VERSION}`,
     }, citationRecords);
     bindings.push(resolved);
@@ -126,7 +128,7 @@ export function groundDreamCitationClaims(
       {
         source: { ...source, _id: String(source.sourceId) },
         evidence: {
-          _id: String(evidence.chunkId),
+          _id: String(evidence.evidenceId || evidence.chunkId),
           chunkId: String(evidence.chunkId),
           exactQuote: String(evidence.quote),
         },
@@ -211,7 +213,15 @@ function resolveDreamClaimSupport(
       String(item.sourceId) === String(source?.sourceId)
       && String(item.quote || '').trim());
     if (source?.sourceId && evidence) {
-      return { rule, ruleId, source, evidence };
+      return {
+        rule,
+        ruleId,
+        source,
+        evidence: {
+          ...evidence,
+          evidenceId: String(evidence.evidenceId || evidence.chunkId),
+        },
+      };
     }
   }
   return null;

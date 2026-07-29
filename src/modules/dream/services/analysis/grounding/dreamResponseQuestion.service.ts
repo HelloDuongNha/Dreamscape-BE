@@ -1,8 +1,12 @@
-import { canGenerateContextQuestion } from '../../../../rules_v3/services/retrieval/ruleV3DreamApplication.service';
 import {
   attachRuleQuestionContext,
   removeInternalAnalysisVocabulary,
 } from './dreamGroundingText.service';
+import {
+  buildOracleCitationVerificationQuestion,
+  localizeOracleRuleStatement,
+  ORACLE_CITATION_QUESTION_VERSION,
+} from '../../../../oracle/services/presentation/oracleRulePresentation.service';
 interface ResponseQuestionContext {
   hypotheses: any[];
   ruleMap: Map<string, any>;
@@ -53,7 +57,7 @@ export function buildResponseQuestionContext(
       const linkedRules = linkedRuleIds
         .map(ruleId => ruleMap.get(ruleId))
         .filter(Boolean) as any[];
-      if (linkedRules.length === 0 || !linkedRules.some(canGenerateContextQuestion)) return [];
+      if (linkedRules.length === 0) return [];
 
       const sources = [...new Map([
         ...(item?.sources || []),
@@ -99,7 +103,79 @@ export function buildResponseQuestionContext(
     };
   }));
 
-  return { hypotheses, ruleMap, sourceByRule };
+  return {
+    hypotheses: appendMissingSourceQuestions(hypotheses, analysis, ruleMap, sourceByRule, evidenceLinks),
+    ruleMap,
+    sourceByRule,
+  };
+}
+
+// Backfills old analyses that already have a citation but were saved before the
+// canonical Dream/Oracle question contract was applied.
+function appendMissingSourceQuestions(
+  hypotheses: any[],
+  analysis: any,
+  ruleMap: Map<string, any>,
+  sourceByRule: Map<string, any[]>,
+  evidenceLinks: any[],
+): any[] {
+  const next = [...hypotheses];
+  const usedSources = new Set(
+    next.flatMap(item => (item.sources || []).map((source: any) => String(source?.sourceId || ''))),
+  );
+  for (const link of evidenceLinks || []) {
+    if (next.length >= 4) break;
+    const ruleId = String(link?.ruleId || '').trim();
+    const sourceId = String(link?.sourceId || '').trim();
+    const rule = ruleMap.get(ruleId);
+    if (!rule || !sourceId || usedSources.has(sourceId)) continue;
+    const source = (sourceByRule.get(ruleId) || []).find(
+      item => String(item?.sourceId || '') === sourceId,
+    );
+    if (!source) continue;
+    const evidenceId = String(link?.evidenceId || link?.chunkIds?.[0] || '').trim();
+    const question = buildOracleCitationVerificationQuestion(rule);
+    const statement = localizeOracleRuleStatement(rule);
+    next.push({
+      ruleId,
+      ruleIds: [ruleId],
+      hypothesis: statement.vi,
+      localizedHypothesis: statement,
+      followUpQuestion: question.vi,
+      localizedFollowUpQuestion: question,
+      reasonForAsking: 'Câu hỏi này kiểm tra điều kiện thực tế của lập luận trong trường hợp của bạn.',
+      localizedReasonForAsking: {
+        vi: 'Câu hỏi này kiểm tra điều kiện thực tế của lập luận trong trường hợp của bạn.',
+        en: 'This question checks whether the argument’s real-life condition applies to your case.',
+      },
+      ifYesMeaning: 'Câu trả lời Có làm lập luận phù hợp hơn với trường hợp này.',
+      localizedIfYesMeaning: {
+        vi: 'Câu trả lời Có làm lập luận phù hợp hơn với trường hợp này.',
+        en: 'A Yes answer makes the argument more applicable to this case.',
+      },
+      ifNoMeaning: 'Câu trả lời Không làm lập luận kém phù hợp hơn với trường hợp này.',
+      localizedIfNoMeaning: {
+        vi: 'Câu trả lời Không làm lập luận kém phù hợp hơn với trường hợp này.',
+        en: 'A No answer makes the argument less applicable to this case.',
+      },
+      answerSemantics: { yes: 'supports', no: 'weakens', unsure: 'unresolved' },
+      needsUserConfirmation: true,
+      questionBasis: 'academic_rule',
+      verificationKey: `${ruleId}:${evidenceId}:dream-citation-${ORACLE_CITATION_QUESTION_VERSION}`,
+      validationSourceId: sourceId,
+      validationExactQuote: String(link?.chunkPreview || ''),
+      sources: [{
+        ...source,
+        chunkIds: (source.chunkIds || link?.chunkIds || []).map((id: unknown) => String(id)),
+      }],
+      ...(Number.isFinite(Number(rule?.evidenceScore))
+        ? { ruleScore: Number(rule.evidenceScore) }
+        : {}),
+      userFeedback: null,
+    });
+    usedSources.add(sourceId);
+  }
+  return deduplicateDreamQuestionsBySource(next);
 }
 
 // Keeps distinct rule/excerpt questions while removing true duplicates.

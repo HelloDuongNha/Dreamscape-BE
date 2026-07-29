@@ -36,6 +36,9 @@ export function mapDreamResponse(dream: any): any {
   const completeNarrative = composeDreamNarrative(obj.content || obj.dreamText || '', obj.additions || []);
   if (obj.ai_result) {
     obj.ai_result = enrichScientificNotesForResponse(obj.ai_result, obj.retrievedContext, completeNarrative);
+    if (obj.continuationMetadata) {
+      obj.ai_result.continuationMetadata = obj.continuationMetadata;
+    }
     obj.aiAnalysis = obj.ai_result;
     obj.mood_tag = obj.ai_result.emotional_tone || obj.mood_tag || '';
   }

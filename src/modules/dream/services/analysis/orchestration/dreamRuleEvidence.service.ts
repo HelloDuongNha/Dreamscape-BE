@@ -75,6 +75,7 @@ export async function retrieveDreamRuleEvidence(
       const snippet = link.quote || chunk.text || '';
       evidenceLinksAudit.push({
         ruleId: rule._id,
+        evidenceId: link._id,
         evidenceRole: 'primary_support',
         sourceId: source._id,
         sourceTitle: source.title,
