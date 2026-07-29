@@ -1,4 +1,5 @@
-import mongoose, { Document, Schema, Types } from 'mongoose';
+import { Document, Schema, Types } from 'mongoose';
+import { modelForDomain } from '../../../infrastructure/database/domainModels';
 
 export type OracleRunEventType =
   | 'token'
@@ -42,4 +43,8 @@ OracleRunEventSchema.index({ runId: 1, sequence: 1 }, { unique: true });
 OracleRunEventSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 OracleRunEventSchema.index({ userId: 1, runId: 1, sequence: 1 });
 
-export default mongoose.model<IOracleRunEvent>('OracleRunEvent', OracleRunEventSchema);
+export default modelForDomain<IOracleRunEvent>(
+  'operations',
+  'OracleRunEvent',
+  OracleRunEventSchema,
+);

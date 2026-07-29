@@ -23,11 +23,11 @@ import { completeOracleRun, failOracleRun } from '../persistence/oracleRunFinali
 import {
   buildOracleSystemPrompt,
   findLatestDreamNarrative,
-  inferOracleMode,
   isVietnameseText,
   resolveOracleModel,
   type OracleExecutionMode,
 } from '../providers/oraclePrompt.service';
+import { resolveOracleExecutionMode } from './oracleIntentRouting.service';
 import { estimateOracleRunDuration } from './oracleRunTiming.service';
 import {
   sanitizeOracleUnresolvedMarkers,
@@ -49,7 +49,7 @@ export async function executeOracleRun(runId: Types.ObjectId): Promise<void> {
     run = await claimPersistedRun(runId);
     if (!run) return;
 
-    const context = await prepareRunContext(run);
+    const context = await prepareRunContext(run, execution.controller.signal);
     if (!context) return;
     const generation = await generateOracleAnswer({
       run,
@@ -121,18 +121,27 @@ async function claimPersistedRun(runId: Types.ObjectId): Promise<IOracleRun | nu
   return run;
 }
 
-async function prepareRunContext(run: IOracleRun) {
+async function prepareRunContext(run: IOracleRun, signal: AbortSignal) {
   const messages = await loadOracleConversation(run.threadId, run.userId, run.userTurnId);
-  const mode = inferOracleMode(messages);
   const latestUserText = [...messages].reverse()
     .find((message) => message.role === 'user')?.content || '';
+  const adapter = await resolveOracleModelAdapter(run.userId);
+  const routingModel = adapter.modelOverride || (adapter.name === 'openai_compatible'
+    ? String(process.env.ORACLE_EXTERNAL_MODEL || resolveOracleModel('chat'))
+    : resolveOracleModel('chat'));
+  const routing = await resolveOracleExecutionMode({
+    adapter,
+    messages,
+    model: routingModel,
+    signal,
+  });
+  const mode = routing.mode;
   const groundingText = mode === 'dream_analysis'
     ? findLatestDreamNarrative(messages) || latestUserText
     : latestUserText;
   const grounding = mode === 'dream_analysis'
     ? await buildOracleGrounding(String(run.userId), groundingText)
     : { citations: [], promptContext: '', verificationQuestions: [] };
-  const adapter = await resolveOracleModelAdapter(run.userId);
   const model = adapter.modelOverride || (adapter.name === 'openai_compatible'
     ? String(process.env.ORACLE_EXTERNAL_MODEL || resolveOracleModel(mode))
     : resolveOracleModel(mode));
@@ -166,6 +175,7 @@ async function prepareRunContext(run: IOracleRun) {
     adapter,
     model,
     estimate,
+    routingPromptTokens: routing.promptTokens,
   };
 }
 
@@ -185,6 +195,7 @@ async function generateOracleAnswer(input: {
   adapter: Awaited<ReturnType<typeof resolveOracleModelAdapter>>;
   model: string;
   estimate: { minMs: number; maxMs: number };
+  routingPromptTokens: number;
 }) {
   const contextWindow = Math.max(4096, Number(process.env.ORACLE_CONTEXT_WINDOW) || 32768);
   let rawAnswer = '';
@@ -201,6 +212,10 @@ async function generateOracleAnswer(input: {
     signal: input.controller.signal,
     messages: [
       { role: 'system', content: buildOracleSystemPrompt(input.mode) },
+      {
+        role: 'system',
+        content: `Runtime metadata: provider=${input.adapter.name}; model=${input.model}. Use this only when the user asks about the active provider or model.`,
+      },
       ...(input.grounding.promptContext
         ? [{ role: 'system' as const, content: input.grounding.promptContext }]
         : []),
@@ -232,17 +247,19 @@ async function generateOracleAnswer(input: {
   });
   const compacted = compactUsedCitations(answer, input.grounding.citations);
   answer = compacted.text;
-  await captureOracleEvidenceGaps({
-    userId: input.run.userId,
-    threadId: input.run.threadId,
-    turnId: input.run.assistantTurnId,
-    answer,
-  });
+  if (input.mode === 'dream_analysis') {
+    await captureOracleEvidenceGaps({
+      userId: input.run.userId,
+      threadId: input.run.threadId,
+      turnId: input.run.assistantTurnId,
+      answer,
+    });
+  }
   return {
     answer,
     citations: compacted.citations,
     suggestedPrompts,
-    promptTokens: modelResult.promptTokens,
+    promptTokens: modelResult.promptTokens + input.routingPromptTokens,
     contextWindow,
     provider: input.adapter.name,
     model: input.model,

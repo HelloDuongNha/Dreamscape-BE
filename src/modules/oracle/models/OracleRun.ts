@@ -1,4 +1,5 @@
-import mongoose, { Document, Schema, Types } from 'mongoose';
+import { Document, Schema, Types } from 'mongoose';
+import { modelForDomain } from '../../../infrastructure/database/domainModels';
 import type { OracleRunStatus } from '../services/oracle.types';
 
 export interface IOracleRun extends Document {
@@ -66,4 +67,8 @@ const OracleRunSchema = new Schema<IOracleRun>(
 OracleRunSchema.index({ userId: 1, clientRequestId: 1 }, { unique: true });
 OracleRunSchema.index({ userId: 1, threadId: 1, createdAt: -1 });
 
-export default mongoose.model<IOracleRun>('OracleRun', OracleRunSchema);
+export default modelForDomain<IOracleRun>(
+  'operations',
+  'OracleRun',
+  OracleRunSchema,
+);

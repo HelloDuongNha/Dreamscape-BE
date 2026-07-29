@@ -10,9 +10,6 @@ export const DATABASE_DOMAIN_COLLECTIONS: Record<DatabaseDomain, readonly string
     'notifications',
     'oracleevidencegaps',
     'oraclemodelcredentials',
-    'oraclerulefeedbacks',
-    'oraclerunevents',
-    'oracleruns',
     'oraclethreads',
     'oracleturns',
     'otps',
@@ -34,6 +31,8 @@ export const DATABASE_DOMAIN_COLLECTIONS: Record<DatabaseDomain, readonly string
   operations: [
     'academic_rule_extraction_runs',
     'academic_rule_extraction_runs_v3',
+    'oraclerunevents',
+    'oracleruns',
     'reader_replacement_backups',
     'reader_replacement_runs',
     'rule_v3_replacement_backup_items',
@@ -58,7 +57,10 @@ export const LEGACY_COLLECTIONS = [
   'verified_knowledge_rules',
 ] as const;
 
-export const RETIRED_COLLECTIONS = ['dreamsymbols'] as const;
+export const RETIRED_COLLECTIONS = [
+  'dreamsymbols',
+  'oraclerulefeedbacks',
+] as const;
 
 export function domainForCollection(collectionName: string): DatabaseDomain | null {
   for (const [domain, collections] of Object.entries(DATABASE_DOMAIN_COLLECTIONS)) {

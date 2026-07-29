@@ -5,7 +5,6 @@ export interface IOracleThread extends Document {
   userId: Types.ObjectId;
   title: string;
   mode: OracleMode;
-  attachedDreamIds: Types.ObjectId[];
   pinned: boolean;
   archived: boolean;
   deletedAt?: Date;
@@ -25,7 +24,6 @@ const OracleThreadSchema = new Schema<IOracleThread>(
       default: 'chat',
       required: true,
     },
-    attachedDreamIds: [{ type: Schema.Types.ObjectId, ref: 'Dream' }],
     pinned: { type: Boolean, default: false },
     archived: { type: Boolean, default: false },
     deletedAt: { type: Date, default: undefined },

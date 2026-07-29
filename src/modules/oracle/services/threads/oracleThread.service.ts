@@ -48,7 +48,6 @@ export async function createOracleThreadRecord(input: {
     userId: input.userId,
     mode: input.mode,
     title: input.title,
-    attachedDreamIds: [],
   });
 }
 
