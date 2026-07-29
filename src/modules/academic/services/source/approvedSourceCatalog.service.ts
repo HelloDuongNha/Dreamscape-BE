@@ -21,8 +21,15 @@ function buildCatalogFilter(q: string): Record<string, unknown> {
   };
 }
 
+function buildApprovedSourceFilter(query: ApprovedSourceCatalogQuery): Record<string, unknown> {
+  if (query.doi) {
+    return { normalizedDoi: query.doi };
+  }
+  return buildCatalogFilter(query.q);
+}
+
 export async function listApprovedSources(query: ApprovedSourceCatalogQuery) {
-  const filter = buildCatalogFilter(query.q);
+  const filter = buildApprovedSourceFilter(query);
   const skip = (query.page - 1) * query.limit;
   const total = await AcademicSource.countDocuments(filter);
   const items = await AcademicSource.find(filter)

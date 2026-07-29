@@ -45,6 +45,11 @@ const router = Router();
  *           type: string
  *         description: Search phrase (title, authors, journal, doi, url)
  *       - in: query
+ *         name: doi
+ *         schema:
+ *           type: string
+ *         description: Exact DOI lookup after canonical normalization; does not import a source
+ *       - in: query
  *         name: page
  *         schema:
  *           type: integer
@@ -61,6 +66,8 @@ const router = Router();
  *         description: Success retrieving catalog list
  *       401:
  *         description: Unauthorized
+ *       400:
+ *         description: Invalid DOI query
  */
 router.get('/approved', authMiddleware, getApprovedSources);
 

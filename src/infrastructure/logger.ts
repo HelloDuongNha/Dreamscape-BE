@@ -1,15 +1,18 @@
+import { sanitizeLogText, sanitizeLogValue } from './logSanitizer';
+
 export interface LogMetadata {
   userId?: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 const formatLog = (level: 'info' | 'warn' | 'error', message: string, metadata?: LogMetadata): string => {
   const timestamp = new Date().toISOString();
+  const safeMetadata = sanitizeLogValue(metadata) as LogMetadata | undefined;
   const payload = {
     timestamp,
     level,
-    message,
-    ...metadata,
+    message: sanitizeLogText(message),
+    ...safeMetadata,
   };
   return JSON.stringify(payload);
 };
@@ -21,13 +24,11 @@ export const logger = {
   warn: (message: string, metadata?: LogMetadata): void => {
     console.warn(formatLog('warn', message, metadata));
   },
-  error: (message: string, error?: any, metadata?: LogMetadata): void => {
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    const errorStack = error instanceof Error ? error.stack : undefined;
+  error: (message: string, error?: unknown, metadata?: LogMetadata): void => {
+    const errorDetails = error === undefined ? undefined : sanitizeLogValue(error);
     const payload = {
       ...metadata,
-      error: errorMsg,
-      stack: errorStack,
+      error: errorDetails,
     };
     console.error(formatLog('error', message, payload));
   },

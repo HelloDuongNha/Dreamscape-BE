@@ -4,6 +4,11 @@ import Conversation from '../models/Conversation';
 import Message from '../models/Message';
 import User from '../../identity/models/User';
 import { searchMessaging } from '../services/messagingSearch.service';
+import { findParticipantConversation } from '../services/conversationAuthorization.service';
+import {
+  presentConversation,
+  presentMessageSafely,
+} from '../services/messagePersistence.service';
 
 // ─── Helper: Public user projection ──────────────────────────────────────────
 
@@ -36,7 +41,7 @@ export const getConversations = async (req: Request, res: Response): Promise<voi
           senderId:       { $ne: myId },
           status:         { $ne: 'seen' },
         });
-        return { ...conv, unread_count };
+        return { ...presentConversation(conv), unread_count };
       })
     );
 
@@ -64,10 +69,7 @@ export const getMessages = async (req: Request, res: Response): Promise<void> =>
     }
 
     // Guard: ensure user belongs to this conversation
-    const conversation = await Conversation.findOne({
-      _id:             new Types.ObjectId(conversationId),
-      participant_ids: myId,
-    }).lean();
+    const conversation = await findParticipantConversation(conversationId, String(myId));
 
     if (!conversation) {
       res.status(403).json({ success: false, message: 'Access denied to this conversation.' });
@@ -81,7 +83,10 @@ export const getMessages = async (req: Request, res: Response): Promise<void> =>
       .populate('senderId', USER_PUBLIC)
       .lean();
 
-    res.status(200).json({ success: true, data: messages });
+    res.status(200).json({
+      success: true,
+      data: messages.map(presentMessageSafely),
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: 'Failed to fetch messages.', error: err });
   }

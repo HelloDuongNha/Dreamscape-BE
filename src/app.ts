@@ -2,7 +2,6 @@ import './config/env';
 import express, { Application } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import morgan from 'morgan';
 import swaggerUi from 'swagger-ui-express';
 
 import swaggerSpec from './config/swagger';
@@ -28,9 +27,6 @@ app.use(
 );
 app.use(express.urlencoded({ extended: true }));
 
-if (process.env.NODE_ENV === 'development') {
-  app.use(morgan('dev'));
-}
 app.use(requestLogger);
 
 // ─── Swagger Documentation (mounted BEFORE tight security) ─────────────────────

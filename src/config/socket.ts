@@ -1,9 +1,15 @@
 import { Server as HTTPServer } from 'http';
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
-import Conversation from '../modules/messaging/models/Conversation';
-import Message, { IMessage } from '../modules/messaging/models/Message';
 import { Types } from 'mongoose';
+import User from '../modules/identity/models/User';
+import {
+  findParticipantConversation,
+  markConversationSeenByParticipant,
+  markMessageDeliveredByRecipient,
+} from '../modules/messaging/services/conversationAuthorization.service';
+import { persistEncryptedMessage } from '../modules/messaging/services/messagePersistence.service';
+import { logger } from '../infrastructure/logger';
 
 let activeSocketServer: SocketIOServer | null = null;
 
@@ -40,7 +46,7 @@ interface MarkAsSeenPayload {
  * On success  → attaches `socket.userId` and calls `next()`.
  * On failure  → calls `next(new Error('Unauthorized'))` which disconnects.
  */
-function jwtHandshake(socket: Socket, next: (err?: Error) => void): void {
+async function jwtHandshake(socket: Socket, next: (err?: Error) => void): Promise<void> {
   // Support both auth object and Authorization header for flexibility
   const raw: string | undefined =
     socket.handshake.auth?.token ??
@@ -62,7 +68,19 @@ function jwtHandshake(socket: Socket, next: (err?: Error) => void): void {
   }
 
   try {
-    const decoded = jwt.verify(token, secret) as { id: string };
+    const decoded = jwt.verify(token, secret) as { id: string; sessionId?: string };
+    if (!decoded.sessionId || !Types.ObjectId.isValid(decoded.sessionId)) {
+      next(new Error('Unauthorized: session upgrade required'));
+      return;
+    }
+    const sessionExists = await User.exists({
+      _id: decoded.id,
+      'sessions._id': new Types.ObjectId(decoded.sessionId),
+    });
+    if (!sessionExists) {
+      next(new Error('Unauthorized: session revoked'));
+      return;
+    }
     (socket as AuthenticatedSocket).userId = decoded.id;
     next();
   } catch {
@@ -120,14 +138,22 @@ export function initSocket(httpServer: HTTPServer): SocketIOServer {
 
     // Join user's private room — used to deliver targeted messages
     socket.join(userId);
-    console.log(`🔌 Socket connected: userId=${userId} socketId=${socket.id}`);
+    logger.info('Messaging socket connected.', { userId, socketId: socket.id });
 
     // ── join_room ──────────────────────────────────────────────────────────────
-    socket.on('join_room', (payload: { conversationId: string }) => {
+    socket.on('join_room', async (payload: { conversationId: string }) => {
       if (!payload?.conversationId) return;
+      const conversation = await findParticipantConversation(payload.conversationId, userId);
+      if (!conversation) {
+        socket.emit('error_message', { code: 'conversation_access_denied' });
+        return;
+      }
       const roomName = `conv:${payload.conversationId}`;
       socket.join(roomName);
-      console.log(`📬 ${userId} joined room ${roomName}`);
+      logger.info('Messaging socket joined an authorised conversation room.', {
+        userId,
+        conversationId: payload.conversationId,
+      });
     });
 
     // ── send_message ───────────────────────────────────────────────────────────
@@ -148,10 +174,7 @@ export function initSocket(httpServer: HTTPServer): SocketIOServer {
 
       try {
         // ── Verify sender is a participant ─────────────────────────────────────
-        const conversation = await Conversation.findOne({
-          _id: convId,
-          participant_ids: new Types.ObjectId(userId),
-        }).lean();
+        const conversation = await findParticipantConversation(conversationId, userId);
 
         if (!conversation) {
           socket.emit('error_message', { message: 'Not a participant in this conversation.' });
@@ -159,17 +182,10 @@ export function initSocket(httpServer: HTTPServer): SocketIOServer {
         }
 
         // ── Persist message to MongoDB ──────────────────────────────────────────
-        const saved: IMessage = await Message.create({
+        const saved = await persistEncryptedMessage({
           conversationId: convId,
           senderId: new Types.ObjectId(userId),
           content: content.trim(),
-          timestamp: new Date(),
-        });
-
-        // ── Update conversation preview ────────────────────────────────────────
-        await Conversation.findByIdAndUpdate(convId, {
-          last_message: content.trim().slice(0, 100),
-          updated_at: new Date(),
         });
 
         // ── Prepare serialisable payload ──────────────────────────────────────
@@ -188,8 +204,8 @@ export function initSocket(httpServer: HTTPServer): SocketIOServer {
 
         // ── Deliver to RECIPIENT's private room ────────────────────────────────
         const recipientId = conversation.participant_ids
-          .map((id) => id.toString())
-          .find((id) => id !== userId);
+          .map((id: Types.ObjectId) => id.toString())
+          .find((id: string) => id !== userId);
 
         if (recipientId) {
           io.to(recipientId).emit('receive_message', recipientPayload);
@@ -198,10 +214,14 @@ export function initSocket(httpServer: HTTPServer): SocketIOServer {
         // ── Confirm back to SENDER (with tempId for optimistic swap) ──────────
         socket.emit('receive_message', senderPayload);
 
-        console.log(`💬 Message saved: conv=${conversationId} from=${userId}`);
+        logger.info('Encrypted message persisted and delivered.', {
+          userId,
+          conversationId,
+          messageId: String(saved._id),
+        });
       } catch (err) {
-        console.error('❌ send_message error:', err);
-        socket.emit('error_message', { message: 'Failed to send message. Please retry.' });
+        logger.error('Messaging send failed.', err, { userId, conversationId });
+        socket.emit('error_message', { code: 'message_send_failed', tempId });
       }
     });
 
@@ -210,11 +230,7 @@ export function initSocket(httpServer: HTTPServer): SocketIOServer {
     socket.on('message_delivered', async (payload: MessageDeliveredPayload) => {
       if (!payload?.messageId || !Types.ObjectId.isValid(payload.messageId)) return;
       try {
-        const updated = await Message.findByIdAndUpdate(
-          payload.messageId,
-          { status: 'delivered' },
-          { new: true }
-        ).lean();
+        const updated = await markMessageDeliveredByRecipient(payload.messageId, userId);
         if (updated) {
           // Notify the original sender so they can flip 'Sent' → 'Delivered'
           io.to(updated.senderId.toString()).emit('message_status_updated', {
@@ -223,7 +239,7 @@ export function initSocket(httpServer: HTTPServer): SocketIOServer {
           });
         }
       } catch (err) {
-        console.error('❌ message_delivered error:', err);
+        logger.error('Messaging delivery receipt failed.', err, { userId });
       }
     });
 
@@ -232,38 +248,26 @@ export function initSocket(httpServer: HTTPServer): SocketIOServer {
     socket.on('mark_as_seen', async (payload: MarkAsSeenPayload) => {
       if (!payload?.conversationId || !Types.ObjectId.isValid(payload.conversationId)) return;
       try {
-        // Bulk-mark all unread partner messages as seen
-        const result = await Message.updateMany(
-          {
-            conversationId: new Types.ObjectId(payload.conversationId),
-            senderId: { $ne: new Types.ObjectId(userId) },
-            status: { $ne: 'seen' },
-          },
-          { status: 'seen' }
-        );
-        if (result.modifiedCount > 0) {
-          const conv = await Conversation.findById(payload.conversationId).lean();
-          if (conv) {
-            const partnerId = conv.participant_ids
-              .map((id) => id.toString())
-              .find((id) => id !== userId);
-            if (partnerId) {
-              // Notify sender: their last message is now 'Seen'
-              io.to(partnerId).emit('message_status_updated', {
-                conversationId: payload.conversationId,
-                status: 'seen',
-              });
-            }
+        const result = await markConversationSeenByParticipant(payload.conversationId, userId);
+        if (result && result.modifiedCount > 0) {
+          for (const senderId of result.senderIds) {
+            io.to(senderId).emit('message_status_updated', {
+              conversationId: payload.conversationId,
+              status: 'seen',
+            });
           }
         }
       } catch (err) {
-        console.error('❌ mark_as_seen error:', err);
+        logger.error('Messaging seen receipt failed.', err, {
+          userId,
+          conversationId: payload.conversationId,
+        });
       }
     });
 
     // ── disconnect ─────────────────────────────────────────────────────────────
     socket.on('disconnect', (reason) => {
-      console.log(`🔌 Socket disconnected: userId=${userId} reason=${reason}`);
+      logger.info('Messaging socket disconnected.', { userId, reason });
       // Socket.io auto-removes the socket from all rooms on disconnect
     });
   });

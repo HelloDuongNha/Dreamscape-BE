@@ -8,6 +8,7 @@ export interface INotification extends Document {
   senderId:    Types.ObjectId; // User who performed the action
   type:        'like' | 'comment' | 'follow' | 'dream_analysis';
   postId?:     Types.ObjectId; // The dream post linked to the notification
+  commentId?:  Types.ObjectId; // Exact comment target for lifecycle cleanup
   isRead:      boolean;
   timestamp:   Date;
 }
@@ -34,6 +35,12 @@ const NotificationSchema = new Schema<INotification>(
       type: Schema.Types.ObjectId,
       ref: 'Dream',
       required: false,
+    },
+    commentId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Comment',
+      required: false,
+      index: true,
     },
     isRead: {
       type: Boolean,

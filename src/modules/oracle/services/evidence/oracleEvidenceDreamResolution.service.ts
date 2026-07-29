@@ -33,7 +33,11 @@ import {
 } from './oracleEvidenceDreamPresentation.service';
 
 export async function resolveEvidenceGapInDreamPosts(
-  gap: { claim: string; relatedClaims?: string[] },
+  gap: {
+    claim: string;
+    relatedClaims?: string[];
+    occurrenceDreamIds?: Array<{ toString(): string } | string>;
+  },
   rule: EvidenceGapRuleInput,
 ): Promise<number> {
   const support = await loadRuleEvidenceSupport(String(gap.claim || ''), rule);
@@ -44,12 +48,18 @@ export async function resolveEvidenceGapInDreamPosts(
   const markerPattern = buildMarkerPattern(variants);
   const claimPattern = buildClaimPattern(variants);
   if (!markerPattern || !claimPattern) return 0;
+  const unresolvedBinding = buildUnresolvedBindingQuery(variants, claimPattern);
   const dreams = Dream.find({
     ai_status: 'completed',
     $or: [
       {
+        _id: {
+          $in: (gap.occurrenceDreamIds || []).map(String),
+        },
+      },
+      {
         'ai_result.claim_bindings': {
-          $elemMatch: { status: 'unresolved', claimText: claimPattern },
+          $elemMatch: unresolvedBinding,
         },
       },
       { 'ai_result.core_analysis': markerPattern },
@@ -57,7 +67,7 @@ export async function resolveEvidenceGapInDreamPosts(
       { 'ai_result.interpretive_threads.reasoning': markerPattern },
       {
         'aiAnalysis.claim_bindings': {
-          $elemMatch: { status: 'unresolved', claimText: claimPattern },
+          $elemMatch: unresolvedBinding,
         },
       },
       { 'aiAnalysis.core_analysis': markerPattern },
@@ -65,7 +75,7 @@ export async function resolveEvidenceGapInDreamPosts(
       { 'aiAnalysis.interpretive_threads.reasoning': markerPattern },
       {
         'edit_history.ai_result.claim_bindings': {
-          $elemMatch: { status: 'unresolved', claimText: claimPattern },
+          $elemMatch: unresolvedBinding,
         },
       },
       { 'edit_history.ai_result.core_analysis': markerPattern },
@@ -78,6 +88,20 @@ export async function resolveEvidenceGapInDreamPosts(
     if (await resolveDreamPost(dream, variants, rule, support)) resolvedCount += 1;
   }
   return resolvedCount;
+}
+
+function buildUnresolvedBindingQuery(variants: string[], claimPattern: RegExp) {
+  const evidenceClaimKeys = variants
+    .map(oracleEvidenceClaimClusterKey)
+    .filter(Boolean);
+  return {
+    status: 'unresolved',
+    $or: [
+      { evidenceClaimKey: { $in: evidenceClaimKeys } },
+      { evidenceClaim: claimPattern },
+      { claimText: claimPattern },
+    ],
+  };
 }
 
 function buildMarkerPattern(variants: string[]): RegExp | null {

@@ -1,4 +1,5 @@
 import cloudinary from '../../config/cloudinary';
+import { randomUUID } from 'crypto';
 import {
   PDF_DOWNLOAD_TIMEOUT_MS,
   PDF_MAX_FILE_SIZE_BYTES,
@@ -12,6 +13,46 @@ export interface CloudinaryUploadResult {
   format?: string;
   bytes: number;
   original_filename?: string;
+}
+
+export async function uploadUserAvatar(
+  buffer: Buffer,
+  userId: string,
+): Promise<CloudinaryUploadResult> {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        resource_type: 'image',
+        folder: 'user_avatars',
+        public_id: `${userId}-${randomUUID()}`,
+        overwrite: false,
+        transformation: [
+          { width: 512, height: 512, crop: 'fill', gravity: 'auto' },
+          { quality: 'auto', fetch_format: 'auto' },
+        ],
+      },
+      (error, result) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        if (!result) {
+          reject(new Error('Cloudinary returned an empty avatar upload response.'));
+          return;
+        }
+        resolve({
+          public_id: result.public_id,
+          secure_url: result.secure_url,
+          resource_type: 'image',
+          format: result.format,
+          bytes: result.bytes,
+          original_filename: result.original_filename,
+        });
+      },
+    );
+
+    stream.end(buffer);
+  });
 }
 
 /**

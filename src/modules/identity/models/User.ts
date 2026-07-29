@@ -6,7 +6,12 @@ export interface IUser extends Document {
   display_name: string;
   email: string;
   password: string;
+  authMethod: 'password' | 'google' | 'password_google';
   avatar: string;
+  avatarAsset?: {
+    provider: 'cloudinary';
+    publicId: string;
+  };
   bio: string;
   follower_count: number;
   followers: any[];
@@ -40,6 +45,7 @@ export interface IUser extends Document {
     deviceBrowser: string;
     ipAddress: string;
     lastActive: Date;
+    authenticatedAt?: Date;
   }[];
   createdAt: Date;
   updatedAt: Date;
@@ -74,12 +80,28 @@ const UserSchema = new Schema<IUser>(
     password: {
       type: String,
       required: [true, 'Password is required'],
-      minlength: [6, 'Password must be at least 6 characters'],
+      minlength: [8, 'Password must be at least 8 characters'],
       select: false,
+    },
+    authMethod: {
+      type: String,
+      enum: ['password', 'google', 'password_google'],
+      default: 'password',
     },
     avatar: {
       type: String,
       default: '',
+    },
+    avatarAsset: {
+      provider: {
+        type: String,
+        enum: ['cloudinary'],
+      },
+      publicId: {
+        type: String,
+        trim: true,
+      },
+      _id: false,
     },
     bio: {
       type: String,
@@ -199,6 +221,9 @@ const UserSchema = new Schema<IUser>(
           type: Date,
           default: Date.now,
         },
+        authenticatedAt: {
+          type: Date,
+        },
       },
     ],
   },
@@ -209,6 +234,9 @@ const UserSchema = new Schema<IUser>(
 
 UserSchema.pre('save', async function () {
   if (!this.isModified('password')) return;
+  // Registration stores only a bcrypt hash in the short-lived OTP payload.
+  // `$locals` is server-only and prevents that trusted hash from being hashed twice.
+  if (this.$locals.passwordAlreadyHashed === true) return;
   const saltRounds = 12;
   this.password = await bcrypt.hash(this.password as string, saltRounds);
 });

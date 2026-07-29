@@ -37,6 +37,10 @@ export async function reconcileOracleEvidenceGapsForRule(
     .cursor();
   for await (const gap of cursor) {
     if (evidenceGapRuleSimilarity(gap.claim, ruleText) < CANDIDATE_CLAIM_MATCH) continue;
+    if (rule.status !== 'verified') {
+      await markEvidenceGapCandidate(gap._id, [rule._id]);
+      continue;
+    }
     await reconcileGapWithRule(gap, rule, [rule._id], false);
   }
 }
@@ -78,7 +82,9 @@ export async function reconcileOracleEvidenceGapsForRules(
       .filter((match) => match.similarity >= CANDIDATE_CLAIM_MATCH)
       .sort((left, right) => right.similarity - left.similarity);
     if (!matches.length) continue;
-    const resolvable = matches.find((match) => match.similarity >= DIRECT_CLAIM_MATCH);
+    const resolvable = matches.find((match) =>
+      match.rule.status === 'verified'
+      && match.similarity >= DIRECT_CLAIM_MATCH);
     if (resolvable) {
       const resolved = await reconcileGapWithRule(
         gap,
@@ -88,16 +94,24 @@ export async function reconcileOracleEvidenceGapsForRules(
       );
       if (resolved) continue;
     }
-    await OracleEvidenceGap.updateOne(
-      { _id: gap._id },
-      {
-        $set: { status: 'candidate_found' },
-        $addToSet: {
-          candidateRuleIds: { $each: matches.map((match) => match.rule._id) },
-        },
-      },
+    await markEvidenceGapCandidate(
+      gap._id,
+      matches.map((match) => match.rule._id),
     );
   }
+}
+
+async function markEvidenceGapCandidate(
+  gapId: Types.ObjectId,
+  ruleIds: Types.ObjectId[],
+): Promise<void> {
+  await OracleEvidenceGap.updateOne(
+    { _id: gapId },
+    {
+      $set: { status: 'candidate_found' },
+      $addToSet: { candidateRuleIds: { $each: ruleIds } },
+    },
+  );
 }
 
 // Loads newly extracted rules and immediately rematches every unresolved claim.

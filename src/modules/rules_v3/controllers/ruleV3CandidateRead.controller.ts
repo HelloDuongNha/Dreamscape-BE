@@ -5,7 +5,7 @@ import AcademicSource from '../../academic/models/AcademicSource';
 import { getOracleEvidenceGapMatchesForRule } from '../../oracle/services/evidence/oracleEvidenceReconciliation.service';
 import KnowledgeRuleV3 from '../models/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../models/KnowledgeRuleEvidence';
-import { parseRuleV3CandidateQuery } from '../dto';
+import { buildRuleV3NameRegex, parseRuleV3CandidateQuery } from '../dto';
 import { mapRuleV3Candidate } from '../services/moderation/ruleV3CandidatePresentation.service';
 import { groupRuleV3EvidenceExcerpts } from '../services/moderation/ruleV3EvidencePresentation.service';
 import { loadRuleV3CandidateRelationships } from '../services/moderation/ruleV3CandidateRelationship.service';
@@ -14,9 +14,26 @@ import { getRuleValidationStats } from '../services/evidence/ruleV3ValidationSco
 
 // Trả danh sách lập luận cùng điểm và thống kê phản hồi hiện tại.
 export const getRuleV3Candidates = async (req: Request, res: Response): Promise<void> => {
-  const { status: requestedStatus, sourceId } = parseRuleV3CandidateQuery(req.query);
+  const {
+    status: requestedStatus,
+    sourceId,
+    nameQuery,
+    validationError,
+  } = parseRuleV3CandidateQuery(req.query);
+  if (validationError) {
+    res.status(400).json({
+      success: false,
+      code: validationError,
+      message: 'Rule name search must not exceed 120 characters.',
+    });
+    return;
+  }
+
   const status = requestedStatus === 'approved' ? 'verified' : requestedStatus;
   const filter: any = { status };
+  const nameRegex = nameQuery ? buildRuleV3NameRegex(nameQuery) : null;
+  // The review label is a bounded presentation of `statement`, not a stored field.
+  if (nameRegex) filter.statement = { $regex: nameRegex };
   if (sourceId) {
     if (!mongoose.Types.ObjectId.isValid(sourceId)) {
       res.status(400).json({ success: false, message: 'Mã tài liệu không hợp lệ.' });
@@ -62,7 +79,7 @@ export const getRuleV3Candidates = async (req: Request, res: Response): Promise<
       ...mapRuleV3Candidate(rule, source, ruleEvidence),
       validationStats: validationStats.get(String(rule._id)),
     };
-  });
+  }).filter(candidate => !nameRegex || nameRegex.test(candidate.label));
   res.status(200).json({ success: true, data });
 };
 

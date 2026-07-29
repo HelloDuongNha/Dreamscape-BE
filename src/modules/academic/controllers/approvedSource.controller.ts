@@ -10,7 +10,17 @@ import {
 
 export async function getApprovedSources(req: Request, res: Response): Promise<void> {
   try {
-    const data = await listApprovedSources(parseApprovedSourceCatalogQuery(req.query));
+    const query = parseApprovedSourceCatalogQuery(req.query);
+    if (query.validationError) {
+      res.status(400).json({
+        success: false,
+        code: query.validationError,
+        message: 'The DOI search value is invalid.',
+      });
+      return;
+    }
+
+    const data = await listApprovedSources(query);
     res.status(200).json({ success: true, data });
   } catch (error: any) {
     res.status(500).json({

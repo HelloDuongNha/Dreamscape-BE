@@ -9,6 +9,11 @@ import mongoose, { Document, Schema, Types } from 'mongoose';
 export interface IConversation extends Document {
   participant_ids: Types.ObjectId[]; // exactly 2 user IDs (1-to-1 chat)
   last_message:   string;            // preview text for the chat list
+  lastMessageCiphertext?: string;
+  lastMessageIv?: string;
+  lastMessageAuthTag?: string;
+  lastMessageKeyVersion?: string;
+  lastMessageSenderId?: Types.ObjectId;
   updated_at:     Date;              // used to sort conversations by recency
 }
 
@@ -31,6 +36,11 @@ const ConversationSchema = new Schema<IConversation>(
       trim:    true,
       maxlength: [500, 'Last message preview must not exceed 500 characters'],
     },
+    lastMessageCiphertext: { type: String },
+    lastMessageIv: { type: String },
+    lastMessageAuthTag: { type: String },
+    lastMessageKeyVersion: { type: String },
+    lastMessageSenderId: { type: Schema.Types.ObjectId, ref: 'User' },
     updated_at: {
       type:    Date,
       default: () => new Date(),

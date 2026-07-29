@@ -20,6 +20,8 @@ export interface RuleV3BulkActionRequest {
 export interface RuleV3CandidateQuery {
   status: string;
   sourceId: string | null;
+  nameQuery: string;
+  validationError: 'name_query_too_long' | null;
 }
 
 /** Đọc request trích xuất mà không thay đổi giá trị mặc định hiện có. */
@@ -56,8 +58,20 @@ export function parseRuleV3BulkActionRequest(body: unknown): RuleV3BulkActionReq
 /** Chuẩn hóa bộ lọc danh sách ứng viên trước khi tạo truy vấn MongoDB. */
 export function parseRuleV3CandidateQuery(query: unknown): RuleV3CandidateQuery {
   const input = query && typeof query === 'object' ? query as Record<string, unknown> : {};
+  const nameQuery = String(input.q || '').trim().replace(/\s+/gu, ' ');
   return {
     status: String(input.status || 'pending'),
     sourceId: input.academicSourceId ? String(input.academicSourceId) : null,
+    nameQuery,
+    validationError: nameQuery.length > 120 ? 'name_query_too_long' : null,
   };
+}
+
+/** Build a literal, case-insensitive label matcher without allowing regex input. */
+export function buildRuleV3NameRegex(nameQuery: string): RegExp {
+  const pattern = nameQuery
+    .split(' ')
+    .map(token => token.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'))
+    .join('\\s+');
+  return new RegExp(pattern, 'iu');
 }

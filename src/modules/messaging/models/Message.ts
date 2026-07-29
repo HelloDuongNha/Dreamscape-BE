@@ -9,7 +9,13 @@ import mongoose, { Document, Schema, Types } from 'mongoose';
 export interface IMessage extends Document {
   conversationId: Types.ObjectId; // FK → Conversation._id
   senderId: Types.ObjectId; // FK → User._id
-  content: string;
+  content?: string;
+  ciphertext?: string;
+  iv?: string;
+  authTag?: string;
+  keyVersion?: string;
+  searchTokens: string[];
+  searchKeyVersion?: string;
   timestamp: Date;           // explicit field — ISO 8601 equivalent
   status: 'sent' | 'delivered' | 'seen'; // Messenger-style delivery receipt
 }
@@ -30,11 +36,16 @@ const MessageSchema = new Schema<IMessage>(
     },
     content: {
       type: String,
-      required: [true, 'Message content is required'],
       trim: true,
       minlength: [1, 'Message cannot be empty'],
       maxlength: [2000, 'Message must not exceed 2000 characters'],
     },
+    ciphertext: { type: String, select: true },
+    iv: { type: String, select: true },
+    authTag: { type: String, select: true },
+    keyVersion: { type: String, select: true },
+    searchTokens: { type: [String], default: [], select: true },
+    searchKeyVersion: { type: String, select: true },
     timestamp: {
       type: Date,
       default: () => new Date(),
@@ -56,6 +67,7 @@ const MessageSchema = new Schema<IMessage>(
 //   db.messages.find({ conversationId }).sort({ timestamp: 1 })
 // Leading conversationId covers single-field lookups too.
 MessageSchema.index({ conversationId: 1, timestamp: 1 });
+MessageSchema.index({ conversationId: 1, searchKeyVersion: 1, searchTokens: 1 });
 
 // ─── Model Export ─────────────────────────────────────────────────────────────
 

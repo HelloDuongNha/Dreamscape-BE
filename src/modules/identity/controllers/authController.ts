@@ -1,13 +1,19 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
+import bcrypt from 'bcryptjs';
 import User from '../models/User';
-import Otp from '../models/Otp';
 import UserDreamProfile from '../../dream/models/UserDreamProfile';
-import { sendOtpEmail } from '../../../infrastructure/emailService';
 import { parseUserAgent } from '../services/userAgent.service';
 import { buildCulturalProfile, buildScoringProfile } from '../services/profileBuilder.service';
 import { logger } from '../../../infrastructure/logger';
+import {
+  issueOtp,
+  resendOtpCode,
+  verifyAndConsumeOtp,
+} from '../services/otp/otpLifecycle.service';
+import { assertPasswordPolicy } from '../services/security/passwordPolicy.service';
+import { markSessionRecentlyAuthenticated } from '../services/security/sessionSecurity.service';
 
 // ─── Helper: Sign JWT ─────────────────────────────────────────────────────────
 
@@ -59,6 +65,13 @@ const sanitizeUser = (user: InstanceType<typeof User>) => ({
   },
 });
 
+function requesterNetworkOrigin(req: Request): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (Array.isArray(forwarded)) return forwarded[0] || 'unknown';
+  if (typeof forwarded === 'string') return forwarded.split(',')[0]?.trim() || 'unknown';
+  return req.socket.remoteAddress || 'unknown';
+}
+
 // ─── POST /api/auth/register ──────────────────────────────────────────────────
 
 /**
@@ -85,6 +98,7 @@ export const register = async (
       res.status(400).json({ success: false, message: 'All required fields must be provided.' });
       return;
     }
+    assertPasswordPolicy(password);
 
     // Format username: ensure it starts with @
     let formattedUsername = username.trim();
@@ -108,34 +122,27 @@ export const register = async (
       return;
     }
 
-    // Generate random 6-digit OTP
-    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-
-    // Clean up older registration OTPs for this email
-    await Otp.deleteMany({ email: email.toLowerCase(), purpose: 'register' });
-
-    // Store in Otp collection
-    await Otp.create({
+    const passwordHash = await bcrypt.hash(password, 12);
+    const otpState = await issueOtp({
       email: email.toLowerCase(),
-      otpCode,
       purpose: 'register',
+      requestOrigin: requesterNetworkOrigin(req),
       payload: {
         username: formattedUsername,
         display_name: display_name.trim(),
         email: email.toLowerCase(),
-        password,
+        passwordHash,
         avatar: avatar ?? '',
         bio: bio ?? '',
       },
     });
 
-    // Send email
-    await sendOtpEmail(email.toLowerCase(), otpCode, 'register');
-
     res.status(200).json({
       success: true,
       status: 'pending',
       email: email.toLowerCase(),
+      expiresAt: otpState.expiresAt,
+      resendAvailableAt: otpState.resendAvailableAt,
       message: 'Verification OTP sent to your email. Please verify to complete registration.',
     });
   } catch (error) {
@@ -187,7 +194,8 @@ export const login = async (
       deviceOS,
       deviceBrowser,
       ipAddress,
-      lastActive: new Date()
+      lastActive: new Date(),
+      authenticatedAt: new Date(),
     });
 
     if (user.sessions.length > 20) {
@@ -250,10 +258,7 @@ export const updateProfile = async (
     const {
       display_name,
       username,
-      email,
       bio,
-      currentPassword,
-      newPassword,
       defaultPrivacy,
       isPrivateAccount,
       dmPrivacy,
@@ -266,10 +271,7 @@ export const updateProfile = async (
     } = req.body as {
       display_name?: string;
       username?: string;
-      email?: string;
       bio?: string;
-      currentPassword?: string;
-      newPassword?: string;
       defaultPrivacy?: 'public' | 'private';
       isPrivateAccount?: boolean;
       dmPrivacy?: 'everyone' | 'following' | 'friends';
@@ -284,9 +286,7 @@ export const updateProfile = async (
     if (
       display_name === undefined &&
       username === undefined &&
-      email === undefined &&
       bio === undefined &&
-      newPassword === undefined &&
       defaultPrivacy === undefined &&
       isPrivateAccount === undefined &&
       dmPrivacy === undefined &&
@@ -358,82 +358,9 @@ export const updateProfile = async (
       user.username = formattedUsername;
     }
 
-    // ── Validate Email ─────────────────────────────────────────────────
-    if (email !== undefined) {
-      const formattedEmail = email.trim().toLowerCase();
-      if (!formattedEmail) {
-        res.status(400).json({ success: false, message: 'Email cannot be empty.' });
-        return;
-      }
-      const emailRegex = /^\S+@\S+\.\S+$/;
-      if (!emailRegex.test(formattedEmail)) {
-        res.status(400).json({ success: false, message: 'Please enter a valid email address.' });
-        return;
-      }
-
-      // Check if email is already taken by another user
-      const existingEmail = await User.findOne({ email: formattedEmail, _id: { $ne: myId } });
-      if (existingEmail) {
-        res.status(409).json({
-          success: false,
-          field: 'email',
-          message: 'Email address is already taken.',
-        });
-        return;
-      }
-
-      if (formattedEmail !== user.email) {
-        // Generate random 6-digit OTP
-        const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-
-        // Remove any old update_email OTPs for this new email
-        await Otp.deleteMany({ email: formattedEmail, purpose: 'update_email' });
-
-        // Save Otp
-        await Otp.create({
-          email: formattedEmail,
-          otpCode,
-          purpose: 'update_email',
-          payload: {
-            userId: user._id,
-            email: formattedEmail,
-          },
-        });
-
-        // Send email
-        await sendOtpEmail(formattedEmail, otpCode, 'update_email');
-
-        res.status(200).json({
-          success: true,
-          status: 'pending',
-          email: formattedEmail,
-          message: 'Verification OTP sent to your new email. Please verify to complete update.',
-        });
-        return;
-      }
-    }
-
     // ── Validate Bio ───────────────────────────────────────────────────
     if (bio !== undefined) {
       user.bio = bio.trim();
-    }
-
-    // ── Validate Password Update ───────────────────────────────────────
-    if (newPassword !== undefined) {
-      if (!currentPassword) {
-        res.status(400).json({ success: false, message: 'Current password is required to set a new password.' });
-        return;
-      }
-      const isMatch = await user.comparePassword(currentPassword);
-      if (!isMatch) {
-        res.status(401).json({ success: false, message: 'Incorrect current password.' });
-        return;
-      }
-      if (newPassword.length < 6) {
-        res.status(400).json({ success: false, message: 'New password must be at least 6 characters.' });
-        return;
-      }
-      user.password = newPassword;
     }
 
     // ── Validate Default Privacy ───────────────────────────────────────
@@ -565,18 +492,21 @@ export const verifyOtp = async (
       return;
     }
 
-    const record = await Otp.findOne({
-      email: email.toLowerCase(),
-      otpCode: otpCode.trim(),
-      purpose,
-    });
-
-    if (!record) {
-      res.status(400).json({ success: false, message: 'Invalid or expired verification code.' });
+    if (purpose === 'update_email') {
+      res.status(401).json({
+        success: false,
+        code: 'email_change_requires_session',
+        message: 'Email change verification requires the authenticated settings flow.',
+      });
       return;
     }
 
-    // On match: execute purpose-specific commit
+    const { record, recoveryGrant } = await verifyAndConsumeOtp({
+      email,
+      code: otpCode,
+      purpose,
+    });
+
     if (purpose === 'register') {
       const payload = record.payload;
       if (!payload) {
@@ -584,10 +514,24 @@ export const verifyOtp = async (
         return;
       }
 
-      // Check one last time if username or email was taken in the meantime
-      const existing = await User.findOne({ $or: [{ email: payload.email }, { username: payload.username }] });
+      const { passwordHash, ...profile } = payload as {
+        passwordHash?: string;
+        username?: string;
+        display_name?: string;
+        email?: string;
+        avatar?: string;
+        bio?: string;
+      };
+      if (!passwordHash || !profile.username || !profile.display_name || !profile.email) {
+        res.status(400).json({ success: false, message: 'Pending registration data is incomplete.' });
+        return;
+      }
+
+      const existing = await User.findOne({
+        $or: [{ email: profile.email }, { username: profile.username }],
+      });
       if (existing) {
-        const field = existing.email === payload.email ? 'email' : 'username';
+        const field = existing.email === profile.email ? 'email' : 'username';
         res.status(409).json({
           success: false,
           message: `An account with this ${field} was already registered.`,
@@ -595,8 +539,9 @@ export const verifyOtp = async (
         return;
       }
 
-      // Officially commit the user
-      const user = await User.create(payload);
+      const user = new User({ ...profile, password: passwordHash });
+      user.$locals.passwordAlreadyHashed = true;
+      await user.save();
 
       // Create session
       const userAgentStr = req.headers['user-agent'] || '';
@@ -610,7 +555,8 @@ export const verifyOtp = async (
         deviceOS,
         deviceBrowser,
         ipAddress,
-        lastActive: new Date()
+        lastActive: new Date(),
+        authenticatedAt: new Date(),
       }];
       await user.save();
 
@@ -667,51 +613,109 @@ export const verifyOtp = async (
       return;
     }
 
-    if (purpose === 'update_email') {
-      const payload = record.payload;
-      if (!payload || !payload.userId || !payload.email) {
-        res.status(400).json({ success: false, message: 'Pending email update data not found.' });
-        return;
-      }
-
-      // Find user
-      const user = await User.findById(payload.userId);
-      if (!user) {
-        res.status(404).json({ success: false, message: 'User not found.' });
-        return;
-      }
-
-      // Verify email isn't taken in the meantime
-      const existing = await User.findOne({ email: payload.email, _id: { $ne: user._id } });
-      if (existing) {
-        res.status(409).json({ success: false, message: 'Email address is already taken.' });
-        return;
-      }
-
-      // Update email
-      user.email = payload.email;
-      await user.save();
-
-      // Clean up OTP
-      await record.deleteOne();
-
-      res.status(200).json({
-        success: true,
-        message: 'Email address verified and updated successfully.',
-        user: sanitizeUser(user),
-      });
-      return;
-    }
-
     if (purpose === 'forgot_password') {
       res.status(200).json({
         success: true,
+        recoveryGrant,
         message: 'Code verified successfully. You can now reset your password.',
       });
       return;
     }
 
     res.status(400).json({ success: false, message: 'Unsupported verification purpose.' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const verifyEmailChangeOtp = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const { email, otpCode } = req.body as { email?: string; otpCode?: string };
+    if (!email || !otpCode || !req.sessionId) {
+      res.status(400).json({
+        success: false,
+        code: 'email_change_binding_missing',
+        message: 'Email, verification code, and an active session are required.',
+      });
+      return;
+    }
+
+    const { record } = await verifyAndConsumeOtp({
+      email,
+      code: otpCode,
+      purpose: 'update_email',
+      subjectUserId: String(req.user!._id),
+      sessionId: req.sessionId,
+    });
+    const pendingEmail = String(record.payload?.email || '').trim().toLowerCase();
+    if (!pendingEmail || pendingEmail !== email.trim().toLowerCase()) {
+      res.status(400).json({
+        success: false,
+        code: 'email_change_binding_invalid',
+        message: 'Pending email change data is invalid.',
+      });
+      return;
+    }
+
+    const duplicate = await User.exists({
+      email: pendingEmail,
+      _id: { $ne: req.user!._id },
+    });
+    if (duplicate) {
+      res.status(409).json({
+        success: false,
+        code: 'email_already_used',
+        message: 'Email address is already taken.',
+      });
+      return;
+    }
+
+    req.user!.email = pendingEmail;
+    markSessionRecentlyAuthenticated(req.user!, req.sessionId);
+    await req.user!.save();
+    await record.deleteOne();
+    res.status(200).json({
+      success: true,
+      message: 'Email address verified and updated successfully.',
+      user: sanitizeUser(req.user! as InstanceType<typeof User>),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const resendEmailChangeOtp = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> => {
+  try {
+    const { email } = req.body as { email?: string };
+    if (!email || !req.sessionId) {
+      res.status(400).json({
+        success: false,
+        code: 'email_change_binding_missing',
+        message: 'Email and an active session are required.',
+      });
+      return;
+    }
+
+    const otpState = await resendOtpCode({
+      email,
+      purpose: 'update_email',
+      subjectUserId: String(req.user!._id),
+      sessionId: req.sessionId,
+    });
+    res.status(200).json({
+      success: true,
+      expiresAt: otpState.expiresAt,
+      resendAvailableAt: otpState.resendAvailableAt,
+      message: 'A new verification code has been sent to your email.',
+    });
   } catch (error) {
     next(error);
   }
@@ -742,24 +746,16 @@ export const forgotPassword = async (
       return;
     }
 
-    // Generate random 6-digit OTP
-    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-
-    // Clean up older forgot_password OTPs for this email
-    await Otp.deleteMany({ email: email.toLowerCase(), purpose: 'forgot_password' });
-
-    // Save Otp
-    await Otp.create({
+    const otpState = await issueOtp({
       email: email.toLowerCase(),
-      otpCode,
       purpose: 'forgot_password',
+      requestOrigin: requesterNetworkOrigin(req),
     });
-
-    // Send email
-    await sendOtpEmail(email.toLowerCase(), otpCode, 'forgot_password');
 
     res.status(200).json({
       success: true,
+      expiresAt: otpState.expiresAt,
+      resendAvailableAt: otpState.resendAvailableAt,
       message: 'If the email matches an active account, a password reset code has been sent.',
     });
   } catch (error) {
@@ -771,62 +767,6 @@ export const forgotPassword = async (
  * POST /api/auth/reset-password
  * Reset user password using OTP.
  */
-export const resetPassword = async (
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): Promise<void> => {
-  try {
-    const { email, otpCode, newPassword } = req.body as {
-      email:       string;
-      otpCode:     string;
-      newPassword: string;
-    };
-
-    if (!email || !otpCode || !newPassword) {
-      res.status(400).json({ success: false, message: 'Email, OTP code, and new password are required.' });
-      return;
-    }
-
-    if (newPassword.length < 6) {
-      res.status(400).json({ success: false, message: 'New password must be at least 6 characters.' });
-      return;
-    }
-
-    // Check code
-    const record = await Otp.findOne({
-      email: email.toLowerCase(),
-      otpCode: otpCode.trim(),
-      purpose: 'forgot_password',
-    });
-
-    if (!record) {
-      res.status(400).json({ success: false, message: 'Invalid or expired verification code.' });
-      return;
-    }
-
-    const user = await User.findOne({ email: email.toLowerCase() });
-    if (!user) {
-      res.status(404).json({ success: false, message: 'User not found.' });
-      return;
-    }
-
-    // Update password (pre-save hook will hash it)
-    user.password = newPassword;
-    await user.save();
-
-    // Delete OTP code
-    await record.deleteOne();
-
-    res.status(200).json({
-      success: true,
-      message: 'Password reset successfully. You can now log in with your new password.',
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
 /**
  * POST /api/auth/resend-otp
  * Resend verification OTP code for an active pending operation (register, update_email, forgot_password).
@@ -847,34 +787,24 @@ export const resendOtp = async (
       return;
     }
 
-    // Check if there is an active OTP session
-    const existing = await Otp.findOne({ email: email.toLowerCase(), purpose });
-    if (!existing && purpose !== 'forgot_password') {
-      res.status(404).json({ success: false, message: 'No active verification request found. Please try again from the start.' });
+    if (purpose === 'update_email') {
+      res.status(401).json({
+        success: false,
+        code: 'email_change_requires_session',
+        message: 'Email change resend requires the authenticated settings flow.',
+      });
       return;
     }
 
-    // Generate new OTP code
-    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-
-    if (existing) {
-      existing.otpCode = otpCode;
-      existing.createdAt = new Date(); // refresh TTL
-      await existing.save();
-    } else {
-      // For forgot_password, if it expired/doesn't exist, we can recreate it
-      await Otp.create({
-        email: email.toLowerCase(),
-        otpCode,
-        purpose,
-      });
-    }
-
-    // Send email
-    await sendOtpEmail(email.toLowerCase(), otpCode, purpose);
+    const otpState = await resendOtpCode({
+      email,
+      purpose,
+    });
 
     res.status(200).json({
       success: true,
+      expiresAt: otpState.expiresAt,
+      resendAvailableAt: otpState.resendAvailableAt,
       message: 'A new verification code has been sent to your email.',
     });
   } catch (error) {
@@ -899,6 +829,7 @@ export const getSessions = async (
       browser: s.deviceBrowser || 'Unknown Browser',
       location: s.ipAddress || 'Unknown IP',
       last_active: s.lastActive,
+      authenticated_at: s.authenticatedAt || null,
       is_current: String(s._id) === String(req.sessionId),
     }));
 

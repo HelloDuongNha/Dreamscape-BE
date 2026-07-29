@@ -1,6 +1,29 @@
 import { Router } from 'express';
-import { register, login, logout, updateProfile, verifyOtp, forgotPassword, resetPassword, resendOtp, getSessions, revokeSession } from '../modules/identity/controllers/authController';
+import {
+  register,
+  login,
+  logout,
+  updateProfile,
+  verifyOtp,
+  verifyEmailChangeOtp,
+  resendEmailChangeOtp,
+  forgotPassword,
+  resendOtp,
+  getSessions,
+  revokeSession,
+} from '../modules/identity/controllers/authController';
+import {
+  changePassword,
+  resetPassword,
+  revokeRecoveredSessions,
+  revokeOtherSessions,
+  startEmailChange,
+} from '../modules/identity/controllers/accountSecurity.controller';
 import authMiddleware from '../middleware/authMiddleware';
+import {
+  replaceAvatar,
+  uploadAvatarMiddleware,
+} from '../modules/identity/controllers/avatar.controller';
 
 const router = Router();
 
@@ -230,14 +253,21 @@ router.post('/logout', authMiddleware, logout);
 
 // ─── PUT /api/auth/profile ────────────────────────────────────────────────────
 router.put('/profile', authMiddleware, updateProfile);
+router.put('/profile/avatar', authMiddleware, uploadAvatarMiddleware, replaceAvatar);
 
 // ─── Logged-in Devices Sessions ──────────────────────────────────────────────
 router.get('/sessions', authMiddleware, getSessions);
 router.delete('/sessions/:id', authMiddleware, revokeSession);
+router.post('/sessions/revoke-others', authMiddleware, revokeOtherSessions);
+router.post('/sessions/revoke-after-recovery', revokeRecoveredSessions);
 
 // ─── OTP Verification & Password Recovery ──────────────────────────────────────
 router.post('/verify-otp', verifyOtp);
 router.post('/resend-otp', resendOtp);
+router.post('/email-change/verify', authMiddleware, verifyEmailChangeOtp);
+router.post('/email-change/resend', authMiddleware, resendEmailChangeOtp);
+router.post('/email-change/start', authMiddleware, startEmailChange);
+router.post('/password/change', authMiddleware, changePassword);
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password', resetPassword);
 

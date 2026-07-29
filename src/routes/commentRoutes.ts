@@ -1,5 +1,10 @@
 import { Router } from 'express';
 import { getUserComments } from '../modules/social/controllers/commentController';
+import {
+  deleteComment,
+  editComment,
+} from '../modules/dream/controllers/dreamComment.controller';
+import authMiddleware, { optionalAuthMiddleware } from '../middleware/authMiddleware';
 
 const router = Router();
 
@@ -31,6 +36,8 @@ const router = Router();
  *       500:
  *         description: Internal server error
  */
-router.get('/user/:userId', getUserComments);
+router.get('/user/:userId', optionalAuthMiddleware, getUserComments);
+router.patch('/:commentId', authMiddleware, editComment);
+router.delete('/:commentId', authMiddleware, deleteComment);
 
 export default router;

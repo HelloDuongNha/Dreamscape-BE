@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import Comment from '../models/Comment';
 import { Types } from 'mongoose';
+import Dream from '../../dream/models/Dream';
+import { buildDreamVisibilityFilter } from '../../dream/services/content/dreamAccessPolicy.service';
 
 // ─── GET /api/comments/user/:userId ──────────────────────────────────────────
 
@@ -19,7 +21,15 @@ export const getUserComments = async (req: Request, res: Response): Promise<void
       return;
     }
 
-    const comments = await Comment.find({ userId: new Types.ObjectId(userId) })
+    const visibleDreamIds = await Dream.find(
+      buildDreamVisibilityFilter(String(req.user?._id || '') || undefined),
+    ).distinct('_id');
+    const comments = await Comment.find({
+      userId: new Types.ObjectId(userId),
+      dreamId: { $in: visibleDreamIds },
+      is_deleted: { $ne: true },
+    })
+      .select('-is_deleted -deleted_at -deleted_by -deleted_by_role')
       .sort({ created_at: -1 })
       .populate('userId', 'username display_name avatar')
       .populate({

@@ -1,17 +1,39 @@
+import '../config/env';
 import nodemailer from 'nodemailer';
+import type { SendMailOptions, Transporter } from 'nodemailer';
 import { getOtpEmailTemplate } from '../templates/otpTemplate';
+import { logger } from './logger';
 
-// Configure a secure transporter pool on port 465
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || 'smtp.gmail.com',
-  port: parseInt(process.env.SMTP_PORT || '465', 10),
-  secure: true, // port 465 requires secure: true
-  pool: true,
-  auth: {
-    user: process.env.SMTP_USER || 'dreamscape.app.service@gmail.com',
-    pass: process.env.SMTP_PASS || 'uojojprejzyrzojg',
-  },
-});
+type OtpPurpose = 'register' | 'update_email' | 'forgot_password';
+
+interface EmailTransportConfig {
+  host: string;
+  port: number;
+  secure: boolean;
+  user: string;
+  password: string;
+  from: string;
+}
+
+interface OtpMailTransport {
+  sendMail(options: SendMailOptions): Promise<unknown>;
+}
+
+interface OtpEmailInput {
+  email: string;
+  otpCode: string;
+  purpose: OtpPurpose;
+  from: string;
+}
+
+let transporter: Transporter | null = null;
+
+export class EmailDeliveryError extends Error {
+  constructor() {
+    super('Verification email could not be sent. Please try again later.');
+    this.name = 'EmailDeliveryError';
+  }
+}
 
 /**
  * Sends an OTP email to the user using Google SMTP and nodemailer.
@@ -21,27 +43,76 @@ const transporter = nodemailer.createTransport({
 export const sendOtpEmail = async (
   email: string,
   otpCode: string,
-  purpose: 'register' | 'update_email' | 'forgot_password',
+  purpose: OtpPurpose,
 ): Promise<void> => {
   try {
-    let purposeLabel = 'Registration';
-    if (purpose === 'update_email') {
-      purposeLabel = 'Email Modification';
-    } else if (purpose === 'forgot_password') {
-      purposeLabel = 'Password Recovery';
-    }
-
-    const html = getOtpEmailTemplate(otpCode, purposeLabel);
-
-    await transporter.sendMail({
-      from: '"DreamScape" <dreamscape.app.service@gmail.com>',
-      to: email,
-      subject: `DreamScape Verification Code - ${otpCode}`,
-      html,
-    });
-    console.log(`[SMTP] Successfully sent OTP code ${otpCode} to ${email} for purpose: ${purpose}`);
+    const config = resolveEmailTransportConfig();
+    await deliverOtpEmail(
+      { email, otpCode, purpose, from: config.from },
+      getTransporter(config),
+    );
   } catch (error) {
-    console.error(`[SMTP] Failed to send OTP email to ${email} for purpose: ${purpose}:`, error);
-    // Explicitly swallow/handle error to prevent crashing the server flow with a 500 error
+    logger.error('Verification email delivery failed', error, { purpose });
+    throw new EmailDeliveryError();
   }
 };
+
+export async function deliverOtpEmail(
+  input: OtpEmailInput,
+  mailTransport: OtpMailTransport,
+): Promise<void> {
+  const html = getOtpEmailTemplate(input.otpCode, resolvePurposeLabel(input.purpose));
+  await mailTransport.sendMail({
+    from: input.from,
+    to: input.email,
+    subject: 'Your DreamScape verification code',
+    html,
+  });
+  logger.info('Verification email sent', { purpose: input.purpose });
+}
+
+export function resolveEmailTransportConfig(): EmailTransportConfig {
+  const user = process.env.SMTP_USER?.trim();
+  const password = process.env.SMTP_PASS?.trim();
+  if (!user || !password) {
+    throw new Error('SMTP credentials are not configured.');
+  }
+
+  const port = Number.parseInt(process.env.SMTP_PORT || '465', 10);
+  if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
+    throw new Error('SMTP_PORT must be a valid TCP port.');
+  }
+
+  return {
+    host: process.env.SMTP_HOST?.trim() || 'smtp.gmail.com',
+    port,
+    secure: process.env.SMTP_SECURE
+      ? process.env.SMTP_SECURE.toLowerCase() === 'true'
+      : port === 465,
+    user,
+    password,
+    from: process.env.SMTP_FROM?.trim() || `"DreamScape" <${user}>`,
+  };
+}
+
+function getTransporter(config: EmailTransportConfig): Transporter {
+  if (transporter) return transporter;
+
+  transporter = nodemailer.createTransport({
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    pool: true,
+    auth: {
+      user: config.user,
+      pass: config.password,
+    },
+  });
+  return transporter;
+}
+
+function resolvePurposeLabel(purpose: OtpPurpose): string {
+  if (purpose === 'update_email') return 'Email Modification';
+  if (purpose === 'forgot_password') return 'Password Recovery';
+  return 'Registration';
+}

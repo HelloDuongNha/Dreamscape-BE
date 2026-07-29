@@ -7,26 +7,32 @@ import { recoverInterruptedReaderReplacements } from './modules/academic/service
 import { recoverIncompleteRuleV3Replacements } from './modules/rules_v3/services/lifecycle/ruleV3ReplacementJournal.service';
 import { runBackgroundAnalysis } from './modules/dream/services/analysis/execution/dreamAnalysisRunner.service';
 import { recoverPendingDreamAnalysisQueue } from './modules/dream/services/analysis/execution/dreamAnalysisRecovery.service';
+import {
+  assertMessagingSecurityConfigured,
+} from './modules/messaging/services/messagingCrypto.service';
 
 const PORT = Number(process.env.PORT) || 5000;
 
 const startServer = async (): Promise<void> => {
-  // 1. Connect to MongoDB before accepting traffic
+  // 1. Refuse to serve messaging traffic when authenticated encryption cannot run.
+  assertMessagingSecurityConfigured();
+
+  // 2. Connect to MongoDB before accepting traffic
   await connectDB();
   await recoverInterruptedReaderReplacements();
   await recoverIncompleteRuleV3Replacements();
   await recoverPendingDreamAnalysisQueue(runBackgroundAnalysis);
 
-  // 2. Wrap Express app in a raw Node.js HTTP server so Socket.io can share it
+  // 3. Wrap Express app in a raw Node.js HTTP server so Socket.io can share it
   const httpServer = http.createServer(app);
 
-  // 3. Attach Socket.io (JWT-authenticated WebSocket layer)
+  // 4. Attach Socket.io (JWT-authenticated WebSocket layer)
   const io = initSocket(httpServer);
 
   // Expose io on the app instance for potential use in route handlers
   app.set('io', io);
 
-  // 4. Start listening
+  // 5. Start listening
   httpServer.listen(PORT, () => {
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log(`🚀 DreamScape API running on port ${PORT}`);

@@ -33,8 +33,21 @@ export const approveRuleV3Candidate = async (req: Request, res: Response): Promi
     res.status(404).json({ success: false, message: 'Không tìm thấy lập luận Rule V3.' });
     return;
   }
-  await reconcileApprovedRuleEvidenceGaps(rule);
-  res.status(200).json({ success: true, message: 'Đã duyệt Rule V3.' });
+  try {
+    await reconcileApprovedRuleEvidenceGaps(rule);
+  } catch {
+    res.status(200).json({
+      success: true,
+      message: 'Đã duyệt Rule V3, nhưng chưa thể đồng bộ các citation liên quan.',
+      data: { evidenceReconciliation: 'failed' },
+    });
+    return;
+  }
+  res.status(200).json({
+    success: true,
+    message: 'Đã duyệt Rule V3.',
+    data: { evidenceReconciliation: 'completed' },
+  });
 };
 
 export const bulkRuleV3Action = async (req: Request, res: Response): Promise<void> => {
@@ -67,6 +80,7 @@ export const bulkRuleV3Action = async (req: Request, res: Response): Promise<voi
     }
 
     const failures: Array<{ ruleId: string; reason: string }> = [];
+    const warnings: Array<{ ruleId: string; reason: string }> = [];
     let processed = action === 'approve_pending' ? 0 : ids.length;
     if (action === 'approve_pending') {
       const rules = await KnowledgeRuleV3.find({ _id: { $in: ids }, status: 'pending' });
@@ -74,8 +88,17 @@ export const bulkRuleV3Action = async (req: Request, res: Response): Promise<voi
         try {
           await approveRuleV3Record(rule);
           const verified = await KnowledgeRuleV3.findById(rule._id);
-          if (verified) await reconcileApprovedRuleEvidenceGaps(verified);
           processed += 1;
+          if (verified) {
+            try {
+              await reconcileApprovedRuleEvidenceGaps(verified);
+            } catch {
+              warnings.push({
+                ruleId: String(rule._id),
+                reason: 'evidence_reconciliation_failed',
+              });
+            }
+          }
         } catch (error: any) {
           failures.push({
             ruleId: String(rule._id),
@@ -86,7 +109,12 @@ export const bulkRuleV3Action = async (req: Request, res: Response): Promise<voi
     }
     res.status(200).json({
       success: true,
-      data: { processed, failed: failures.length, failures },
+      data: {
+        processed,
+        failed: failures.length,
+        failures,
+        warnings,
+      },
     });
   } catch {
     res.status(400).json({

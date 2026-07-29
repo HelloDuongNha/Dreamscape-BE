@@ -33,6 +33,12 @@ export function normalizeDoi(doi: string): string {
   return clean.trim();
 }
 
+export function isValidDoi(doi: string): boolean {
+  const normalized = normalizeDoi(doi);
+  return normalized.length <= 100
+    && /^10\.\d{4,9}\/[-._;()/:a-z0-9]+$/i.test(normalized);
+}
+
 /**
  * Helper to query Unpaywall API for Open Access status and location metadata.
  */

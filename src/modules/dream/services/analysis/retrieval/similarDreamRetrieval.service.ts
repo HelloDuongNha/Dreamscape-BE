@@ -142,7 +142,10 @@ export async function retrieveSimilarDreams(
 
   const selectedDreamIds = selected.map(item => item.row._id);
   const ownerComments = selectedDreamIds.length > 0
-    ? await Comment.find({ dreamId: { $in: selectedDreamIds } }).sort({ created_at: 1 }).lean()
+    ? await Comment.find({
+      dreamId: { $in: selectedDreamIds },
+      is_deleted: { $ne: true },
+    }).sort({ created_at: 1 }).lean()
     : [];
 
   const matches = selected.map(item => {

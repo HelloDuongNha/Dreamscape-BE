@@ -2,6 +2,13 @@ import { Types } from 'mongoose';
 import User from '../../identity/models/User';
 import Conversation from '../models/Conversation';
 import Message from '../models/Message';
+import {
+  createAllMessageQueryTokenSets,
+} from './messagingCrypto.service';
+import {
+  presentMessageSafely,
+  readConversationPreview,
+} from './messagePersistence.service';
 
 const USER_PUBLIC = 'username display_name avatar bio';
 const MAX_MESSAGE_RESULTS = 50;
@@ -113,7 +120,7 @@ export async function searchMessaging(
       resultByUserId.set(String(partner._id), {
         user: partnerView,
         conversationId,
-        last_message: String(conversation.last_message ?? ''),
+        last_message: safeConversationPreview(conversation),
         updated_at: conversation.updated_at
           ? new Date(conversation.updated_at).toISOString()
           : null,
@@ -139,12 +146,16 @@ export async function searchMessaging(
   const messageResults: MessagingMessageSearchResult[] = [];
 
   if (conversationIds.length) {
-    // Search only inside conversations owned by the authenticated user.
-    // Character classes make the Mongo query accent-insensitive for Vietnamese
-    // without loading the user's full message history into application memory.
+    const encryptedTokenQueries = createAllMessageQueryTokenSets(query).map(item => ({
+      searchKeyVersion: item.keyVersion,
+      searchTokens: { $all: item.tokens },
+    }));
     const candidateMessages = await Message.find({
       conversationId: { $in: conversationIds },
-      content: { $regex: buildVietnameseInsensitiveRegex(query) },
+      $or: [
+        ...encryptedTokenQueries,
+        { content: { $regex: buildVietnameseInsensitiveRegex(query) } },
+      ],
     })
       .sort({ timestamp: -1 })
       .limit(MAX_MESSAGE_RESULTS)
@@ -155,10 +166,15 @@ export async function searchMessaging(
       const conversationId = String(message.conversationId);
       const partner = conversationPartnerById.get(conversationId);
       if (!partner) continue;
+      const presented = presentMessageSafely(message);
+      if (
+        presented.content_unavailable
+        || !normalizeSearchText(presented.content).includes(query)
+      ) continue;
       messageResults.push({
         message: {
-          ...message,
-          _id: String(message._id),
+          ...presented,
+          _id: String(presented._id),
           conversationId,
         },
         conversationId,
@@ -171,4 +187,12 @@ export async function searchMessaging(
     conversations: Array.from(resultByUserId.values()),
     messages: messageResults,
   };
+}
+
+function safeConversationPreview(conversation: any): string {
+  try {
+    return readConversationPreview(conversation);
+  } catch {
+    return '';
+  }
 }

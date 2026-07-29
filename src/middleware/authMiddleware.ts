@@ -34,14 +34,22 @@ interface JwtPayload {
  * On success  → attaches `req.user` and calls `next()`.
  * On failure  → responds with 401 Unauthorized.
  */
-const authMiddleware = async (
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): Promise<void> => {
+const authMiddleware = createAuthenticationMiddleware(true);
+export const optionalAuthMiddleware = createAuthenticationMiddleware(false);
+
+function createAuthenticationMiddleware(required: boolean) {
+  return async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (!required && !authHeader) {
+      next();
+      return;
+    }
     res.status(401).json({
       success: false,
       message: 'Access denied. No token provided.',
@@ -62,6 +70,14 @@ const authMiddleware = async (
 
   try {
     const decoded = jwt.verify(token, secret) as JwtPayload;
+    if (!decoded.sessionId) {
+      res.status(401).json({
+        success: false,
+        code: 'session_upgrade_required',
+        message: 'Please sign in again to establish a revocable session.',
+      });
+      return;
+    }
 
     // Fetch the user from DB to ensure the account still exists
     const user = await User.findById(decoded.id);
@@ -74,7 +90,7 @@ const authMiddleware = async (
     }
 
     // Verify session is active (not revoked)
-    if (decoded.sessionId && user.sessions) {
+    if (user.sessions) {
       const sessionExists = user.sessions.some(
         (s) => String(s._id) === String(decoded.sessionId)
       );
@@ -98,7 +114,8 @@ const authMiddleware = async (
       message: 'Invalid or expired token.',
     });
   }
-};
+  };
+}
 
 /**
  * Middleware protecting routes requiring moderator/admin privileges.
@@ -138,4 +155,3 @@ export const isModerator = (req: Request, res: Response, next: NextFunction): vo
 };
 
 export default authMiddleware;
-

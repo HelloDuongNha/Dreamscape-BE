@@ -6,6 +6,7 @@ import { createDream } from '../modules/dream/controllers/dreamCreate.controller
 import {
   addComment,
   getComments,
+  updateCommentPolicy,
 } from '../modules/dream/controllers/dreamComment.controller';
 import {
   analyzeDreamById,
@@ -20,9 +21,10 @@ import { updateDreamAiPolicy } from '../modules/dream/controllers/dreamAiPolicy.
 import {
   getDream,
   getPublicFeed,
+  searchDreams,
   getUserDreams,
 } from '../modules/dream/controllers/dreamRead.controller';
-import authMiddleware from '../middleware/authMiddleware';
+import authMiddleware, { optionalAuthMiddleware } from '../middleware/authMiddleware';
 
 const router = Router();
 
@@ -215,6 +217,7 @@ router.post('/', authMiddleware, createDream);
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.get('/', getPublicFeed);
+router.get('/search', optionalAuthMiddleware, searchDreams);
 
 // ─── GET /api/dreams/user/:userId ─────────────────────────────────────────────
 
@@ -274,7 +277,7 @@ router.get('/', getPublicFeed);
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.get('/user/:userId', getUserDreams);
+router.get('/user/:userId', optionalAuthMiddleware, getUserDreams);
 
 // ─── PUT /api/dreams/:id ──────────────────────────────────────────────────────
 
@@ -459,6 +462,7 @@ router.post('/:id/like', authMiddleware, toggleLike);
  *         description: Dream not found
  */
 router.post('/:id/comments', authMiddleware, addComment);
+router.patch('/:id/comments-policy', authMiddleware, updateCommentPolicy);
 
 // ─── GET /api/dreams/:id/comments ────────────────────────────────────────────
 
@@ -481,7 +485,7 @@ router.post('/:id/comments', authMiddleware, addComment);
  *       400:
  *         description: Invalid dreamId
  */
-router.get('/:id/comments', getComments);
+router.get('/:id/comments', optionalAuthMiddleware, getComments);
 router.get('/:id', authMiddleware, getDream);
 
 // ─── POST /api/dreams/analyze ─────────────────────────────────────────────────

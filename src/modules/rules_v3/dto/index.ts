@@ -1,4 +1,5 @@
 export {
+  buildRuleV3NameRegex,
   parseRuleV3BulkActionRequest,
   parseRuleV3CandidateQuery,
   parseRuleV3ExtractionRequest,

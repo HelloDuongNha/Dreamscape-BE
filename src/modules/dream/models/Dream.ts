@@ -34,6 +34,7 @@ export interface IDream extends Document {
   likes: string[];
   likes_count: number;
   comments_count: number;
+  comments_enabled: boolean;
   created_at: Date;
   ai_status: 'pending' | 'sensing' | 'completed' | 'failed' | 'cancelled' | 'disabled';
   ai_result: Record<string, unknown> | null;
@@ -161,6 +162,10 @@ const DreamSchema = new Schema<IDream>(
       default: 0,
       min: 0,
     },
+    comments_enabled: {
+      type: Boolean,
+      default: true,
+    },
     created_at: {
       type: Date,
       default: () => new Date(),
@@ -237,5 +242,6 @@ DreamSchema.index({ userId: 1, 'ai_result.symbolic_notes.symbol': 1, created_at:
 
 // Global Feed Index
 DreamSchema.index({ created_at: -1 });
+DreamSchema.index({ is_public: 1, privacy: 1, created_at: -1 });
 
 export default mongoose.model<IDream>('Dream', DreamSchema);

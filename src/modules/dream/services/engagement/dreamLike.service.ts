@@ -6,6 +6,7 @@ import {
 } from '../../../identity/services/rank.service';
 import Notification from '../../../social/models/Notification';
 import Dream from '../../models/Dream';
+import { decideDreamAccess } from '../content/dreamAccessPolicy.service';
 
 type ToggleDreamLikeInput = {
   dreamId: Types.ObjectId;
@@ -64,8 +65,8 @@ export async function toggleDreamLike(
 
   const userId = String(input.userId);
   const ownerId = String((dream.userId as any)?._id || dream.userId);
-  if ((dream.privacy === 'private' || dream.is_public === false) && ownerId !== userId) {
-    return { status: 'forbidden' };
+  if (!decideDreamAccess(dream, userId).canInteract) {
+    return { status: 'not_found' };
   }
 
   const wasLiked = dream.likes.includes(userId);

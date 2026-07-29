@@ -6,6 +6,7 @@ import type {
   UserDreamsRequestDto,
 } from '../../dto/dreamRead.dto';
 import { mapDreamResponse } from './dreamNarrative.service';
+import { buildDreamVisibilityFilter } from './dreamAccessPolicy.service';
 
 export interface DreamPage {
   data: unknown[];
@@ -43,19 +44,29 @@ async function findDreamPage(
 }
 
 export function getPublicDreamPage(pagination: DreamPaginationDto): Promise<DreamPage> {
-  return findDreamPage({ is_public: true }, pagination);
+  return findDreamPage(buildDreamVisibilityFilter(), pagination);
 }
 
-export function getUserDreamPage(request: UserDreamsRequestDto): Promise<DreamPage> {
+export function getUserDreamPage(
+  request: UserDreamsRequestDto,
+  viewerId?: string,
+): Promise<DreamPage> {
   return findDreamPage(
-    { userId: new Types.ObjectId(request.userId) },
+    {
+      userId: new Types.ObjectId(request.userId),
+      ...buildDreamVisibilityFilter(viewerId),
+    },
     request,
   );
 }
 
 export async function getDreamDetail(
   request: DreamDetailRequestDto,
+  viewerId?: string,
 ): Promise<unknown | null> {
-  const dream = await Dream.findById(request.dreamId).populate('userId', AUTHOR_PROJECTION);
+  const dream = await Dream.findOne({
+    _id: new Types.ObjectId(request.dreamId),
+    ...buildDreamVisibilityFilter(viewerId),
+  }).populate('userId', AUTHOR_PROJECTION);
   return dream ? mapDreamResponse(dream) : null;
 }

@@ -38,10 +38,11 @@ export async function reconcileApprovedRuleEvidenceGaps(rule: any): Promise<void
     statement: rule.statement,
     subject: rule.subject,
     outcome: rule.outcome,
+    status: rule.status,
     evidenceScore: rule.evidenceScore,
     supportingSourceCount: rule.supportingSourceCount,
     compositeComponents: rule.compositeComponents,
-  }).catch(() => undefined);
+  });
 }
 
 async function loadApprovalEvidence(existing: any, components: any[]) {
