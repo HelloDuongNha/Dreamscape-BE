@@ -8,6 +8,7 @@ import userRoutes         from './userRoutes';
 import sourceRoutes        from './sourceRoutes';
 import moderationRoutes    from './moderationRoutes';
 import oracleRoutes        from './oracleRoutes';
+import { getRedisHealth } from '../infrastructure/redis/redisConnection';
 
 const router = Router();
 
@@ -41,10 +42,14 @@ const router = Router();
  *                   format: date-time
  * */
 router.get('/health', (_req: Request, res: Response) => {
+  const redis = getRedisHealth();
   res.status(200).json({
     success: true,
     message: 'DreamScape API is running',
     timestamp: new Date().toISOString(),
+    dependencies: {
+      redis,
+    },
   });
 });
 

@@ -1,7 +1,31 @@
 import { Router } from 'express';
-import authMiddleware, { isModerator } from '../middleware/authMiddleware';
-import { contributeSource, previewSource, getApprovedSources, getApprovedSourceById, getApprovedSourceRead, getApprovedSourceOriginalDocument, getApprovedSourcePdfInline, contributePdfSource, cacheOriginalPdf, uploadOriginalPdf, deleteOriginalPdf, processUploadedPdfForApprovedSource, getUploadedPdfImportProgressForApprovedSource, cancelUploadedPdfImportForApprovedSource, getApprovedSourceTranslation } from '../controllers/sourceController';
-import { uploadPdfMiddleware } from '../controllers/moderationController';
+import authMiddleware, { requireAdmin } from '../middleware/authMiddleware';
+import { contributePdfSource } from '../modules/academic/controllers/pdfContribution.controller';
+import {
+  cacheOriginalPdf,
+  uploadOriginalPdf,
+  deleteOriginalPdf,
+} from '../modules/academic/controllers/originalPdfMutation.controller';
+import {
+  processUploadedPdfForApprovedSource,
+  getUploadedPdfImportProgressForApprovedSource,
+  cancelUploadedPdfImportForApprovedSource,
+} from '../modules/academic/controllers/pdfImport.controller';
+import {
+  contributeSource,
+  previewSource,
+} from '../modules/academic/controllers/sourceContribution.controller';
+import {
+  getApprovedSourceById,
+  getApprovedSources,
+} from '../modules/academic/controllers/approvedSource.controller';
+import { getApprovedSourceRead } from '../modules/academic/controllers/approvedSourceReader.controller';
+import {
+  getApprovedSourceOriginalDocument,
+  getApprovedSourcePdfInline,
+} from '../modules/academic/controllers/approvedSourceDocument.controller';
+import { getApprovedSourceTranslation } from '../modules/academic/controllers/approvedSourceTranslation.controller';
+import { uploadPdfMiddleware } from '../modules/academic/controllers/moderationPdfUpload.controller';
 
 
 const router = Router();
@@ -21,6 +45,11 @@ const router = Router();
  *           type: string
  *         description: Search phrase (title, authors, journal, doi, url)
  *       - in: query
+ *         name: doi
+ *         schema:
+ *           type: string
+ *         description: Exact DOI lookup after canonical normalization; does not import a source
+ *       - in: query
  *         name: page
  *         schema:
  *           type: integer
@@ -37,6 +66,8 @@ const router = Router();
  *         description: Success retrieving catalog list
  *       401:
  *         description: Unauthorized
+ *       400:
+ *         description: Invalid DOI query
  */
 router.get('/approved', authMiddleware, getApprovedSources);
 
@@ -72,20 +103,20 @@ router.get('/approved', authMiddleware, getApprovedSources);
  *       409:
  *         description: Duplicate submission detected
  */
-router.post('/contribute', authMiddleware, contributeSource);
-router.post('/contribute-pdf', authMiddleware, uploadPdfMiddleware, contributePdfSource);
-router.post('/preview', authMiddleware, previewSource);
+router.post('/contribute', authMiddleware, requireAdmin, contributeSource);
+router.post('/contribute-pdf', authMiddleware, requireAdmin, uploadPdfMiddleware, contributePdfSource);
+router.post('/preview', authMiddleware, requireAdmin, previewSource);
 router.get('/approved/:id', authMiddleware, getApprovedSourceById);
 router.get('/approved/:id/read', authMiddleware, getApprovedSourceRead);
 router.post('/approved/:id/read/translate', authMiddleware, getApprovedSourceTranslation);
 
 router.get('/approved/:id/original-document', authMiddleware, getApprovedSourceOriginalDocument);
 router.get('/approved/:id/pdf-inline', authMiddleware, getApprovedSourcePdfInline);
-router.post('/approved/:id/cache-original-pdf', authMiddleware, isModerator, cacheOriginalPdf);
-router.post('/approved/:id/upload-pdf', authMiddleware, isModerator, uploadPdfMiddleware, uploadOriginalPdf);
-router.post('/approved/:id/process-uploaded-pdf', authMiddleware, isModerator, processUploadedPdfForApprovedSource);
-router.get('/approved/:id/pdf-import-progress', authMiddleware, isModerator, getUploadedPdfImportProgressForApprovedSource);
-router.post('/approved/:id/pdf-import-cancel', authMiddleware, isModerator, cancelUploadedPdfImportForApprovedSource);
-router.delete('/approved/:id/original-pdf', authMiddleware, isModerator, deleteOriginalPdf);
+router.post('/approved/:id/cache-original-pdf', authMiddleware, requireAdmin, cacheOriginalPdf);
+router.post('/approved/:id/upload-pdf', authMiddleware, requireAdmin, uploadPdfMiddleware, uploadOriginalPdf);
+router.post('/approved/:id/process-uploaded-pdf', authMiddleware, requireAdmin, processUploadedPdfForApprovedSource);
+router.get('/approved/:id/pdf-import-progress', authMiddleware, requireAdmin, getUploadedPdfImportProgressForApprovedSource);
+router.post('/approved/:id/pdf-import-cancel', authMiddleware, requireAdmin, cancelUploadedPdfImportForApprovedSource);
+router.delete('/approved/:id/original-pdf', authMiddleware, requireAdmin, deleteOriginalPdf);
 
 export default router;

@@ -2,26 +2,32 @@ import { NextFunction, Request, Response, Router } from 'express';
 import authMiddleware from '../middleware/authMiddleware';
 import { isOracleFeatureEnabled } from '../config/oracleConfig';
 import {
+  getOracleCitationDetails,
+  submitOracleCitationFeedback,
+} from '../modules/oracle/controllers/oracleCitation.controller';
+import {
   cancelOracleRun,
+  getOracleRunStatus,
+  streamOracleRunEvents,
+} from '../modules/oracle/controllers/oracleRun.controller';
+import {
   branchOracleTurn,
+  postOracleTurn,
+} from '../modules/oracle/controllers/oracleTurn.controller';
+import {
   createOracleThread,
   deleteOracleThread,
   getOracleThread,
-  getOracleCitationDetails,
-  getOracleRunStatus,
   listOracleThreads,
-  postOracleTurn,
-  streamOracleRunEvents,
-  submitOracleCitationFeedback,
   updateOracleThread,
-} from '../controllers/oracleController';
+} from '../modules/oracle/controllers/oracleThread.controller';
 import {
   activateOracleCredentialController,
   createOracleCredential,
   deleteOracleCredential,
   listOracleCredentials,
   testOracleCredential,
-} from '../controllers/oracleCredentialController';
+} from '../modules/oracle/controllers/oracleCredentialController';
 
 const router = Router();
 

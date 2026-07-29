@@ -1,40 +1,53 @@
 import { Router } from 'express';
-import authMiddleware, { isModerator } from '../middleware/authMiddleware';
+import authMiddleware, { requireAdmin } from '../middleware/authMiddleware';
 import {
-  getPendingSources,
-  reviewSource,
-  updateSourceContributionTitle,
   importFullText,
-  buildChunks,
-  uploadPdfMiddleware,
-  uploadPdfFile,
-  deleteSource,
   reimportFullText,
-  getSourcePreview,
-  getContributionPdfInline,
+} from '../modules/academic/controllers/readerImport.controller';
+import { getSourcePreview } from '../modules/academic/controllers/sourcePreview.controller';
+import { getSourcePreviewTranslation } from '../modules/academic/controllers/sourcePreviewTranslation.controller';
+import {
   cacheContributionPdf,
   deleteContributionPdf,
-  processUploadedPdfForContribution,
-  getUploadedPdfImportProgressForContribution,
+  getContributionPdfInline,
+} from '../modules/academic/controllers/contributionPdf.controller';
+import {
   cancelUploadedPdfImportForContribution,
-  getSourcePreviewTranslation
-} from '../controllers/moderationController';
+  getUploadedPdfImportProgressForContribution,
+  processUploadedPdfForContribution,
+} from '../modules/academic/controllers/pdfImport.controller';
+import { deleteSource } from '../modules/academic/controllers/sourceDeletion.controller';
+import { buildChunks } from '../modules/academic/controllers/ragChunkBuild.controller';
+import {
+  uploadPdfFile,
+  uploadPdfMiddleware,
+} from '../modules/academic/controllers/moderationPdfUpload.controller';
+import {
+  getPendingSources,
+  updateSourceContributionTitle,
+} from '../modules/academic/controllers/sourceModeration.controller';
+import { reviewSource } from '../modules/academic/controllers/sourceReview.controller';
 
 import {
   previewRuleV3Plan,
   dryRunRuleV3Extraction,
+} from '../modules/rules_v3/controllers/ruleV3DryRun.controller';
+import {
   startFullRuleV3Extraction,
   getFullRuleV3ExtractionProgress,
   cancelFullRuleV3Extraction,
   getRuleV3SourceAnalysisSummary,
+} from '../modules/rules_v3/controllers/ruleV3Extraction.controller';
+import {
   getRuleV3Candidates,
   getRuleV3CandidateDetail,
-  mergeRuleV3CandidateGroup,
+} from '../modules/rules_v3/controllers/ruleV3CandidateRead.controller';
+import {
   approveRuleV3Candidate,
   rejectRuleV3Candidate,
   bulkRuleV3Action
-} from '../controllers/ruleV3ModerationController';
-import { listOracleEvidenceGaps } from '../controllers/oracleEvidenceGapController';
+} from '../modules/rules_v3/controllers/ruleV3CandidateModeration.controller';
+import { listOracleEvidenceGaps } from '../modules/oracle/controllers/oracleEvidenceGapController';
 
 const router = Router();
 
@@ -72,10 +85,10 @@ const router = Router();
  *       401:
  *         description: Unauthorized
  *       403:
- *         description: Forbidden (requires moderator role)
+ *         description: Forbidden (requires administrator role)
  */
-router.get('/sources', authMiddleware, isModerator, getPendingSources);
-router.get('/oracle-evidence-gaps', authMiddleware, isModerator, listOracleEvidenceGaps);
+router.get('/sources', authMiddleware, requireAdmin, getPendingSources);
+router.get('/oracle-evidence-gaps', authMiddleware, requireAdmin, listOracleEvidenceGaps);
 
 /**
  * @swagger
@@ -121,33 +134,32 @@ router.get('/oracle-evidence-gaps', authMiddleware, isModerator, listOracleEvide
  *       409:
  *         description: Contribution already reviewed or duplicate exists
  */
-router.patch('/sources/:id/status', authMiddleware, isModerator, reviewSource);
-router.patch('/sources/:id/title', authMiddleware, isModerator, updateSourceContributionTitle);
-router.get('/sources/:id/preview', authMiddleware, isModerator, getSourcePreview);
-router.post('/sources/:id/preview/translate', authMiddleware, isModerator, getSourcePreviewTranslation);
+router.patch('/sources/:id/status', authMiddleware, requireAdmin, reviewSource);
+router.patch('/sources/:id/title', authMiddleware, requireAdmin, updateSourceContributionTitle);
+router.get('/sources/:id/preview', authMiddleware, requireAdmin, getSourcePreview);
+router.post('/sources/:id/preview/translate', authMiddleware, requireAdmin, getSourcePreviewTranslation);
 
-router.get('/sources/:id/pdf-inline', authMiddleware, isModerator, getContributionPdfInline);
-router.post('/sources/:id/cache-original-pdf', authMiddleware, isModerator, cacheContributionPdf);
-router.post('/sources/:id/process-uploaded-pdf', authMiddleware, isModerator, processUploadedPdfForContribution);
-router.get('/sources/:id/pdf-import-progress', authMiddleware, isModerator, getUploadedPdfImportProgressForContribution);
-router.post('/sources/:id/pdf-import-cancel', authMiddleware, isModerator, cancelUploadedPdfImportForContribution);
-router.delete('/sources/:id/original-pdf', authMiddleware, isModerator, deleteContributionPdf);
-router.post('/sources/upload-pdf', authMiddleware, isModerator, uploadPdfMiddleware, uploadPdfFile);
-router.post('/sources/:id/import-fulltext', authMiddleware, isModerator, importFullText);
-router.post('/sources/:id/build-chunks', authMiddleware, isModerator, buildChunks);
-router.get('/sources/:id/rules-v3/plan-preview', authMiddleware, isModerator, previewRuleV3Plan);
-router.post('/sources/:id/rules-v3/work-units/:workUnitId/dry-run', authMiddleware, isModerator, dryRunRuleV3Extraction);
-router.post('/sources/:id/rules-v3/extract', authMiddleware, isModerator, startFullRuleV3Extraction);
-router.get('/sources/:id/rules-v3/summary', authMiddleware, isModerator, getRuleV3SourceAnalysisSummary);
-router.get('/rules-v3/runs/:runId', authMiddleware, isModerator, getFullRuleV3ExtractionProgress);
-router.post('/rules-v3/runs/:runId/cancel', authMiddleware, isModerator, cancelFullRuleV3Extraction);
-router.get('/rules-v3/candidates', authMiddleware, isModerator, getRuleV3Candidates);
-router.get('/rules-v3/candidates/:id', authMiddleware, isModerator, getRuleV3CandidateDetail);
-router.post('/rules-v3/candidates/:id/merge', authMiddleware, isModerator, mergeRuleV3CandidateGroup);
-router.post('/rules-v3/candidates/:id/approve', authMiddleware, isModerator, approveRuleV3Candidate);
-router.post('/rules-v3/candidates/:id/reject', authMiddleware, isModerator, rejectRuleV3Candidate);
-router.post('/rules-v3/bulk-action', authMiddleware, isModerator, bulkRuleV3Action);
-router.delete('/sources/:id', authMiddleware, isModerator, deleteSource);
-router.post('/sources/:id/reimport-fulltext', authMiddleware, isModerator, reimportFullText);
+router.get('/sources/:id/pdf-inline', authMiddleware, requireAdmin, getContributionPdfInline);
+router.post('/sources/:id/cache-original-pdf', authMiddleware, requireAdmin, cacheContributionPdf);
+router.post('/sources/:id/process-uploaded-pdf', authMiddleware, requireAdmin, processUploadedPdfForContribution);
+router.get('/sources/:id/pdf-import-progress', authMiddleware, requireAdmin, getUploadedPdfImportProgressForContribution);
+router.post('/sources/:id/pdf-import-cancel', authMiddleware, requireAdmin, cancelUploadedPdfImportForContribution);
+router.delete('/sources/:id/original-pdf', authMiddleware, requireAdmin, deleteContributionPdf);
+router.post('/sources/upload-pdf', authMiddleware, requireAdmin, uploadPdfMiddleware, uploadPdfFile);
+router.post('/sources/:id/import-fulltext', authMiddleware, requireAdmin, importFullText);
+router.post('/sources/:id/build-chunks', authMiddleware, requireAdmin, buildChunks);
+router.get('/sources/:id/rules-v3/plan-preview', authMiddleware, requireAdmin, previewRuleV3Plan);
+router.post('/sources/:id/rules-v3/work-units/:workUnitId/dry-run', authMiddleware, requireAdmin, dryRunRuleV3Extraction);
+router.post('/sources/:id/rules-v3/extract', authMiddleware, requireAdmin, startFullRuleV3Extraction);
+router.get('/sources/:id/rules-v3/summary', authMiddleware, requireAdmin, getRuleV3SourceAnalysisSummary);
+router.get('/rules-v3/runs/:runId', authMiddleware, requireAdmin, getFullRuleV3ExtractionProgress);
+router.post('/rules-v3/runs/:runId/cancel', authMiddleware, requireAdmin, cancelFullRuleV3Extraction);
+router.get('/rules-v3/candidates', authMiddleware, requireAdmin, getRuleV3Candidates);
+router.get('/rules-v3/candidates/:id', authMiddleware, requireAdmin, getRuleV3CandidateDetail);
+router.post('/rules-v3/candidates/:id/approve', authMiddleware, requireAdmin, approveRuleV3Candidate);
+router.post('/rules-v3/candidates/:id/reject', authMiddleware, requireAdmin, rejectRuleV3Candidate);
+router.post('/rules-v3/bulk-action', authMiddleware, requireAdmin, bulkRuleV3Action);
+router.delete('/sources/:id', authMiddleware, requireAdmin, deleteSource);
+router.post('/sources/:id/reimport-fulltext', authMiddleware, requireAdmin, reimportFullText);
 
 export default router;

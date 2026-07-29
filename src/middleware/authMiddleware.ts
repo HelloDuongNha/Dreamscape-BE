@@ -1,7 +1,8 @@
 import jwt from 'jsonwebtoken';
 import { Request, Response, NextFunction } from 'express';
-import User, { IUser } from '../models/User';
+import User, { IUser } from '../modules/identity/models/User';
 import { recordStreakAsync } from './streakMiddleware';
+import { requireEnvironmentSecret } from '../config/env';
 
 // ─── Augment Express Request ──────────────────────────────────────────────────
 // Attach the authenticated user to the request so downstream handlers can
@@ -34,14 +35,22 @@ interface JwtPayload {
  * On success  → attaches `req.user` and calls `next()`.
  * On failure  → responds with 401 Unauthorized.
  */
-const authMiddleware = async (
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): Promise<void> => {
+const authMiddleware = createAuthenticationMiddleware(true);
+export const optionalAuthMiddleware = createAuthenticationMiddleware(false);
+
+function createAuthenticationMiddleware(required: boolean) {
+  return async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (!required && !authHeader) {
+      next();
+      return;
+    }
     res.status(401).json({
       success: false,
       message: 'Access denied. No token provided.',
@@ -50,9 +59,10 @@ const authMiddleware = async (
   }
 
   const token = authHeader.split(' ')[1];
-  const secret = process.env.JWT_SECRET;
-
-  if (!secret) {
+  let secret: string;
+  try {
+    secret = requireEnvironmentSecret('JWT_SECRET');
+  } catch {
     res.status(500).json({
       success: false,
       message: 'Server configuration error: JWT_SECRET is not set.',
@@ -62,6 +72,14 @@ const authMiddleware = async (
 
   try {
     const decoded = jwt.verify(token, secret) as JwtPayload;
+    if (!decoded.sessionId) {
+      res.status(401).json({
+        success: false,
+        code: 'session_upgrade_required',
+        message: 'Please sign in again to establish a revocable session.',
+      });
+      return;
+    }
 
     // Fetch the user from DB to ensure the account still exists
     const user = await User.findById(decoded.id);
@@ -74,7 +92,7 @@ const authMiddleware = async (
     }
 
     // Verify session is active (not revoked)
-    if (decoded.sessionId && user.sessions) {
+    if (user.sessions) {
       const sessionExists = user.sessions.some(
         (s) => String(s._id) === String(decoded.sessionId)
       );
@@ -98,44 +116,27 @@ const authMiddleware = async (
       message: 'Invalid or expired token.',
     });
   }
-};
+  };
+}
 
 /**
- * Middleware protecting routes requiring moderator/admin privileges.
- * Validates request sender user ID against allowlisted MODERATOR_USER_IDS env.
+ * Protects administration routes using the persisted account role.
+ *
+ * The role is loaded from MongoDB on every authenticated request, so changing
+ * an email address or issuing a new JWT cannot grant or remove privileges.
  */
-export const isModerator = (req: Request, res: Response, next: NextFunction): void => {
+export const requireAdmin = (req: Request, res: Response, next: NextFunction): void => {
   if (!req.user) {
     res.status(401).json({ success: false, message: 'Unauthorized. User session not found.' });
     return;
   }
 
-  const userAny = req.user as any;
-  const rawId = userAny?._id || userAny?.id || userAny?.userId;
-  if (!rawId) {
-    res.status(403).json({ success: false, message: 'Forbidden. Moderator privileges required.' });
+  if (req.user.role === 'admin') {
+    next();
     return;
   }
 
-  const userId = String(rawId).trim();
-  const moderatorIdsStr = process.env.MODERATOR_USER_IDS || '';
-  const moderatorIds = moderatorIdsStr.split(',').map((id) => id.trim()).filter(Boolean);
-  const isIncluded = moderatorIds.includes(userId);
-
-  if (process.env.NODE_ENV !== 'production') {
-    const hasEnv = !!process.env.MODERATOR_USER_IDS;
-    console.log(`[moderation] currentUserId=${userId}`);
-    console.log(`[moderation] hasModeratorEnv=${hasEnv}`);
-    console.log(`[moderation] moderatorIdsCount=${moderatorIds.length}`);
-    console.log(`[moderation] isModerator=${isIncluded}`);
-  }
-
-  if (isIncluded) {
-    next();
-  } else {
-    res.status(403).json({ success: false, message: 'Forbidden. Moderator privileges required.' });
-  }
+  res.status(403).json({ success: false, message: 'Forbidden. Administrator privileges required.' });
 };
 
 export default authMiddleware;
-

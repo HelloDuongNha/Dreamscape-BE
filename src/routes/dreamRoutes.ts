@@ -1,23 +1,29 @@
 import { Router } from 'express';
+import { analyzeDream } from '../modules/dream/controllers/dreamAnalyze.controller';
+import { saveHypothesisFeedback } from '../modules/dream/controllers/dreamFeedback.controller';
+import { createDream } from '../modules/dream/controllers/dreamCreate.controller';
 import {
-  createDream,
-  getPublicFeed,
-  getUserDreams,
-  updateDream,
-  appendDreamAddition,
-  deleteDream,
-  updatePrivacy,
-  toggleLike,
   addComment,
   getComments,
-  getDream,
-  analyzeDream,
+  updateCommentPolicy,
+} from '../modules/dream/controllers/dreamComment.controller';
+import {
   analyzeDreamById,
-  debugRag,
-  saveHypothesisFeedback,
   cancelDreamAnalysis,
-} from '../controllers/dreamController';
-import authMiddleware from '../middleware/authMiddleware';
+  regenerateDreamContinuation,
+} from '../modules/dream/controllers/dreamAnalysis.controller';
+import { deleteDream } from '../modules/dream/controllers/dreamDelete.controller';
+import { updatePrivacy } from '../modules/dream/controllers/dreamPrivacy.controller';
+import { toggleLike } from '../modules/dream/controllers/dreamLike.controller';
+import { updateDream } from '../modules/dream/controllers/dreamUpdate.controller';
+import { updateDreamAiPolicy } from '../modules/dream/controllers/dreamAiPolicy.controller';
+import {
+  getDream,
+  getPublicFeed,
+  searchDreams,
+  getUserDreams,
+} from '../modules/dream/controllers/dreamRead.controller';
+import authMiddleware, { optionalAuthMiddleware } from '../middleware/authMiddleware';
 
 const router = Router();
 
@@ -210,6 +216,7 @@ router.post('/', authMiddleware, createDream);
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.get('/', getPublicFeed);
+router.get('/search', optionalAuthMiddleware, searchDreams);
 
 // ─── GET /api/dreams/user/:userId ─────────────────────────────────────────────
 
@@ -269,7 +276,7 @@ router.get('/', getPublicFeed);
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.get('/user/:userId', getUserDreams);
+router.get('/user/:userId', optionalAuthMiddleware, getUserDreams);
 
 // ─── PUT /api/dreams/:id ──────────────────────────────────────────────────────
 
@@ -314,7 +321,7 @@ router.get('/user/:userId', getUserDreams);
  *         description: Unauthorized
  */
 router.put('/:id', authMiddleware, updateDream);
-router.post('/:id/additions', authMiddleware, appendDreamAddition);
+router.patch('/:id/ai-analysis', authMiddleware, updateDreamAiPolicy);
 
 // ─── DELETE /api/dreams/:id ───────────────────────────────────────────────────
 
@@ -454,6 +461,7 @@ router.post('/:id/like', authMiddleware, toggleLike);
  *         description: Dream not found
  */
 router.post('/:id/comments', authMiddleware, addComment);
+router.patch('/:id/comments-policy', authMiddleware, updateCommentPolicy);
 
 // ─── GET /api/dreams/:id/comments ────────────────────────────────────────────
 
@@ -476,7 +484,7 @@ router.post('/:id/comments', authMiddleware, addComment);
  *       400:
  *         description: Invalid dreamId
  */
-router.get('/:id/comments', getComments);
+router.get('/:id/comments', optionalAuthMiddleware, getComments);
 router.get('/:id', authMiddleware, getDream);
 
 // ─── POST /api/dreams/analyze ─────────────────────────────────────────────────
@@ -523,39 +531,8 @@ router.get('/:id', authMiddleware, getDream);
  */
 router.post('/analyze', authMiddleware, analyzeDream);
 router.post('/:id/analyze', authMiddleware, analyzeDreamById);
+router.post('/:id/continuation/regenerate', authMiddleware, regenerateDreamContinuation);
 router.post('/:id/analysis/cancel', authMiddleware, cancelDreamAnalysis);
 router.post('/:id/hypothesis-feedback', authMiddleware, saveHypothesisFeedback);
-
-// ─── POST /api/dreams/debug-rag ──────────────────────────────────────────────
-
-/**
- * @swagger
- * /api/dreams/debug-rag:
- *   post:
- *     summary: Test symbol retrieval via the Hybrid RAG Search strategy (No LLM generation)
- *     tags:
- *       - Dreams
- *     security:
- *       - BearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - dreamText
- *             properties:
- *               dreamText:
- *                 type: string
- *                 maxLength: 2000
- *                 example: "I had a vivid dream where I was falling from a high building."
- *     responses:
- *       200:
- *         description: Successfully retrieved top matching symbols
- *       400:
- *         description: Validation error
- */
-router.post('/debug-rag', authMiddleware, debugRag);
 
 export default router;

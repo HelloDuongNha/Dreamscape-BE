@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { logger } from '../infrastructure/logger';
 
 /**
  * Simple request logger middleware.
@@ -13,9 +14,14 @@ const requestLogger = (
 
   res.on('finish', () => {
     const duration = Date.now() - start;
-    console.log(
-      `[${new Date().toISOString()}] ${req.method} ${req.originalUrl} → ${res.statusCode} (${duration}ms)`,
-    );
+    // Query strings may contain recovery codes or provider tokens, so request
+    // telemetry records only the matched path.
+    logger.info('HTTP request completed', {
+      method: req.method,
+      path: req.path,
+      statusCode: res.statusCode,
+      durationMs: duration,
+    });
   });
 
   next();

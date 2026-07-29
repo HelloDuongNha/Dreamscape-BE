@@ -5,7 +5,7 @@ import {
   getMessages,
   searchOrCreateConversation,
   deleteConversation,
-} from '../controllers/conversationController';
+} from '../modules/messaging/controllers/conversationController';
 
 const router = Router();
 
@@ -115,7 +115,7 @@ router.post('/search', searchOrCreateConversation);
 
 /**
  * @swagger
- * /api/messages/{conversationId}:
+ * /api/conversations/messages/{conversationId}:
  *   get:
  *     summary: Get chat history for a conversation
  *     description: >
