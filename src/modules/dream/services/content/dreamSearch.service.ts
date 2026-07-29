@@ -51,7 +51,7 @@ type AggregatedCommentGroup = {
   }>;
 };
 
-const AUTHOR_PROJECTION = 'username display_name avatar';
+const AUTHOR_PROJECTION = 'username display_name avatar streakCount';
 const COMMENT_MATCH_LIMIT = 3;
 
 /**

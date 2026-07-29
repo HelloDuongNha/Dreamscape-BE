@@ -41,15 +41,12 @@ export function deduplicateOverlappingMotifNotes(notes: any[]): any[] {
   for (const note of ordered) {
     const symbol = normalizeAnalysisText(note?.symbol);
     const evidence = normalizeAnalysisText(note?.dreamEvidence);
-    const dictionarySymbol = normalizeAnalysisText(note?.dictionarySymbol);
     const duplicate = accepted.some(existing => {
       const existingSymbol = normalizeAnalysisText(existing?.symbol);
       const sameEvidence = evidence && evidence === normalizeAnalysisText(existing?.dreamEvidence);
-      const sameDictionary = dictionarySymbol
-        && dictionarySymbol === normalizeAnalysisText(existing?.dictionarySymbol);
       const overlappingLabel = containsPhrase(symbol, [existingSymbol])
         || containsPhrase(existingSymbol, [symbol]);
-      return overlappingLabel && (sameEvidence || sameDictionary);
+      return overlappingLabel && sameEvidence;
     });
     if (!duplicate) accepted.push(note);
   }

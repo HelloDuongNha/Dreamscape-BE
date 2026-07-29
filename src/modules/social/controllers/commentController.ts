@@ -1,45 +1,31 @@
 import { Request, Response } from 'express';
-import Comment from '../models/Comment';
-import { Types } from 'mongoose';
-import Dream from '../../dream/models/Dream';
-import { buildDreamVisibilityFilter } from '../../dream/services/content/dreamAccessPolicy.service';
+import {
+  CommentReadError,
+  loadVisibleUserComments,
+} from '../services/comment/commentRead.service';
 
-// ─── GET /api/comments/user/:userId ──────────────────────────────────────────
-
-/**
- * Fetch all comments made by a specific user.
- * Returns comments sorted newest-first, with dreamId populated
- * (so the client can render the original post data inside ReplyCard).
- * Auth: not required — public read.
- */
-export const getUserComments = async (req: Request, res: Response): Promise<void> => {
+export async function getUserComments(
+  req: Request,
+  res: Response,
+): Promise<void> {
   try {
-    const userId = String(req.params.userId);
-
-    if (!Types.ObjectId.isValid(userId)) {
-      res.status(400).json({ success: false, message: 'Invalid userId format.' });
+    const data = await loadVisibleUserComments(
+      String(req.params.userId),
+      String(req.user?._id || '') || undefined,
+    );
+    res.status(200).json({ success: true, data });
+  } catch (error) {
+    if (error instanceof CommentReadError) {
+      res.status(error.statusCode).json({
+        success: false,
+        message: error.message,
+      });
       return;
     }
-
-    const visibleDreamIds = await Dream.find(
-      buildDreamVisibilityFilter(String(req.user?._id || '') || undefined),
-    ).distinct('_id');
-    const comments = await Comment.find({
-      userId: new Types.ObjectId(userId),
-      dreamId: { $in: visibleDreamIds },
-      is_deleted: { $ne: true },
-    })
-      .select('-is_deleted -deleted_at -deleted_by -deleted_by_role')
-      .sort({ created_at: -1 })
-      .populate('userId', 'username display_name avatar')
-      .populate({
-        path: 'dreamId',
-        populate: { path: 'userId', select: 'username display_name avatar' },
-      })
-      .lean();
-
-    res.status(200).json({ success: true, data: comments });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to fetch user comments.', error: err });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch user comments.',
+      error,
+    });
   }
-};
+}

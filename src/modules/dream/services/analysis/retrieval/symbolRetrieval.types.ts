@@ -18,4 +18,5 @@ export interface RetrievedSymbol {
 
 export type SymbolVectorBackend =
   | 'mongodb_vector_search'
-  | 'in_memory_cosine_fallback';
+  | 'in_memory_cosine_fallback'
+  | 'not_used';

@@ -12,16 +12,16 @@ const EXPECTED_ROUTE_FILES: Record<string, RouteBaseline> = {
   'authRoutes.ts': { count: 17, sha256: 'ae48dbf64a3372071fd19580947d63645ffd65398d2bb684de659ff06015a8aa' },
   'commentRoutes.ts': { count: 3, sha256: '1c889bf2d7f88b15a35cd23f6547a08cc26662fbee069316ead333b6acfd02d6' },
   'conversationRoutes.ts': { count: 4, sha256: '4a9fecdf6c5ab6dbf4d80cba802df0a888d4bf9256f2dd7c65a7e385be773c5c' },
-  'dreamRoutes.ts': { count: 19, sha256: '90151781d0de89946bce6c9cf3a29dfe8047edf42200edad2d1429be010f02c2' },
-  'moderationRoutes.ts': { count: 28, sha256: '1737a12a61b78adf57d265224c75192ec6bca089be48415430141efc30628cbe' },
+  'dreamRoutes.ts': { count: 18, sha256: '97d5fdbe3904621ba91e9621dacdc60de23315d3e0b8e2883b1f9b0ccb3e8257' },
+  'moderationRoutes.ts': { count: 28, sha256: 'c219812d6d50179499d7e5e9950a414593a26eeb9959df96d9823f46964d8140' },
   'notificationRoutes.ts': { count: 4, sha256: '1091179e9e7b2cd3fc0407011bb2f6e137ce888eb9a4409c34e8992235365efd' },
   'oracleRoutes.ts': { count: 17, sha256: 'b7ac24a837be4ece918a24628bbbd95a0fde9a0209f2e9ee6a82d1ce9eecdae9' },
-  'sourceRoutes.ts': { count: 15, sha256: '2ebe795dda53bea9545836503d20a7f3d1b71fa2005dd2cde44d730994d71546' },
+  'sourceRoutes.ts': { count: 15, sha256: '8486a14b715671f51dfa3af0814304d9f3339bc253564f2fb77e7c05e75f957e' },
   'userRoutes.ts': { count: 4, sha256: 'f3db1e5dff80c3ae80f150d0d464d2de96965091ad040cd3909251c07c54f8ec' },
 };
 const EXPECTED_MOUNT_COUNT = 9;
 const EXPECTED_MOUNT_HASH = '2aaaa1c81edefe2ca6d10718399b51b3bb2a3f5b81d6321cc4a62a834fa30569';
-const EXPECTED_FEATURE_ROUTE_COUNT = 111;
+const EXPECTED_FEATURE_ROUTE_COUNT = 110;
 
 function sha256(lines: string[]): string {
   return createHash('sha256').update([...lines].sort().join('\n')).digest('hex');

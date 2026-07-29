@@ -79,7 +79,7 @@ export interface DreamAnalysisResult {
       }[];
     };
   };
-  strategyUsed: 'hybrid_rerank';
+  strategyUsed: 'contextual_observation';
 }
 
 export type DreamAnalysisStage =

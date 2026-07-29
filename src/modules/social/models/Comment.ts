@@ -9,6 +9,9 @@ import mongoose, { Document, Schema, Types } from 'mongoose';
 export interface IComment extends Document {
   dreamId: Types.ObjectId;
   userId: Types.ObjectId;
+  parentCommentId?: Types.ObjectId;
+  replyToCommentId?: Types.ObjectId;
+  replyToUserId?: Types.ObjectId;
   content: string;
   edit_history: Array<{
     content: string;
@@ -18,7 +21,7 @@ export interface IComment extends Document {
   is_deleted: boolean;
   deleted_at?: Date;
   deleted_by?: Types.ObjectId;
-  deleted_by_role?: 'author' | 'dream_owner';
+  deleted_by_role?: 'author' | 'dream_owner' | 'parent_author';
   created_at: Date;
 }
 
@@ -36,6 +39,22 @@ const CommentSchema = new Schema<IComment>(
       type:     Schema.Types.ObjectId,
       ref:      'User',
       required: [true, 'userId is required'],
+    },
+    parentCommentId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Comment',
+      required: false,
+      index: true,
+    },
+    replyToCommentId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Comment',
+      required: false,
+    },
+    replyToUserId: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      required: false,
     },
     content: {
       type:      String,
@@ -79,7 +98,7 @@ const CommentSchema = new Schema<IComment>(
     },
     deleted_by_role: {
       type: String,
-      enum: ['author', 'dream_owner'],
+      enum: ['author', 'dream_owner', 'parent_author'],
       required: false,
     },
     created_at: {
@@ -97,6 +116,7 @@ const CommentSchema = new Schema<IComment>(
 // Covers: db.comments.find({ dreamId }).sort({ created_at: 1 })
 CommentSchema.index({ dreamId: 1, created_at: 1 });
 CommentSchema.index({ dreamId: 1, is_deleted: 1, created_at: 1 });
+CommentSchema.index({ dreamId: 1, parentCommentId: 1, created_at: 1 });
 
 // ─── Model Export ─────────────────────────────────────────────────────────────
 

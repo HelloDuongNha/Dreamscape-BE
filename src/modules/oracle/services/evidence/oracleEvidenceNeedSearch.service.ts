@@ -1,6 +1,8 @@
 import { inferDocumentLanguage } from '../../../rules_v3/services/planning/documentLanguage.service';
 import OracleEvidenceGap from '../../models/OracleEvidenceGap';
-import { isResearchableOracleEvidenceClaim } from '../../../../shared/evidence/evidenceClaim';
+import {
+  isSourceSearchableOracleEvidenceClaim,
+} from '../../../../shared/evidence/evidenceClaim';
 import { localizeOracleEvidenceClaim } from './oracleEvidenceLocalization.service';
 import { evidenceGapRuleSimilarity } from '../../../../shared/evidence/evidenceClaimMatching';
 
@@ -20,7 +22,7 @@ export async function findOracleEvidenceNeedsForTexts(
     .lean();
   const wantsVietnamese = sourceLanguage.toLowerCase().startsWith('vi');
   const matches = gaps
-    .filter((gap) => isResearchableOracleEvidenceClaim(String(gap.claim || '')))
+    .filter((gap) => isSourceSearchableOracleEvidenceClaim(String(gap.claim || '')))
     .map((gap) => {
       const localized = localizeOracleEvidenceClaim(String(gap.claim || ''));
       return {

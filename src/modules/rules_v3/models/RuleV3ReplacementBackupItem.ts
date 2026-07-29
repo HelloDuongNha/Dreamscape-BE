@@ -1,4 +1,5 @@
-import mongoose, { Document, Schema, Types } from 'mongoose';
+import { Document, Schema, Types } from 'mongoose';
+import { modelForDomain } from '../../../infrastructure/database/domainModels';
 
 export type RuleV3ReplacementBackupEntityType = 'source_rule' | 'touched_rule' | 'evidence';
 
@@ -40,7 +41,8 @@ RuleV3ReplacementBackupItemSchema.index(
 );
 RuleV3ReplacementBackupItemSchema.index({ cleanupAfter: 1 }, { expireAfterSeconds: 0 });
 
-export default mongoose.model<IRuleV3ReplacementBackupItem>(
+export default modelForDomain<IRuleV3ReplacementBackupItem>(
+  'operations',
   'RuleV3ReplacementBackupItem',
   RuleV3ReplacementBackupItemSchema,
 );

@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import connectDB from '../src/config/db';
 import {
   runMessageEncryptionMigration,
-} from '../src/modules/messaging/services/messageEncryptionMigration.service';
+} from '../src/modules/messaging/services/migration/messageEncryptionMigration.service';
 
 async function run(): Promise<void> {
   const rollback = process.argv.includes('--rollback');

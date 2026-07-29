@@ -1,39 +1,16 @@
-import { generateEmbedding } from '../../../../../infrastructure/llm.service';
 import { logger } from '../../../../../infrastructure/logger';
-import DreamSymbol from '../../../models/DreamSymbol';
 import {
   extractDreamSegments as segmentDreamNarrative,
   isExplicitSleepContextClause as matchExplicitSleepContext,
   type DreamSegments,
 } from '../segmentation/dreamSegmentation.service';
-import { rankSymbolCandidates } from './symbolCandidateRanking.service';
-import {
-  isStrictExactMatch as matchStrictSymbol,
-  removeVietnameseDiacritics as foldVietnameseDiacritics,
-} from './symbolMatching.service';
-import { prepareSymbolQuery } from './symbolQuery.service';
 import type {
   RetrievedSymbol,
-  SymbolVectorBackend,
 } from './symbolRetrieval.types';
-import { getSymbolVectorScores } from './symbolVectorSearch.service';
 
 // Coordinates segmentation, vector lookup and ranking without owning their logic.
 export type IRetrievedSymbol = RetrievedSymbol;
 export type IDreamSegments = DreamSegments;
-
-export function removeVietnameseDiacritics(value: string): string {
-  return foldVietnameseDiacritics(value);
-}
-
-export function isStrictExactMatch(
-  normalizedSymbol: string,
-  tokens: Set<string>,
-  ngrams: Set<string>,
-  isEnglish: boolean,
-): ReturnType<typeof matchStrictSymbol> {
-  return matchStrictSymbol(normalizedSymbol, tokens, ngrams, isEnglish);
-}
 
 export function isExplicitSleepContextClause(
   clause: string,
@@ -47,48 +24,37 @@ export function extractDreamSegments(rawText: string): DreamSegments {
 
 export interface SymbolRetrievalResult extends DreamSegments {
   symbols: RetrievedSymbol[];
-  strategyUsed: 'hybrid_rerank';
-  vectorBackend: SymbolVectorBackend;
+  strategyUsed: 'contextual_observation';
+  vectorBackend: 'not_used';
   extractedKeywords: string[];
+}
+
+function extractNarrativeKeywords(narrative: string): string[] {
+  return [...new Set(
+    narrative
+      .normalize('NFKC')
+      .toLocaleLowerCase()
+      .match(/[\p{L}\p{N}]{2,}/gu) || [],
+  )].slice(0, 120);
 }
 
 export async function retrieveSymbolsHybrid(
   dreamText: string,
 ): Promise<SymbolRetrievalResult> {
   const segments = segmentDreamNarrative(dreamText);
-  const query = prepareSymbolQuery(segments.dreamNarrative);
-  const offline = process.env.RAG_OFFLINE === 'true';
+  const extractedKeywords = extractNarrativeKeywords(segments.dreamNarrative);
 
-  const fullTextEmbedding = offline
-    ? null
-    : await generateEmbedding(segments.dreamNarrative);
-  const fullText = await getSymbolVectorScores(fullTextEmbedding);
-
-  const rows = await DreamSymbol.find().lean() as any[];
-  const ranked = rankSymbolCandidates({
-    rows,
-    fullTextScores: fullText.scores,
-    normalizedDreamText: query.normalizedText,
-    tokens: query.tokens,
-    tokenSet: query.tokenSet,
-    ngramSet: query.ngramSet,
-    minimumScore: Number.parseFloat(process.env.SYMBOL_RAG_MIN_SCORE || '0.55'),
-  });
-
-  logger.info('Hybrid RAG symbol retrieval completed', {
-    extractedKeywordsCount: query.extractedKeywords.length,
-    exactMatchCount: ranked.exactMatchCount,
-    fullTextVectorResultCount: ranked.fullTextResultCount,
-    finalRerankedSymbolCount: ranked.symbols.length,
-    retrievalStrategy: 'hybrid_rerank',
-    vectorBackend: fullText.backend,
+  logger.info('Contextual dream detail retrieval prepared', {
+    extractedKeywordsCount: extractedKeywords.length,
+    retrievalStrategy: 'contextual_observation',
+    vectorBackend: 'not_used',
   });
 
   return {
     ...segments,
-    symbols: ranked.symbols,
-    strategyUsed: 'hybrid_rerank',
-    vectorBackend: fullText.backend,
-    extractedKeywords: query.extractedKeywords,
+    symbols: [],
+    strategyUsed: 'contextual_observation',
+    vectorBackend: 'not_used',
+    extractedKeywords,
   };
 }

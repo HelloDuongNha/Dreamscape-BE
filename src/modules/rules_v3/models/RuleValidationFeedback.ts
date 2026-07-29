@@ -1,4 +1,5 @@
-import mongoose, { Document, Schema, Types } from 'mongoose';
+import { Document, Schema, Types } from 'mongoose';
+import { modelForDomain } from '../../../infrastructure/database/domainModels';
 
 export interface IRuleValidationImpact {
   ruleId: string;
@@ -53,7 +54,8 @@ RuleValidationFeedbackSchema.index(
 );
 RuleValidationFeedbackSchema.index({ 'impacts.ruleId': 1 });
 
-export default mongoose.model<IRuleValidationFeedback>(
+export default modelForDomain<IRuleValidationFeedback>(
+  'knowledge',
   'RuleValidationFeedback',
   RuleValidationFeedbackSchema,
 );

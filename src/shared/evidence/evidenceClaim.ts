@@ -89,8 +89,23 @@ export function isResearchableOracleEvidenceClaim(claim: string): boolean {
     && (dreamScience || memoryMechanism || psychologicalMechanism || conceptCount >= 2);
 }
 
+// Evidence Needed must be a reusable research proposition, not one case interpretation.
+export function isSourceSearchableOracleEvidenceClaim(claim: string): boolean {
+  if (!isResearchableOracleEvidenceClaim(claim)) return false;
+  const clean = cleanOracleEvidenceClaim(claim);
+  const canonical = canonicalizeOracleEvidenceClaim(clean);
+  if (
+    normalizeOracleEvidenceText(canonical)
+    !== normalizeOracleEvidenceText(clean)
+  ) {
+    return true;
+  }
+  if (isCaseApplicationClaim(clean)) return false;
+  return hasGeneralResearchForm(clean);
+}
+
 export function invalidateOracleCitationMarker(text: string, citationIndex: number): string {
-  return keepResearchableMarker(
+  return keepSourceSearchableMarker(
     text,
     new RegExp(`\\[${citationIndex}\\]`, 'gu'),
     '[?]',
@@ -98,7 +113,7 @@ export function invalidateOracleCitationMarker(text: string, citationIndex: numb
 }
 
 export function sanitizeOracleUnresolvedMarkers(text: string): string {
-  return keepResearchableMarker(text, /\[\?\]/gu, '[?]');
+  return keepSourceSearchableMarker(text, /\[\?\]/gu, '[?]');
 }
 
 export function canonicalizeOracleEvidenceClaim(claim: string): string {
@@ -160,7 +175,24 @@ export function canonicalizeOracleEvidenceClaim(claim: string): string {
   return clean;
 }
 
-function keepResearchableMarker(
+function isCaseApplicationClaim(claim: string): boolean {
+  const caseSubject = /^(?:giấc mơ|the dream|this dream|your dream)\s+(?:này\s+|của bạn\s+)?(?:không nhất thiết\s+|does not necessarily\s+)?(?:diễn ra|xảy ra|bắt đầu|kết thúc|gợi ý|cho thấy|phản ánh|minh họa|takes place|occurs?|begins?|ends?|suggests?|shows?|reflects?|illustrates?)(?=$|[^\p{L}\p{N}])/iu;
+  const demonstrativeEvent = /^(?:sự|the)\s+(?:kết hợp|chuyển đổi|xuất hiện|biến mất|combination|transition|appearance|disappearance)\s+(?:này|this)(?=$|[^\p{L}\p{N}])/iu;
+  const narrativeSequence = /^(?:khi|sau khi|trước khi|while|when|after|before)\b/iu.test(claim)
+    && /(?:giấc mơ|dream)\b.*(?:gợi ý|cho thấy|phản ánh|suggests?|shows?|reflects?)/iu
+      .test(claim);
+  return caseSubject.test(claim) || demonstrativeEvent.test(claim) || narrativeSequence;
+}
+
+function hasGeneralResearchForm(claim: string): boolean {
+  const cautiousRelation = /(?:^|[^\p{L}\p{N}])(?:có thể|có xu hướng|thường|nhìn chung|có khả năng|liên quan đến|được liên kết với|phổ biến hơn|ít phổ biến hơn|thay đổi đáng kể|may|might|can|could|tends? to|often|generally|is associated with|are associated with|is related to|are related to|more likely|less likely|more common|less common|var(?:y|ies|ied) significantly)(?=$|[^\p{L}\p{N}])/iu;
+  const researchReporting = /(?:^|[^\p{L}\p{N}])(?:nghiên cứu|kết quả|dữ liệu|người tham gia|báo cáo|study|studies|results?|data|participants?|reports?)(?=$|[^\p{L}\p{N}])/iu;
+  const quantitativeRelation = /(?:^|[^\p{L}\p{N}])(?:tăng|giảm|cao hơn|thấp hơn|khác biệt|increase[ds]?|decrease[ds]?|higher|lower|differ(?:s|ed)?)(?=$|[^\p{L}\p{N}])/iu;
+  return cautiousRelation.test(claim)
+    || (researchReporting.test(claim) && quantitativeRelation.test(claim));
+}
+
+function keepSourceSearchableMarker(
   text: string,
   marker: RegExp,
   researchableMarker: string,
@@ -175,7 +207,9 @@ function keepResearchableMarker(
       beforePunctuation.lastIndexOf('? '),
     );
     const surroundingClaim = prefix.slice(boundary + 1).trim();
-    return isResearchableOracleEvidenceClaim(surroundingClaim) ? researchableMarker : '';
+    return isSourceSearchableOracleEvidenceClaim(surroundingClaim)
+      ? researchableMarker
+      : '';
   });
   return updated
     .replace(/[ \t]+([.,!?;:])/gu, '$1')

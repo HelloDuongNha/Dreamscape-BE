@@ -1,49 +1,33 @@
 import { Request, Response } from 'express';
-import Notification from '../models/Notification';
 import {
   deleteOwnedNotification,
+  listOwnedNotifications,
+  markOwnedNotificationsRead,
   NotificationLifecycleError,
   openOwnedNotification,
-} from '../services/notificationLifecycle.service';
+} from '../services/notification/notificationLifecycle.service';
 
-/**
- * GET /api/notifications
- * Fetch all notifications for the logged-in user, sorted newest first.
- */
-export const getNotifications = async (req: Request, res: Response): Promise<void> => {
+export async function getNotifications(
+  req: Request,
+  res: Response,
+): Promise<void> {
   try {
-    const myId = req.user!._id;
-
-    const notifications = await Notification.find({ recipientId: myId })
-      .sort({ timestamp: -1, _id: -1 })
-      .populate('senderId', 'username display_name avatar')
-      .lean();
-
-    res.status(200).json({
-      success: true,
-      data: notifications,
-    });
+    const data = await listOwnedNotifications(String(req.user!._id));
+    res.status(200).json({ success: true, data });
   } catch {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch notifications.',
     });
   }
-};
+}
 
-/**
- * PATCH /api/notifications/mark-read
- * Mark all notifications for the current user as read (isRead = true).
- */
-export const markNotificationsRead = async (req: Request, res: Response): Promise<void> => {
+export async function markNotificationsRead(
+  req: Request,
+  res: Response,
+): Promise<void> {
   try {
-    const myId = req.user!._id;
-
-    await Notification.updateMany(
-      { recipientId: myId, isRead: false },
-      { $set: { isRead: true } }
-    );
-
+    await markOwnedNotificationsRead(String(req.user!._id));
     res.status(200).json({
       success: true,
       message: 'All notifications marked as read.',
@@ -54,9 +38,12 @@ export const markNotificationsRead = async (req: Request, res: Response): Promis
       message: 'Failed to mark notifications as read.',
     });
   }
-};
+}
 
-export const openNotification = async (req: Request, res: Response): Promise<void> => {
+export async function openNotification(
+  req: Request,
+  res: Response,
+): Promise<void> {
   try {
     const target = await openOwnedNotification({
       notificationId: String(req.params.notificationId),
@@ -66,9 +53,12 @@ export const openNotification = async (req: Request, res: Response): Promise<voi
   } catch (error) {
     sendNotificationError(res, error, 'Failed to open notification.');
   }
-};
+}
 
-export const deleteNotification = async (req: Request, res: Response): Promise<void> => {
+export async function deleteNotification(
+  req: Request,
+  res: Response,
+): Promise<void> {
   try {
     await deleteOwnedNotification({
       notificationId: String(req.params.notificationId),
@@ -81,7 +71,7 @@ export const deleteNotification = async (req: Request, res: Response): Promise<v
   } catch (error) {
     sendNotificationError(res, error, 'Failed to delete notification.');
   }
-};
+}
 
 function sendNotificationError(
   res: Response,

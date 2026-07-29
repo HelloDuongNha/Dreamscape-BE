@@ -3,7 +3,7 @@ import User from '../../../identity/models/User';
 import {
   calculateRank,
   checkAndAwardAchievements,
-} from '../../../identity/services/rank.service';
+} from '../../../identity/services/engagement/rank.service';
 import Notification from '../../../social/models/Notification';
 import Dream from '../../models/Dream';
 import { decideDreamAccess } from '../content/dreamAccessPolicy.service';

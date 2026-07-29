@@ -5,6 +5,7 @@ import type {
   DreamPaginationDto,
   UserDreamsRequestDto,
 } from '../../dto/dreamRead.dto';
+import User from '../../../identity/models/User';
 import { mapDreamResponse } from './dreamNarrative.service';
 import { buildDreamVisibilityFilter } from './dreamAccessPolicy.service';
 
@@ -14,7 +15,7 @@ export interface DreamPage {
   nextCursor: string | null;
 }
 
-const AUTHOR_PROJECTION = 'username display_name avatar';
+const AUTHOR_PROJECTION = 'username display_name avatar streakCount';
 
 async function findDreamPage(
   filter: Record<string, unknown>,
@@ -47,10 +48,13 @@ export function getPublicDreamPage(pagination: DreamPaginationDto): Promise<Drea
   return findDreamPage(buildDreamVisibilityFilter(), pagination);
 }
 
-export function getUserDreamPage(
+export async function getUserDreamPage(
   request: UserDreamsRequestDto,
   viewerId?: string,
 ): Promise<DreamPage> {
+  const canViewArchive = await canViewUserDreamArchive(request.userId, viewerId);
+  if (!canViewArchive) return emptyDreamPage(request.limit);
+
   return findDreamPage(
     {
       userId: new Types.ObjectId(request.userId),
@@ -58,6 +62,27 @@ export function getUserDreamPage(
     },
     request,
   );
+}
+
+async function canViewUserDreamArchive(userId: string, viewerId?: string): Promise<boolean> {
+  if (viewerId === userId) return true;
+
+  const owner = await User.findById(userId)
+    .select('isPrivateAccount followers')
+    .lean();
+  if (!owner) return false;
+  if (!owner.isPrivateAccount) return true;
+  if (!viewerId || !Types.ObjectId.isValid(viewerId)) return false;
+
+  return owner.followers.some((followerId) => String(followerId) === viewerId);
+}
+
+function emptyDreamPage(limit: number): DreamPage {
+  return {
+    data: [],
+    limit,
+    nextCursor: null,
+  };
 }
 
 export async function getDreamDetail(

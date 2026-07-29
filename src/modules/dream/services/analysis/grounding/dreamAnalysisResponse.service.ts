@@ -46,7 +46,6 @@ export function enrichScientificNotesForResponse(
 ): any {
   if (!analysis) return analysis;
   const appliedRules = retrievedContext?.componentD?.appliedRules || [];
-  const usedDictionarySymbols = retrievedContext?.componentA?.usedSymbols || [];
   const personalSymbolPatterns = retrievedContext?.componentC?.personalSymbolPatterns || [];
   const observedSymbolPatterns = retrievedContext?.componentC?.observedSymbolPatterns || [];
   const similarDreams = retrievedContext?.componentC?.similarDreams || [];
@@ -83,12 +82,6 @@ export function enrichScientificNotesForResponse(
     buildContextualMotifNotes(narrative, appliedRules),
   ).map((note: any) => {
     const noteKey = normalizeGroundingText(note?.symbol);
-    const dictionaryMatch = usedDictionarySymbols.find((item: any) => {
-      if (!Array.isArray(item?.retrievalMethods) || !item.retrievalMethods.includes('exact_match')) return false;
-      const alias = normalizeGroundingText(item?.matchedTextVariant || item?.canonicalSymbol || item?.symbol);
-      if (!alias || !(containsGroundedPhrase(noteKey, [alias]) || containsGroundedPhrase(alias, [noteKey]))) return false;
-      return true;
-    });
     const personalPattern = personalSymbolPatterns.find((item: any) => {
       const patternKey = normalizeGroundingText(item?.symbol);
       return patternKey && (containsGroundedPhrase(noteKey, [patternKey]) || containsGroundedPhrase(patternKey, [noteKey]));
@@ -106,9 +99,8 @@ export function enrichScientificNotesForResponse(
       (item?.confirmedContext || []).some((entry: any) => entry?.answer === 'yes')).length;
     return {
       ...note,
-      origin: dictionaryMatch ? 'dictionary' : 'contextual_observation',
-      knowledgeStatus: dictionaryMatch ? 'dictionary' : 'observed',
-      ...(dictionaryMatch ? { dictionarySymbol: String(dictionaryMatch?.canonicalSymbol || dictionaryMatch?.symbol || '') } : {}),
+      origin: 'contextual_observation',
+      knowledgeStatus: 'observed',
       meaning: removeInternalAnalysisVocabulary(buildGroundedMotifExplanation(note, appliedRules)),
       contextualTone: note?.contextualTone || 'neutral',
       motifStats: {
@@ -226,8 +218,7 @@ export function enrichScientificNotesForResponse(
       narrativeUsed: Boolean(narrative.trim()),
       resolvedContextCount: responseHypotheses.filter((item: any) => ['yes', 'no'].includes(item?.userFeedback)).length,
       unresolvedContextCount: responseHypotheses.filter((item: any) => item?.userFeedback === 'unsure').length,
-      dictionaryMotifCount: responseSymbolicNotes.filter((item: any) => item?.origin === 'dictionary').length,
-      contextualMotifCount: responseSymbolicNotes.filter((item: any) => item?.origin !== 'dictionary').length,
+      recognizedMotifCount: responseSymbolicNotes.length,
       appliedRuleCount: responseScientificNotes.length,
       explanatoryRuleCount: responseScientificNotes.filter((note: any) => note?.applicationTier !== 'exploratory').length,
       exploratoryRuleCount: responseScientificNotes.filter((note: any) => note?.applicationTier === 'exploratory').length,

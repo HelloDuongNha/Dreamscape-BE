@@ -14,7 +14,7 @@ export function buildDreamPromptContext(input: {
   observedSymbolPatterns: ObservedSymbolPattern[];
   similarDreams: SimilarDreamMatch[];
 }): {
-  compactSymbolsText: string;
+  recognizedSymbolText: string;
   compactRulesText: string;
   personalPatternText: string;
   observedSymbolText: string;
@@ -42,7 +42,7 @@ export function buildDreamPromptContext(input: {
     })
     .slice(0, 5);
 
-  const compactSymbolsText = promptSymbols
+  const recognizedSymbolText = promptSymbols
     .map(symbol =>
       `- Symbol: "${symbol.symbol}" (Category: "${symbol.category}", Valence: ${symbol.symbolValence}, Relevance/Similarity: ${symbol.rawSimilarityScore !== null ? symbol.rawSimilarityScore.toFixed(3) : 'Exact-Match-Only'}, Adjusted Score: ${symbol.adjustedScore.toFixed(3)})\n  Dictionary Meaning: ${symbol.interpretation}`,
     )
@@ -79,7 +79,7 @@ PriorDream ${index + 1}:
     : 'None found';
 
   return {
-    compactSymbolsText,
+    recognizedSymbolText,
     compactRulesText,
     personalPatternText,
     observedSymbolText,

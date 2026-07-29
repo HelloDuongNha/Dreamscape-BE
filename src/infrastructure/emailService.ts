@@ -3,6 +3,7 @@ import nodemailer from 'nodemailer';
 import type { SendMailOptions, Transporter } from 'nodemailer';
 import { getOtpEmailTemplate } from '../templates/otpTemplate';
 import { logger } from './logger';
+import { requireEnvironmentVariable } from '../config/env';
 
 type OtpPurpose = 'register' | 'update_email' | 'forgot_password';
 
@@ -72,26 +73,23 @@ export async function deliverOtpEmail(
 }
 
 export function resolveEmailTransportConfig(): EmailTransportConfig {
-  const user = process.env.SMTP_USER?.trim();
-  const password = process.env.SMTP_PASS?.trim();
-  if (!user || !password) {
-    throw new Error('SMTP credentials are not configured.');
-  }
+  const host = requireEnvironmentVariable('SMTP_HOST');
+  const user = requireEnvironmentVariable('SMTP_USER');
+  const password = requireEnvironmentVariable('SMTP_PASS');
+  const configuredFrom = process.env.SMTP_FROM?.trim();
 
-  const port = Number.parseInt(process.env.SMTP_PORT || '465', 10);
+  const port = Number.parseInt(requireEnvironmentVariable('SMTP_PORT'), 10);
   if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
     throw new Error('SMTP_PORT must be a valid TCP port.');
   }
 
   return {
-    host: process.env.SMTP_HOST?.trim() || 'smtp.gmail.com',
+    host,
     port,
-    secure: process.env.SMTP_SECURE
-      ? process.env.SMTP_SECURE.toLowerCase() === 'true'
-      : port === 465,
+    secure: process.env.SMTP_SECURE?.trim().toLowerCase() === 'true' || port === 465,
     user,
     password,
-    from: process.env.SMTP_FROM?.trim() || `"DreamScape" <${user}>`,
+    from: configuredFrom || `"DreamScape" <${user}>`,
   };
 }
 

@@ -1,4 +1,5 @@
-import mongoose, { Document, Schema, Types } from 'mongoose';
+import { Document, Schema, Types } from 'mongoose';
+import { modelForDomain } from '../../../infrastructure/database/domainModels';
 import type { StructuredTableData } from '../services/types/canonical.types';
 
 export interface IAcademicChunk extends Document {
@@ -141,4 +142,4 @@ const AcademicChunkSchema = new Schema<IAcademicChunk>(
 // Allow multiple chunks per document, chunkPurpose, chunkOrder
 AcademicChunkSchema.index({ documentId: 1, chunkPurpose: 1, chunkOrder: 1 }, { unique: true });
 
-export default mongoose.model<IAcademicChunk>('AcademicChunk', AcademicChunkSchema);
+export default modelForDomain<IAcademicChunk>('knowledge', 'AcademicChunk', AcademicChunkSchema);

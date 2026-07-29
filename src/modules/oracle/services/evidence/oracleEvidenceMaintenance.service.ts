@@ -3,7 +3,7 @@ import OracleEvidenceGap from '../../models/OracleEvidenceGap';
 import {
   canonicalizeOracleEvidenceClaim,
   cleanOracleEvidenceClaim,
-  isResearchableOracleEvidenceClaim,
+  isSourceSearchableOracleEvidenceClaim,
   normalizeOracleEvidenceText,
 } from '../../../../shared/evidence/evidenceClaim';
 import { oracleEvidenceClaimClusterKey } from '../../../../shared/evidence/evidenceClaimMatching';
@@ -20,7 +20,7 @@ export async function pruneNonResearchableOracleEvidenceGaps(): Promise<void> {
   for (const gap of rows) {
     const validClaims = [...new Set([gap.claim, ...(gap.relatedClaims || [])])]
       .map((claim) => cleanOracleEvidenceClaim(String(claim || '')))
-      .filter(isResearchableOracleEvidenceClaim);
+      .filter(isSourceSearchableOracleEvidenceClaim);
     if (!validClaims.length) {
       invalidIds.push(gap._id as Types.ObjectId);
       continue;

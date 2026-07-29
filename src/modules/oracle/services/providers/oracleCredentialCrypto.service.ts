@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { IOracleModelCredential } from '../../models/OracleModelCredential';
 import { OracleContractError } from '../oracle.types';
+import { requireEnvironmentSecret } from '../../../../config/env';
 
 export function encryptCredentialKey(value: string): {
   encryptedKey: string;
@@ -32,8 +33,10 @@ export function decryptCredentialKey(credential: IOracleModelCredential): string
 }
 
 function encryptionKey(): Buffer {
-  const secret = process.env.ORACLE_CREDENTIAL_ENCRYPTION_KEY || process.env.JWT_SECRET;
-  if (!secret || secret.length < 24) {
+  let secret: string;
+  try {
+    secret = requireEnvironmentSecret('ORACLE_CREDENTIAL_ENCRYPTION_KEY');
+  } catch {
     throw new OracleContractError(
       'oracle_persistence_failed',
       'Oracle credential encryption is not configured.',

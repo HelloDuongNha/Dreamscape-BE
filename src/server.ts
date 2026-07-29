@@ -9,7 +9,7 @@ import { runBackgroundAnalysis } from './modules/dream/services/analysis/executi
 import { recoverPendingDreamAnalysisQueue } from './modules/dream/services/analysis/execution/dreamAnalysisRecovery.service';
 import {
   assertMessagingSecurityConfigured,
-} from './modules/messaging/services/messagingCrypto.service';
+} from './modules/messaging/services/crypto/messagingCrypto.service';
 
 const PORT = Number(process.env.PORT) || 5000;
 

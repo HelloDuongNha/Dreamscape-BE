@@ -29,6 +29,9 @@ import {
   type OracleExecutionMode,
 } from '../providers/oraclePrompt.service';
 import { estimateOracleRunDuration } from './oracleRunTiming.service';
+import {
+  sanitizeOracleUnresolvedMarkers,
+} from '../../../../shared/evidence/evidenceClaim';
 
 const activeRuns = new Map<string, AbortController>();
 
@@ -255,6 +258,7 @@ function finalizeGroundedAnswer(
   if (input.mode !== 'dream_analysis') return rawAnswer;
   let answer = markUnsupportedInterpretations(rawAnswer);
   answer = validateAcademicCitationSupport(answer, input.grounding.citations);
+  answer = sanitizeOracleUnresolvedMarkers(answer);
   if (input.groundingText === input.latestUserText && 'personalContext' in input.grounding) {
     answer = ensurePersonalContextCitation(answer, input.grounding);
   }

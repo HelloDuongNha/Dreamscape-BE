@@ -12,8 +12,7 @@ export interface IDreamSymbolObservation extends Document {
   noteIndex: number;
   contextFingerprint: string;
   contextualTone: 'threatening' | 'reassuring' | 'ambivalent' | 'neutral';
-  origin: 'dictionary' | 'contextual_observation';
-  dictionarySymbol?: string;
+  origin: 'contextual_observation';
   isPublic: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -37,10 +36,9 @@ const DreamSymbolObservationSchema = new Schema<IDreamSymbolObservation>({
   },
   origin: {
     type: String,
-    enum: ['dictionary', 'contextual_observation'],
+    enum: ['contextual_observation'],
     required: true,
   },
-  dictionarySymbol: { type: String, trim: true, default: undefined },
   isPublic: { type: Boolean, required: true, default: false },
 }, {
   timestamps: true,

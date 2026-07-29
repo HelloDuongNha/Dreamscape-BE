@@ -5,7 +5,10 @@ import {
   type EvidenceClaimBinding,
   type EvidenceSourceIdentity,
 } from '../../../../../shared/evidence/citationClaim';
-import { invalidateOracleCitationMarker } from '../../../../../shared/evidence/evidenceClaim';
+import {
+  invalidateOracleCitationMarker,
+  isSourceSearchableOracleEvidenceClaim,
+} from '../../../../../shared/evidence/evidenceClaim';
 import type {
   OracleSourceInvalidationPlan,
 } from '../../../../oracle/services/lifecycle/oracleSourceInvalidationPlan.service';
@@ -31,6 +34,7 @@ export function invalidateDreamAnalysis(
     analysis.claim_bindings = invalidatedBindings;
   }
   invalidateLegacyMarkers(analysis, invalidIndexes);
+  restoreTrackedUnresolvedMarkers(analysis, invalidatedBindings);
   analysis.citations = compactDreamCitations(
     analysis,
     (analysis.citations || [])
@@ -49,6 +53,22 @@ export function invalidateDreamAnalysis(
     .filter((note: any) => note.sources.length > 0);
   analysis.real_life_hypotheses = (analysis.real_life_hypotheses || [])
     .filter((item: any) => !hypothesisUsesInvalidSource(item, invalidRuleIds, plan));
+}
+
+function restoreTrackedUnresolvedMarkers(
+  analysis: any,
+  bindings: EvidenceClaimBinding[],
+): void {
+  for (const binding of bindings) {
+    if (
+      binding.status === 'unresolved'
+      && isSourceSearchableOracleEvidenceClaim(
+        binding.evidenceClaim || binding.claimText,
+      )
+    ) {
+      writeEvidenceClaimMarker(analysis, binding);
+    }
+  }
 }
 
 // Invalidates one persisted analysis and returns every removed question key.

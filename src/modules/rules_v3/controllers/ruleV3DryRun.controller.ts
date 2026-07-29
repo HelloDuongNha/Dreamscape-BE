@@ -49,8 +49,8 @@ export function createRuleV3DryRunController(deps: RuleV3DryRunDependencies) {
 
   const dryRunRuleV3Extraction = async (req: Request, res: Response): Promise<void> => {
     res.setHeader('Cache-Control', 'no-store');
-    const moderatorId = String(req.user?._id || '');
-    if (activeDryRuns.has(moderatorId)) {
+    const adminId = String(req.user?._id || '');
+    if (activeDryRuns.has(adminId)) {
       res.status(429).json({
         success: false,
         errorCode: 'dry_run_already_active',
@@ -59,7 +59,7 @@ export function createRuleV3DryRunController(deps: RuleV3DryRunDependencies) {
       return;
     }
 
-    activeDryRuns.add(moderatorId);
+    activeDryRuns.add(adminId);
     const controller = new AbortController();
     const timerId = deps.setTimeoutFn(() => controller.abort(), deps.timeoutMs);
 
@@ -147,7 +147,7 @@ export function createRuleV3DryRunController(deps: RuleV3DryRunDependencies) {
       sendDryRunError(res, error);
     } finally {
       deps.clearTimeoutFn(timerId);
-      activeDryRuns.delete(moderatorId);
+      activeDryRuns.delete(adminId);
     }
   };
 

@@ -1,4 +1,5 @@
-import mongoose, { Document, Schema, Types } from 'mongoose';
+import { Document, Schema, Types } from 'mongoose';
+import { modelForDomain } from '../../../infrastructure/database/domainModels';
 
 export type RuleV3ReplacementJournalState =
   | 'preparing'
@@ -56,7 +57,8 @@ RuleV3ReplacementJournalSchema.index({ sourceAliases: 1, state: 1 });
 RuleV3ReplacementJournalSchema.index({ sourceLockKey: 1 }, { unique: true, sparse: true });
 RuleV3ReplacementJournalSchema.index({ cleanupAfter: 1 }, { expireAfterSeconds: 0 });
 
-export default mongoose.model<IRuleV3ReplacementJournal>(
+export default modelForDomain<IRuleV3ReplacementJournal>(
+  'operations',
   'RuleV3ReplacementJournal',
   RuleV3ReplacementJournalSchema,
 );

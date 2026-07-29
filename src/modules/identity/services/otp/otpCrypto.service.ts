@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import type { OtpPurpose } from '../../models/Otp';
+import { requireEnvironmentSecret } from '../../../../config/env';
 
 const OTP_CODE_VERSION = 1;
 
@@ -69,12 +70,5 @@ function constantTimeEqual(actual: string, expected: string): boolean {
 }
 
 function otpHmacSecret(): string {
-  const dedicatedSecret = process.env.OTP_HMAC_SECRET?.trim();
-  if (dedicatedSecret && dedicatedSecret.length >= 32) return dedicatedSecret;
-
-  const developmentFallback =
-    process.env.NODE_ENV !== 'production' ? process.env.JWT_SECRET?.trim() : undefined;
-  if (developmentFallback && developmentFallback.length >= 24) return developmentFallback;
-
-  throw new Error('OTP_HMAC_SECRET must contain at least 32 characters.');
+  return requireEnvironmentSecret('OTP_HMAC_SECRET');
 }

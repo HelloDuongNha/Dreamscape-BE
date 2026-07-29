@@ -5,6 +5,7 @@ export interface IUser extends Document {
   username: string;
   display_name: string;
   email: string;
+  role: 'admin' | 'user';
   password: string;
   authMethod: 'password' | 'google' | 'password_google';
   avatar: string;
@@ -16,6 +17,7 @@ export interface IUser extends Document {
   follower_count: number;
   followers: any[];
   following: any[];
+  followRequests: any[];
   isPrivateAccount: boolean;
   dmPrivacy: 'everyone' | 'following' | 'friends';
   defaultPrivacy: 'public' | 'private';
@@ -77,6 +79,13 @@ const UserSchema = new Schema<IUser>(
       trim: true,
       match: [/^\S+@\S+\.\S+$/, 'Please enter a valid email address'],
     },
+    role: {
+      type: String,
+      enum: ['admin', 'user'],
+      default: 'user',
+      required: true,
+      index: true,
+    },
     password: {
       type: String,
       required: [true, 'Password is required'],
@@ -119,6 +128,11 @@ const UserSchema = new Schema<IUser>(
       default: [],
     }],
     following: [{
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      default: [],
+    }],
+    followRequests: [{
       type: Schema.Types.ObjectId,
       ref: 'User',
       default: [],

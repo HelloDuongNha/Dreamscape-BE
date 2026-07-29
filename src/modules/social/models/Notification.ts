@@ -6,9 +6,10 @@ import mongoose, { Document, Schema, Types } from 'mongoose';
 export interface INotification extends Document {
   recipientId: Types.ObjectId; // User receiving the notification
   senderId:    Types.ObjectId; // User who performed the action
-  type:        'like' | 'comment' | 'follow' | 'dream_analysis';
+  type:        'like' | 'comment' | 'comment_reply' | 'follow' | 'dream_analysis';
   postId?:     Types.ObjectId; // The dream post linked to the notification
-  commentId?:  Types.ObjectId; // Exact comment target for lifecycle cleanup
+  commentId?:  Types.ObjectId; // Comment highlighted when the notification opens
+  replyId?:    Types.ObjectId; // Reply event that produced a comment_reply notification
   isRead:      boolean;
   timestamp:   Date;
 }
@@ -28,7 +29,7 @@ const NotificationSchema = new Schema<INotification>(
     },
     type: {
       type: String,
-      enum: ['like', 'comment', 'follow', 'dream_analysis'],
+      enum: ['like', 'comment', 'comment_reply', 'follow', 'dream_analysis'],
       required: [true, 'Notification type is required'],
     },
     postId: {
@@ -37,6 +38,12 @@ const NotificationSchema = new Schema<INotification>(
       required: false,
     },
     commentId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Comment',
+      required: false,
+      index: true,
+    },
+    replyId: {
       type: Schema.Types.ObjectId,
       ref: 'Comment',
       required: false,

@@ -1,4 +1,5 @@
-import mongoose, { Schema, Document, Types } from 'mongoose';
+import { Schema, Document, Types } from 'mongoose';
+import { modelForDomain } from '../../../infrastructure/database/domainModels';
 import crypto from 'crypto';
 
 export interface IKnowledgeRuleV3 extends Document {
@@ -321,4 +322,8 @@ KnowledgeRuleV3Schema.index({ dreamFeatureTags: 1, status: 1 });
 // 3. sourceLanguage + dedupKey (compound unique for concurrency safety)
 KnowledgeRuleV3Schema.index({ sourceLanguage: 1, dedupKey: 1 }, { unique: true });
 
-export default mongoose.model<IKnowledgeRuleV3>('KnowledgeRuleV3', KnowledgeRuleV3Schema);
+export default modelForDomain<IKnowledgeRuleV3>(
+  'knowledge',
+  'KnowledgeRuleV3',
+  KnowledgeRuleV3Schema,
+);

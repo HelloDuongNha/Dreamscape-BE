@@ -5,7 +5,7 @@ import {
   AVATAR_MAX_BYTES,
   AvatarUploadError,
   replaceUserAvatar,
-} from '../services/avatar.service';
+} from '../services/avatar/avatar.service';
 
 const avatarUpload = multer({
   storage: multer.memoryStorage(),

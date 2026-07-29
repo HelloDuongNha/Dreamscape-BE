@@ -5,7 +5,7 @@ import KnowledgeRuleV3 from '../../../rules_v3/models/KnowledgeRule';
 import {
   canonicalizeOracleEvidenceClaim,
   cleanOracleEvidenceClaim,
-  isResearchableOracleEvidenceClaim,
+  isSourceSearchableOracleEvidenceClaim,
   normalizeOracleEvidenceText,
   sanitizeOracleUnresolvedMarkers,
 } from '../../../../shared/evidence/evidenceClaim';
@@ -83,7 +83,7 @@ async function loadPreferredDreamEvidenceRules(
   const resolvedBindings = (bindings || []).filter((binding) =>
     binding.status === 'resolved'
     && Types.ObjectId.isValid(String(binding.ruleId || ''))
-    && isResearchableOracleEvidenceClaim(binding.evidenceClaim || binding.claimText));
+    && isSourceSearchableOracleEvidenceClaim(binding.evidenceClaim || binding.claimText));
   const ruleIds = [...new Set(resolvedBindings.map((binding) => String(binding.ruleId)))];
   if (!ruleIds.length) return new Map();
 
@@ -119,7 +119,7 @@ export function collectDreamEvidenceClaims(
       .map((binding) => cleanOracleEvidenceClaim(
         binding.evidenceClaim || binding.claimText,
       ))
-      .filter(isResearchableOracleEvidenceClaim)
+      .filter(isSourceSearchableOracleEvidenceClaim)
       .map((claim) => [normalizeOracleEvidenceText(claim), claim]))
       .values()];
   }
@@ -134,7 +134,7 @@ function groupExplicitResearchableClaims(claims: string[]) {
     const exactClaim = cleanOracleEvidenceClaim(rawClaim)
       .replace(/\s+/gu, ' ')
       .slice(0, 1200);
-    if (!isResearchableOracleEvidenceClaim(exactClaim)) continue;
+    if (!isSourceSearchableOracleEvidenceClaim(exactClaim)) continue;
     const claim = canonicalizeOracleEvidenceClaim(exactClaim);
     const key = oracleEvidenceClaimClusterKey(claim)
       || normalizeOracleEvidenceText(claim);
@@ -173,7 +173,7 @@ function groupResearchableClaims(answer: string) {
     .map((item) => item.trim())
     .filter((item) => item.includes('[?]'))
     .map((item) => cleanOracleEvidenceClaim(item).replace(/\s+/gu, ' ').slice(0, 1200))
-    .filter(isResearchableOracleEvidenceClaim);
+    .filter(isSourceSearchableOracleEvidenceClaim);
   for (const sourceClaim of [...new Set(sourceClaims)]) {
     const claim = canonicalizeOracleEvidenceClaim(sourceClaim);
     const key = oracleEvidenceClaimClusterKey(claim) || normalizeOracleEvidenceText(claim);

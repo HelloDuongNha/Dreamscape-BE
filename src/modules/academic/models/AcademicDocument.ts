@@ -1,4 +1,5 @@
-import mongoose, { Document, Schema, Types } from 'mongoose';
+import { Document, Schema, Types } from 'mongoose';
+import { modelForDomain } from '../../../infrastructure/database/domainModels';
 
 export interface IAcademicDocument extends Document {
   sourceId?: Types.ObjectId;
@@ -48,4 +49,8 @@ AcademicDocumentSchema.index(
   { unique: true, partialFilterExpression: { sourceId: { $gt: null } } }
 );
 
-export default mongoose.model<IAcademicDocument>('AcademicDocument', AcademicDocumentSchema);
+export default modelForDomain<IAcademicDocument>(
+  'knowledge',
+  'AcademicDocument',
+  AcademicDocumentSchema,
+);

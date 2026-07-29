@@ -7,10 +7,14 @@ import {
 import {
   evidenceGapRuleSimilarity,
 } from '../../../../shared/evidence/evidenceClaimMatching';
+import {
+  readEvidenceClaimContent,
+  type EvidenceClaimBinding,
+} from '../../../../shared/evidence/citationClaim';
 
 export interface OracleEvidenceUsageExcerpt {
   surfaceType: 'oracle' | 'dream_analysis';
-  citationIndex: number;
+  citationIndex: number | null;
   excerpt: string;
 }
 
@@ -50,16 +54,13 @@ export function findOracleCitationUsageExcerpt(
 export async function loadOracleEvidenceUsageExcerpts(
   gaps: EvidenceUsageGap[],
 ): Promise<Map<string, OracleEvidenceUsageExcerpt[]>> {
-  const resolvedGaps = gaps.filter((gap) => (gap.resolvedRuleIds || []).length > 0);
-  if (!resolvedGaps.length) return new Map();
+  if (!gaps.length) return new Map();
 
-  const turnIds = [...new Set(resolvedGaps.flatMap((gap) => [
+  const turnIds = [...new Set(gaps.flatMap((gap) => [
     String(gap.turnId || ''),
     ...(gap.occurrenceTurnIds || []).map(String),
   ]).filter(Boolean))];
-  const ruleIds = [...new Set(resolvedGaps.flatMap((gap) =>
-    (gap.resolvedRuleIds || []).map(String)))];
-  const dreamIds = [...new Set(resolvedGaps.flatMap((gap) =>
+  const dreamIds = [...new Set(gaps.flatMap((gap) =>
     (gap.occurrenceDreamIds || []).map(String)).filter(Boolean))];
 
   const turns = await OracleTurn.find({
@@ -75,12 +76,11 @@ export async function loadOracleEvidenceUsageExcerpts(
   const dreams = await Dream.find({
     _id: { $in: dreamIds },
     ai_status: 'completed',
-    'ai_result.scientific_context_notes.ruleId': { $in: ruleIds },
   }).select('_id ai_result').limit(500).lean();
   const turnById = new Map(liveTurns.map((turn) => [String(turn._id), turn]));
   const result = new Map<string, OracleEvidenceUsageExcerpt[]>();
 
-  for (const gap of resolvedGaps) {
+  for (const gap of gaps) {
     const excerpts = [
       ...collectOracleTurnExcerpts(gap, turnById),
       ...collectDreamAnalysisExcerpts(gap, dreams),
@@ -95,6 +95,7 @@ function collectOracleTurnExcerpts(
   turnById: Map<string, any>,
 ): OracleEvidenceUsageExcerpt[] {
   const resolvedRuleIds = new Set((gap.resolvedRuleIds || []).map(String));
+  const isResolved = resolvedRuleIds.size > 0;
   const turnIds = [...new Set([
     String(gap.turnId || ''),
     ...(gap.occurrenceTurnIds || []).map(String),
@@ -104,6 +105,19 @@ function collectOracleTurnExcerpts(
   for (const turnId of turnIds) {
     const turn = turnById.get(turnId);
     if (!turn) continue;
+    if (!isResolved) {
+      for (const block of turn.contentBlocks || []) {
+        for (const passage of splitAnalysisPassages(String(block.text || ''))) {
+          if (!passage.includes('[?]') || !passageMatchesGap(passage, gap)) continue;
+          excerpts.push({
+            surfaceType: 'oracle',
+            citationIndex: null,
+            excerpt: passage,
+          });
+        }
+      }
+      continue;
+    }
     const citationIndexes = turn.citations
       .filter((citation: any) => (citation.ruleLinks || []).some(
         (link: any) => resolvedRuleIds.has(String(link.ruleId)),
@@ -131,22 +145,42 @@ function collectDreamAnalysisExcerpts(
   dreams: any[],
 ): OracleEvidenceUsageExcerpt[] {
   const resolvedRuleIds = new Set((gap.resolvedRuleIds || []).map(String));
+  const isResolved = resolvedRuleIds.size > 0;
   const occurrenceDreamIds = new Set((gap.occurrenceDreamIds || []).map(String));
   const excerpts: OracleEvidenceUsageExcerpt[] = [];
 
   for (const dream of dreams) {
     if (!occurrenceDreamIds.has(String(dream._id))) continue;
     const analysis = dream.ai_result;
+    const bindingExcerpts = collectDreamBindingExcerpts(
+      analysis,
+      gap,
+      resolvedRuleIds,
+    );
+    if (bindingExcerpts.length) {
+      excerpts.push(...bindingExcerpts);
+      continue;
+    }
+
+    // Compatibility path for analyses created before the claim-binding ledger.
+    if (!isResolved) {
+      for (const text of dreamAnalysisTexts(analysis)) {
+        for (const passage of splitAnalysisPassages(String(text))) {
+          if (!passage.includes('[?]') || !passageMatchesGap(passage, gap)) continue;
+          excerpts.push({
+            surfaceType: 'dream_analysis',
+            citationIndex: null,
+            excerpt: passage,
+          });
+        }
+      }
+      continue;
+    }
     const notes = Array.isArray(analysis?.scientific_context_notes)
       ? analysis.scientific_context_notes
       : [];
     if (!notes.some((note: any) => resolvedRuleIds.has(String(note.ruleId)))) continue;
-    const texts = [
-      analysis?.core_analysis,
-      analysis?.summary,
-      ...(analysis?.interpretive_threads || []).map((thread: any) => thread.reasoning),
-    ].filter(Boolean);
-    for (const text of texts) {
+    for (const text of dreamAnalysisTexts(analysis)) {
       for (const passage of splitAnalysisPassages(String(text))) {
         const marker = passage.match(/\[(\d+)\]/u);
         if (!marker || !passageMatchesGap(passage, gap)) continue;
@@ -161,11 +195,89 @@ function collectDreamAnalysisExcerpts(
   return excerpts;
 }
 
+function collectDreamBindingExcerpts(
+  analysis: any,
+  gap: EvidenceUsageGap,
+  resolvedRuleIds: Set<string>,
+): OracleEvidenceUsageExcerpt[] {
+  const bindings: EvidenceClaimBinding[] = Array.isArray(analysis?.claim_bindings)
+    ? analysis.claim_bindings
+    : [];
+  const excerpts: OracleEvidenceUsageExcerpt[] = [];
+  const isResolved = resolvedRuleIds.size > 0;
+  for (const binding of bindings) {
+    if (
+      (isResolved
+        ? binding.status !== 'resolved'
+          || !binding.citationIndex
+          || !resolvedRuleIds.has(String(binding.ruleId || ''))
+        : binding.status !== 'unresolved')
+      || !bindingMatchesGap(binding, gap)
+    ) {
+      continue;
+    }
+    const excerpt = findDreamBindingExcerpt(analysis, binding);
+    if (!excerpt) continue;
+    excerpts.push({
+      surfaceType: 'dream_analysis',
+      citationIndex: binding.status === 'resolved'
+        ? Number(binding.citationIndex)
+        : null,
+      excerpt,
+    });
+  }
+  return excerpts;
+}
+
+function findDreamBindingExcerpt(
+  analysis: any,
+  binding: EvidenceClaimBinding,
+): string | null {
+  const marker = binding.status === 'resolved'
+    ? `[${Number(binding.citationIndex)}]`
+    : '[?]';
+  const passages = splitAnalysisPassages(
+    readEvidenceClaimContent(analysis, binding.contentPath),
+  ).filter((passage) => passage.includes(marker));
+  if (!passages.length) return null;
+  return passages
+    .map((passage) => ({
+      passage,
+      similarity: evidenceGapRuleSimilarity(binding.claimText, passage),
+    }))
+    .sort((left, right) => right.similarity - left.similarity)[0]?.passage || null;
+}
+
+function bindingMatchesGap(
+  binding: EvidenceClaimBinding,
+  gap: EvidenceUsageGap,
+): boolean {
+  const claim = cleanOracleEvidenceClaim(
+    binding.evidenceClaim || binding.claimText,
+  );
+  return [gap.claim, ...(gap.relatedClaims || [])]
+    .map(cleanOracleEvidenceClaim)
+    .some((variant) =>
+      comparableText(variant) === comparableText(claim)
+      || evidenceGapRuleSimilarity(variant, claim) >= 0.5);
+}
+
 function splitAnalysisPassages(text: string): string[] {
   return text
     .split(/\n{2,}/u)
     .map((passage) => passage.replace(/\s+/gu, ' ').trim())
-    .filter((passage) => passage.length >= 35 && /\[\d+\]/u.test(passage));
+    .filter((passage) => passage.length >= 35 && /\[(?:\d+|\?)\]/u.test(passage));
+}
+
+function dreamAnalysisTexts(analysis: any): string[] {
+  return [
+    analysis?.core_analysis,
+    analysis?.summary,
+    ...(analysis?.interpretive_threads || []).flatMap((thread: any) => [
+      thread.reasoning,
+      thread.alternativeExplanation,
+    ]),
+  ].filter(Boolean).map(String);
 }
 
 function passageMatchesGap(passage: string, gap: EvidenceUsageGap): boolean {

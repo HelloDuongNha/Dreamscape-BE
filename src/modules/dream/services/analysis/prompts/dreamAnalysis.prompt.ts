@@ -5,7 +5,7 @@ export interface DreamAnalysisPromptInput {
   profileContext: string;
   evidenceContext: string;
   ruleContext: string;
-  dictionaryContext: string;
+  recognizedSymbolContext: string;
   personalSymbolContext: string;
   observedSymbolContext: string;
   similarDreamContext: string;
@@ -57,9 +57,9 @@ ${input.evidenceContext || 'None'}
 ${input.ruleContext || 'None'}
 [/RETRIEVED_RULES]
 
-[DICTIONARY_SYMBOLS]
-${input.dictionaryContext || 'None'}
-[/DICTIONARY_SYMBOLS]
+[RECOGNIZED_SYMBOL_DETAILS]
+${input.recognizedSymbolContext || 'None; identify details from the dream narrative and prior case observations only'}
+[/RECOGNIZED_SYMBOL_DETAILS]
 
 [PERSONAL_SYMBOL_HISTORY]
 ${input.personalSymbolContext}
@@ -106,7 +106,7 @@ Required JSON shape:
       "meaning": "contextual interpretation",
       "relevance": 0.0,
       "symbolValence": 0,
-      "origin": "dictionary or contextual_observation",
+      "origin": "contextual_observation",
       "dreamEvidence": "exact sentence"
     }
   ],
@@ -194,7 +194,13 @@ Reasoning and evidence rules:
     reasoning. claimText must be copied exactly from the named field. Include
     supportRuleId only when a retrieved rule directly supports that exact
     sentence; omit it when no retrieved rule supports the claim so the server can
-    preserve it as [?]. Do not list observations, personal interpretations,
+    preserve it as [?]. A claim without supportRuleId must still be a reusable
+    source-search proposition: it needs a general subject and a cautious,
+    observable association, comparison or frequency statement. Do not turn one
+    scene, character, object, quoted time or interpretation of this particular
+    dream into an evidence request. Keep that case-specific application in the
+    prose without listing it in evidence_claims unless a general retrieved rule
+    directly supports it. Do not list observations, personal interpretations,
     symbolic meanings, safety boundaries or suggestions. Never write citation
     markers yourself; the server assigns and compacts them.
 18. Do not write empty phrases such as "phản ánh những cảm xúc và suy nghĩ

@@ -1,4 +1,5 @@
 import type { ModerationSourceQuery } from '../../dto/sourceContribution.dto';
+import User from '../../../identity/models/User';
 import SourceContribution from '../../models/SourceContribution';
 import { mapSourceOriginAndUrls } from '../source/academicSourceResponse.service';
 import { repairContributionReaderStats } from './contributionReaderStats.service';
@@ -11,7 +12,11 @@ export async function listModerationSources(query: ModerationSourceQuery) {
     .sort({ createdAt: -1 })
     .skip(skip)
     .limit(query.limit)
-    .populate('submittedBy', 'username display_name email avatar');
+    .populate({
+      path: 'submittedBy',
+      model: User,
+      select: 'username display_name email avatar',
+    });
 
   for (const source of sources) {
     try {

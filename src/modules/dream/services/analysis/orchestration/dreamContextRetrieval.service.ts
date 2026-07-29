@@ -53,6 +53,7 @@ export async function retrieveDreamAnalysisContext(
     observedSymbolPatterns = await loadObservedSymbolPatterns(
       [
         ...contextualMotifHints,
+        ...symbolResult.extractedKeywords,
         ...symbolResult.symbols.flatMap(symbol => [
           symbol.symbol,
           symbol.canonicalSymbol,

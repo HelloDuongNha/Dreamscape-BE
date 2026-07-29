@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import { getUserProfile, getStreakCalendar, trackHeartbeat } from '../modules/identity/controllers/userController';
-import { toggleFollow } from '../modules/social/controllers/followController';
+import {
+  reviewPendingFollowRequest,
+  toggleFollow,
+} from '../modules/social/controllers/followController';
 import authMiddleware from '../middleware/authMiddleware';
 
 const router = Router();
@@ -41,6 +44,11 @@ router.post('/me/heartbeat', authMiddleware, trackHeartbeat);
  */
 // NOTE: /me/streak-calendar MUST be declared before /:id to avoid 'me' being parsed as an ObjectId
 router.get('/me/streak-calendar', authMiddleware, getStreakCalendar);
+router.patch(
+  '/follow-requests/:requesterId',
+  authMiddleware,
+  reviewPendingFollowRequest,
+);
 
 /**
  * @swagger

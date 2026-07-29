@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import authMiddleware, { isModerator } from '../middleware/authMiddleware';
+import authMiddleware, { requireAdmin } from '../middleware/authMiddleware';
 import { contributePdfSource } from '../modules/academic/controllers/pdfContribution.controller';
 import {
   cacheOriginalPdf,
@@ -103,20 +103,20 @@ router.get('/approved', authMiddleware, getApprovedSources);
  *       409:
  *         description: Duplicate submission detected
  */
-router.post('/contribute', authMiddleware, contributeSource);
-router.post('/contribute-pdf', authMiddleware, uploadPdfMiddleware, contributePdfSource);
-router.post('/preview', authMiddleware, previewSource);
+router.post('/contribute', authMiddleware, requireAdmin, contributeSource);
+router.post('/contribute-pdf', authMiddleware, requireAdmin, uploadPdfMiddleware, contributePdfSource);
+router.post('/preview', authMiddleware, requireAdmin, previewSource);
 router.get('/approved/:id', authMiddleware, getApprovedSourceById);
 router.get('/approved/:id/read', authMiddleware, getApprovedSourceRead);
 router.post('/approved/:id/read/translate', authMiddleware, getApprovedSourceTranslation);
 
 router.get('/approved/:id/original-document', authMiddleware, getApprovedSourceOriginalDocument);
 router.get('/approved/:id/pdf-inline', authMiddleware, getApprovedSourcePdfInline);
-router.post('/approved/:id/cache-original-pdf', authMiddleware, isModerator, cacheOriginalPdf);
-router.post('/approved/:id/upload-pdf', authMiddleware, isModerator, uploadPdfMiddleware, uploadOriginalPdf);
-router.post('/approved/:id/process-uploaded-pdf', authMiddleware, isModerator, processUploadedPdfForApprovedSource);
-router.get('/approved/:id/pdf-import-progress', authMiddleware, isModerator, getUploadedPdfImportProgressForApprovedSource);
-router.post('/approved/:id/pdf-import-cancel', authMiddleware, isModerator, cancelUploadedPdfImportForApprovedSource);
-router.delete('/approved/:id/original-pdf', authMiddleware, isModerator, deleteOriginalPdf);
+router.post('/approved/:id/cache-original-pdf', authMiddleware, requireAdmin, cacheOriginalPdf);
+router.post('/approved/:id/upload-pdf', authMiddleware, requireAdmin, uploadPdfMiddleware, uploadOriginalPdf);
+router.post('/approved/:id/process-uploaded-pdf', authMiddleware, requireAdmin, processUploadedPdfForApprovedSource);
+router.get('/approved/:id/pdf-import-progress', authMiddleware, requireAdmin, getUploadedPdfImportProgressForApprovedSource);
+router.post('/approved/:id/pdf-import-cancel', authMiddleware, requireAdmin, cancelUploadedPdfImportForApprovedSource);
+router.delete('/approved/:id/original-pdf', authMiddleware, requireAdmin, deleteOriginalPdf);
 
 export default router;

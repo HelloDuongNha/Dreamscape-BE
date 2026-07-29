@@ -1,17 +1,21 @@
 import { Router } from 'express';
 import {
-  register,
+  forgotPassword,
+  resendEmailChangeOtp,
+  resendOtp,
+  verifyEmailChangeOtp,
+  verifyOtp,
+} from '../modules/identity/controllers/otp.controller';
+import {
   login,
   logout,
-  updateProfile,
-  verifyOtp,
-  verifyEmailChangeOtp,
-  resendEmailChangeOtp,
-  forgotPassword,
-  resendOtp,
+  register,
+} from '../modules/identity/controllers/authentication.controller';
+import {
   getSessions,
   revokeSession,
-} from '../modules/identity/controllers/authController';
+} from '../modules/identity/controllers/session.controller';
+import { updateProfile } from '../modules/identity/controllers/profile.controller';
 import {
   changePassword,
   resetPassword,

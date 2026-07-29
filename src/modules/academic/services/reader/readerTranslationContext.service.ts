@@ -84,7 +84,7 @@ export async function resolveApprovedSourceContext(
  * Resolves canonical translation context for a moderation preview (contribution).
  *
  * Throws CanonicalResolutionError on all expected failure modes.
- * Moderation authorization (isModerator) is enforced at route middleware level.
+ * Administration authorization is enforced at route middleware level.
  */
 export async function resolvePreviewContributionContext(
   contributionId: string

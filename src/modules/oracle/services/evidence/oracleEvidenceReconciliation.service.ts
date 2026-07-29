@@ -2,7 +2,9 @@ import { Types } from 'mongoose';
 import KnowledgeRuleV3 from '../../../rules_v3/models/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../../../rules_v3/models/KnowledgeRuleEvidence';
 import OracleEvidenceGap from '../../models/OracleEvidenceGap';
-import { isResearchableOracleEvidenceClaim } from '../../../../shared/evidence/evidenceClaim';
+import {
+  isSourceSearchableOracleEvidenceClaim,
+} from '../../../../shared/evidence/evidenceClaim';
 import {
   resolveEvidenceGapInDreamPosts,
 } from '../../../dream/services/analysis/evidence/dreamCitationResolution.service';
@@ -206,7 +208,7 @@ function presentRuleMatch(
   rule: EvidenceGapRuleInput,
   ruleText: string,
 ): OracleEvidenceGapRuleMatch | null {
-  if (!isResearchableOracleEvidenceClaim(String(gap.claim || ''))) return null;
+  if (!isSourceSearchableOracleEvidenceClaim(String(gap.claim || ''))) return null;
   const similarity = evidenceGapRuleSimilarity(String(gap.claim || ''), ruleText);
   const linkedAsCandidate = (gap.candidateRuleIds || []).some(
     (id: unknown) => String(id) === String(rule._id));

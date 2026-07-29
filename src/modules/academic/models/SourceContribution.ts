@@ -1,4 +1,5 @@
-import mongoose, { Document, Schema, Types } from 'mongoose';
+import { Document, Schema, Types } from 'mongoose';
+import { modelForDomain } from '../../../infrastructure/database/domainModels';
 
 export interface ISourceContribution extends Document {
   submittedBy: Types.ObjectId;
@@ -294,4 +295,8 @@ const SourceContributionSchema = new Schema<ISourceContribution>(
   }
 );
 
-export default mongoose.model<ISourceContribution>('SourceContribution', SourceContributionSchema);
+export default modelForDomain<ISourceContribution>(
+  'knowledge',
+  'SourceContribution',
+  SourceContributionSchema,
+);

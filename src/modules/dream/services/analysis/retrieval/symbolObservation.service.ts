@@ -20,7 +20,7 @@ export async function materializeDreamSymbolObservations(input: {
   const notes = (input.symbolicNotes || []).flatMap((note, noteIndex) => {
     const displayLabel = String(note?.symbol || '').trim();
     const evidence = String(note?.dreamEvidence || '').trim();
-    const symbolKey = canonicalizeObservedSymbol(note?.dictionarySymbol || displayLabel);
+    const symbolKey = canonicalizeObservedSymbol(displayLabel);
     if (!displayLabel || !evidence || symbolKey.length < 2) return [];
     return [{ note, noteIndex, displayLabel, evidence, symbolKey }];
   });
@@ -47,8 +47,7 @@ export async function materializeDreamSymbolObservations(input: {
           contextualTone: ['threatening', 'reassuring', 'ambivalent'].includes(note?.contextualTone)
             ? note.contextualTone
             : 'neutral',
-          origin: note?.origin === 'dictionary' ? 'dictionary' : 'contextual_observation',
-          ...(note?.dictionarySymbol ? { dictionarySymbol: String(note.dictionarySymbol) } : {}),
+          origin: 'contextual_observation',
           isPublic: input.isPublic,
         },
       },

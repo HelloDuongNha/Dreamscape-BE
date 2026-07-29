@@ -1,4 +1,5 @@
-import mongoose, { Schema, Document, Types } from 'mongoose';
+import { Schema, Document, Types } from 'mongoose';
+import { modelForDomain } from '../../../infrastructure/database/domainModels';
 
 export interface IKnowledgeRuleEvidenceV3 extends Document {
   ruleId: Types.ObjectId;
@@ -138,4 +139,8 @@ KnowledgeRuleEvidenceV3Schema.index(
   { unique: true }
 );
 
-export default mongoose.model<IKnowledgeRuleEvidenceV3>('KnowledgeRuleEvidenceV3', KnowledgeRuleEvidenceV3Schema);
+export default modelForDomain<IKnowledgeRuleEvidenceV3>(
+  'knowledge',
+  'KnowledgeRuleEvidenceV3',
+  KnowledgeRuleEvidenceV3Schema,
+);

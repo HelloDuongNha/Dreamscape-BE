@@ -1,5 +1,6 @@
 import User, { type IUser } from '../../models/User';
 import jwt from 'jsonwebtoken';
+import { requireEnvironmentSecret } from '../../../../config/env';
 import {
   assertPasswordConfirmation,
   assertPasswordPolicy,
@@ -10,7 +11,11 @@ import {
   markSessionRecentlyAuthenticated,
   revokeOtherSessions,
 } from './sessionSecurity.service';
-import { consumeRecoveryGrant, restoreRecoveryGrant } from '../otp/otpLifecycle.service';
+import {
+  consumeRecoveryGrant,
+  issueOtp,
+  restoreRecoveryGrant,
+} from '../otp/otpLifecycle.service';
 
 export class AccountSecurityError extends Error {
   constructor(
@@ -21,6 +26,52 @@ export class AccountSecurityError extends Error {
     super(message);
     this.name = 'AccountSecurityError';
   }
+}
+
+export async function beginEmailChange(input: {
+  user: IUser;
+  sessionId?: string | null;
+  email: unknown;
+  currentPassword?: string;
+  requestOrigin: string;
+}) {
+  const email = String(input.email || '').trim().toLowerCase();
+  if (!email || !/^\S+@\S+\.\S+$/.test(email) || !input.sessionId) {
+    throw new AccountSecurityError(
+      'email_change_invalid',
+      400,
+      'A valid new email and active session are required.',
+    );
+  }
+  if (email === input.user.email) {
+    throw new AccountSecurityError(
+      'email_unchanged',
+      409,
+      'New email must be different from the current email.',
+    );
+  }
+  if (await User.exists({ email, _id: { $ne: input.user._id } })) {
+    throw new AccountSecurityError(
+      'email_already_used',
+      409,
+      'Email address is already taken.',
+    );
+  }
+
+  await assertEmailChangeAuthorization({
+    user: input.user,
+    sessionId: input.sessionId,
+    currentPassword: input.currentPassword,
+  });
+  const otpState = await issueOtp({
+    email,
+    purpose: 'update_email',
+    subjectUserId: String(input.user._id),
+    sessionId: input.sessionId,
+    requestOrigin: input.requestOrigin,
+    payload: { email },
+  });
+  return { email, ...otpState };
 }
 
 export async function changePasswordWithCurrent(input: {
@@ -166,15 +217,15 @@ function assertPasswordAccount(user: IUser): void {
 }
 
 function sessionGrantSecret(): string {
-  const secret = process.env.JWT_SECRET?.trim();
-  if (!secret) {
+  try {
+    return requireEnvironmentSecret('JWT_SECRET');
+  } catch {
     throw new AccountSecurityError(
       'session_revocation_unavailable',
       503,
       'Session revocation is temporarily unavailable.',
     );
   }
-  return secret;
 }
 
 export { PasswordPolicyError };

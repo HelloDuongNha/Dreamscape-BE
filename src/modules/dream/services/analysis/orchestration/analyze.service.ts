@@ -161,7 +161,7 @@ function buildGroundedPrompt(
     profileContext: profile.profileText,
     evidenceContext: rules.promptEvidenceSection,
     ruleContext: promptContext.compactRulesText,
-    dictionaryContext: promptContext.compactSymbolsText,
+    recognizedSymbolContext: promptContext.recognizedSymbolText,
     personalSymbolContext: promptContext.personalPatternText,
     observedSymbolContext: promptContext.observedSymbolText,
     similarDreamContext: promptContext.similarDreamText,

@@ -1,6 +1,6 @@
 import { IUser } from '../modules/identity/models/User';
 import User from '../modules/identity/models/User';
-import { calculateRank, checkAndAwardAchievements } from '../modules/identity/services/rank.service';
+import { calculateRank, checkAndAwardAchievements } from '../modules/identity/services/engagement/rank.service';
 import Dream from '../modules/dream/models/Dream';
 
 // ─── Streak Tracker ───────────────────────────────────────────────────────────

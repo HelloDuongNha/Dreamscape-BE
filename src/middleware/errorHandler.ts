@@ -6,7 +6,7 @@ import {
   AccountSecurityError,
   PasswordPolicyError,
 } from '../modules/identity/services/security/accountSecurity.service';
-import { AvatarUploadError } from '../modules/identity/services/avatar.service';
+import { AvatarUploadError } from '../modules/identity/services/avatar/avatar.service';
 
 /**
  * Global error-handling middleware.

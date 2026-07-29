@@ -49,29 +49,12 @@ function groundSymbolicNotes(analysis: ILLMOutput, context: OutputContext): void
   const seenSymbols = new Set<string>();
   for (const note of analysis.symbolic_notes) {
     const noteSymbol = String(note.symbol || '').trim().toLowerCase();
-    const matchedSymbol = context.retrievedSymbols.find(symbol => [
-      symbol.symbol,
-      symbol.canonicalSymbol,
-      ...(symbol.matchedVariants || []),
-    ].map(value => String(value || '').trim().toLowerCase()).includes(noteSymbol));
-    if (matchedSymbol) {
-      note.symbolValence = matchedSymbol.symbolValence;
-      note.symbol = matchedSymbol.matchedTextVariant || matchedSymbol.symbol;
-      note.origin = 'dictionary';
-      const evidenceLabel = matchedSymbol.matchedTextVariant
-        || matchedSymbol.matchedVariants?.find(variant =>
-          findNarrativeSentenceForSymbol(variant, context.dreamNarrative),
-        )
-        || matchedSymbol.symbol;
-      note.dreamEvidence = findNarrativeSentenceForSymbol(evidenceLabel, context.dreamNarrative) || undefined;
-    } else {
-      const evidence = findNarrativeSentenceForSymbol(note.symbol, context.dreamNarrative);
-      if (!evidence) continue;
-      note.origin = 'contextual_observation';
-      note.dreamEvidence = evidence;
-      note.relevance = Math.min(0.75, Math.max(0, Number(note.relevance) || 0));
-      note.symbolValence = Math.max(-1, Math.min(1, Number(note.symbolValence) || 0));
-    }
+    const evidence = findNarrativeSentenceForSymbol(note.symbol, context.dreamNarrative);
+    if (!evidence) continue;
+    note.origin = 'contextual_observation';
+    note.dreamEvidence = evidence;
+    note.relevance = Math.min(0.75, Math.max(0, Number(note.relevance) || 0));
+    note.symbolValence = Math.max(-1, Math.min(1, Number(note.symbolValence) || 0));
     note.contextualTone = note.contextualTone || 'neutral';
     note.meaning = buildGroundedMotifExplanation(note, context.matchedRules);
     const key = String(note.symbol || '').trim().toLocaleLowerCase('vi');

@@ -1,4 +1,5 @@
-import mongoose, { Schema, Document, Types } from 'mongoose';
+import { Schema, Document, Types } from 'mongoose';
+import { modelForDomain } from '../../../infrastructure/database/domainModels';
 
 export interface IAcademicRuleExtractionRunV3 extends Document {
   attemptId?: string;
@@ -244,4 +245,8 @@ AcademicRuleExtractionRunV3Schema.index(
   { unique: true }
 );
 
-export default mongoose.model<IAcademicRuleExtractionRunV3>('AcademicRuleExtractionRunV3', AcademicRuleExtractionRunV3Schema);
+export default modelForDomain<IAcademicRuleExtractionRunV3>(
+  'operations',
+  'AcademicRuleExtractionRunV3',
+  AcademicRuleExtractionRunV3Schema,
+);

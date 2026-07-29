@@ -1,4 +1,5 @@
-import mongoose, { Document, Schema, Types } from 'mongoose';
+import { Document, Schema, Types } from 'mongoose';
+import { modelForDomain } from '../../../infrastructure/database/domainModels';
 
 export interface IReaderReplacementBackup extends Document {
   runId: Types.ObjectId;
@@ -20,4 +21,8 @@ const ReaderReplacementBackupSchema = new Schema<IReaderReplacementBackup>(
 ReaderReplacementBackupSchema.index({ runId: 1, entityType: 1, entityId: 1 }, { unique: true });
 ReaderReplacementBackupSchema.index({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 14 });
 
-export default mongoose.model<IReaderReplacementBackup>('ReaderReplacementBackup', ReaderReplacementBackupSchema);
+export default modelForDomain<IReaderReplacementBackup>(
+  'operations',
+  'ReaderReplacementBackup',
+  ReaderReplacementBackupSchema,
+);

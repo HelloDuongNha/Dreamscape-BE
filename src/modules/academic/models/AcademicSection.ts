@@ -1,4 +1,5 @@
-import mongoose, { Document, Schema, Types } from 'mongoose';
+import { Document, Schema, Types } from 'mongoose';
+import { modelForDomain } from '../../../infrastructure/database/domainModels';
 
 export interface IAcademicSection extends Document {
   documentId: Types.ObjectId;
@@ -54,4 +55,8 @@ const AcademicSectionSchema = new Schema<IAcademicSection>(
   }
 );
 
-export default mongoose.model<IAcademicSection>('AcademicSection', AcademicSectionSchema);
+export default modelForDomain<IAcademicSection>(
+  'knowledge',
+  'AcademicSection',
+  AcademicSectionSchema,
+);

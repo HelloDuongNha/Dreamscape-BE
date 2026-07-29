@@ -58,8 +58,7 @@ export interface ILLMOutput {
     meaning: string;
     relevance: number;
     symbolValence: number;
-    origin?: 'dictionary' | 'contextual_observation';
-    dictionarySymbol?: string;
+    origin?: 'contextual_observation';
     dreamEvidence?: string;
     contextualTone?: 'threatening' | 'reassuring' | 'ambivalent' | 'neutral';
     motifStats?: {
@@ -168,8 +167,7 @@ export interface ILLMOutput {
     narrativeUsed: boolean;
     resolvedContextCount: number;
     unresolvedContextCount: number;
-    dictionaryMotifCount: number;
-    contextualMotifCount: number;
+    recognizedMotifCount: number;
     appliedRuleCount: number;
     explanatoryRuleCount: number;
     similarDreamCount: number;
@@ -250,7 +248,7 @@ export function normalizeLLMOutputShape(data: any): any {
         contextualTone: _contextualTone,
         ...baseItem
       } = item;
-      const origin = ['dictionary', 'contextual_observation'].includes(item.origin)
+      const origin = item.origin === 'contextual_observation'
         ? item.origin
         : undefined;
       const contextualTone = ['threatening', 'reassuring', 'ambivalent', 'neutral']
@@ -409,7 +407,7 @@ export function validateLLMOutput(data: any): data is ILLMOutput {
       logger.warn('LLM validation failed: symbolic_notes element missing or invalid symbolValence');
       return false;
     }
-    if (item.origin !== undefined && !['dictionary', 'contextual_observation'].includes(item.origin)) {
+      if (item.origin !== undefined && item.origin !== 'contextual_observation') {
       logger.warn('LLM validation failed: symbolic_notes element origin invalid');
       return false;
     }

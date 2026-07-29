@@ -5,7 +5,7 @@ import OracleEvidenceGap from '../../models/OracleEvidenceGap';
 import { loadOracleEvidenceUsageExcerpts } from './oracleEvidenceUsage.service';
 import {
   canonicalizeOracleEvidenceClaim,
-  isResearchableOracleEvidenceClaim,
+  isSourceSearchableOracleEvidenceClaim,
 } from '../../../../shared/evidence/evidenceClaim';
 import { localizeOracleEvidenceClaim } from './oracleEvidenceLocalization.service';
 import { pruneNonResearchableOracleEvidenceGaps } from './oracleEvidenceMaintenance.service';
@@ -55,7 +55,7 @@ function groupEquivalentGaps(rows: any[]): any[] {
     const storedClaims = [...new Set([
       gap.claim,
       ...(Array.isArray(gap.relatedClaims) ? gap.relatedClaims : []),
-    ])].filter(isResearchableOracleEvidenceClaim);
+    ])].filter(isSourceSearchableOracleEvidenceClaim);
     if (!storedClaims.length) continue;
     const canonicalClaim = canonicalizeOracleEvidenceClaim(storedClaims[0]);
     const fingerprint = oracleEvidenceClaimClusterKey(canonicalClaim) || gap.normalizedClaim;

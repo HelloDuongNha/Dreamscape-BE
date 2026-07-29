@@ -1,4 +1,5 @@
-import mongoose, { Document, Schema, Types } from 'mongoose';
+import { Document, Schema, Types } from 'mongoose';
+import { modelForDomain } from '../../../infrastructure/database/domainModels';
 
 export type ReaderReplacementTargetType = 'contribution' | 'approved_source';
 export type ReaderReplacementStatus = 'running' | 'completed' | 'cancelled' | 'failed';
@@ -42,4 +43,8 @@ ReaderReplacementRunSchema.index(
   { expireAfterSeconds: 60 * 60 * 24 * 14, partialFilterExpression: { finishedAt: { $type: 'date' } } },
 );
 
-export default mongoose.model<IReaderReplacementRun>('ReaderReplacementRun', ReaderReplacementRunSchema);
+export default modelForDomain<IReaderReplacementRun>(
+  'operations',
+  'ReaderReplacementRun',
+  ReaderReplacementRunSchema,
+);

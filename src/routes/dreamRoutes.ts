@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { analyzeDream } from '../modules/dream/controllers/dreamAnalyze.controller';
-import { debugRag } from '../modules/dream/controllers/dreamDebug.controller';
 import { saveHypothesisFeedback } from '../modules/dream/controllers/dreamFeedback.controller';
 import { createDream } from '../modules/dream/controllers/dreamCreate.controller';
 import {
@@ -535,37 +534,5 @@ router.post('/:id/analyze', authMiddleware, analyzeDreamById);
 router.post('/:id/continuation/regenerate', authMiddleware, regenerateDreamContinuation);
 router.post('/:id/analysis/cancel', authMiddleware, cancelDreamAnalysis);
 router.post('/:id/hypothesis-feedback', authMiddleware, saveHypothesisFeedback);
-
-// ─── POST /api/dreams/debug-rag ──────────────────────────────────────────────
-
-/**
- * @swagger
- * /api/dreams/debug-rag:
- *   post:
- *     summary: Test symbol retrieval via the Hybrid RAG Search strategy (No LLM generation)
- *     tags:
- *       - Dreams
- *     security:
- *       - BearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - dreamText
- *             properties:
- *               dreamText:
- *                 type: string
- *                 maxLength: 2000
- *                 example: "I had a vivid dream where I was falling from a high building."
- *     responses:
- *       200:
- *         description: Successfully retrieved top matching symbols
- *       400:
- *         description: Validation error
- */
-router.post('/debug-rag', authMiddleware, debugRag);
 
 export default router;

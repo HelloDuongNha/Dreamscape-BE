@@ -1,4 +1,5 @@
-import mongoose, { Document, Schema, Types } from 'mongoose';
+import { Document, Schema, Types } from 'mongoose';
+import { modelForDomain } from '../../../infrastructure/database/domainModels';
 
 export interface IAcademicSource extends Document {
   sourceContributionId: Types.ObjectId;
@@ -368,4 +369,8 @@ const AcademicSourceSchema = new Schema<IAcademicSource>(
   }
 );
 
-export default mongoose.model<IAcademicSource>('AcademicSource', AcademicSourceSchema);
+export default modelForDomain<IAcademicSource>(
+  'knowledge',
+  'AcademicSource',
+  AcademicSourceSchema,
+);

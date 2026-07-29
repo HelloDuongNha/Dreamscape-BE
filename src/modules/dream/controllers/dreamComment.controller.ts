@@ -1,16 +1,11 @@
 import type { Request, Response } from 'express';
 import { Types } from 'mongoose';
-import Dream from '../models/Dream';
-import Comment from '../../social/models/Comment';
-import Notification from '../../social/models/Notification';
-import User from '../../identity/models/User';
-import { calculateRank } from '../../identity/services/rank.service';
-import { findAccessibleDream } from '../services/content/dreamAccessPolicy.service';
 import {
+  addDreamComment,
   CommentLifecycleError,
-  createComment as createDreamComment,
   deleteManagedComment,
   editOwnedComment,
+  listDreamComments,
   setOwnedDreamCommentsEnabled,
 } from '../services/engagement/commentLifecycle.service';
 
@@ -18,7 +13,8 @@ function sendCommentLifecycleError(res: Response, error: unknown): boolean {
   if (!(error instanceof CommentLifecycleError)) return false;
   const status = error.reason === 'forbidden'
     ? 403
-    : error.reason === 'not_found'
+    : error.reason === 'not_found' || error.reason === 'dream_not_found'
+      || error.reason === 'reply_not_found'
       ? 404
       : error.reason === 'comments_disabled'
         ? 409
@@ -28,8 +24,14 @@ function sendCommentLifecycleError(res: Response, error: unknown): boolean {
     code: error.reason,
     message: error.reason === 'comments_disabled'
       ? 'Comments are disabled for this dream.'
+      : error.reason === 'invalid_dream_id'
+        ? 'Invalid dreamId.'
       : error.reason === 'forbidden'
         ? 'You do not have permission to manage this comment.'
+        : error.reason === 'dream_not_found'
+          ? 'Dream not found.'
+        : error.reason === 'reply_not_found'
+          ? 'The comment being replied to is no longer available.'
         : error.reason === 'not_found'
           ? 'Comment not found.'
           : 'Invalid comment request.',
@@ -40,81 +42,15 @@ function sendCommentLifecycleError(res: Response, error: unknown): boolean {
 // Adds a comment and applies its notification and rank side effects.
 export async function addComment(req: Request, res: Response): Promise<void> {
   try {
-    const myId = req.user!._id as Types.ObjectId;
-    const dreamId = String(req.params.id);
-    if (!Types.ObjectId.isValid(dreamId)) {
-      res.status(400).json({ success: false, message: 'Invalid dreamId.' });
-      return;
-    }
-
-    const dream = await findAccessibleDream(dreamId, String(myId));
-    if (!dream) {
-      res.status(404).json({ success: false, message: 'Dream not found.' });
-      return;
-    }
-    if (dream.comments_enabled === false) {
-      res.status(409).json({
-        success: false,
-        code: 'comments_disabled',
-        message: 'Comments are disabled for this dream.',
-      });
-      return;
-    }
-
-    const comment = await createDreamComment({
-      dreamId: new Types.ObjectId(dreamId),
-      authorId: myId,
+    const comment = await addDreamComment({
+      dreamId: String(req.params.id),
+      authorId: req.user!._id as Types.ObjectId,
       content: req.body?.content,
+      replyToCommentId: req.body?.replyToCommentId,
+      publishNotification: (recipientId, notification) => {
+        req.app.get('io')?.to(recipientId).emit('new_notification', notification);
+      },
     });
-    await comment.populate('userId', 'username display_name avatar');
-
-    if (dream.userId.toString() !== myId.toString()) {
-      try {
-        const notification = await Notification.create({
-          recipientId: dream.userId,
-          senderId: myId,
-          type: 'comment',
-          postId: dream._id,
-          commentId: comment._id,
-        });
-        await notification.populate('senderId', 'username display_name avatar');
-        req.app.get('io')?.to(dream.userId.toString()).emit('new_notification', notification);
-
-        const postOwner = await User.findById(dream.userId);
-        if (postOwner) {
-          postOwner.rankPoints += 15;
-          const ownerDreams = await Dream.find({ userId: postOwner._id });
-          const ownerLikes = ownerDreams.reduce(
-            (total, item) => total + (item.likes?.length || 0),
-            0,
-          );
-          const ownerComments = ownerDreams.reduce(
-            (total, item) => total + (item.comments_count || 0),
-            0,
-          );
-          const { checkAndAwardAchievements } = await import('../../identity/services/rank.service');
-          checkAndAwardAchievements(
-            postOwner,
-            ownerLikes,
-            ownerComments,
-            ownerDreams.length,
-            postOwner.followers?.length || 0,
-            postOwner.following?.length || 0,
-            postOwner.totalTimeOnline || 0,
-          );
-          postOwner.currentRank = calculateRank(
-            postOwner.rankPoints,
-            postOwner.achievements,
-            postOwner.streakCount,
-            postOwner.highestStreak,
-          );
-          await postOwner.save();
-        }
-      } catch (error) {
-        console.error('❌ Failed to trigger comment notification:', error);
-      }
-    }
-
     res.status(201).json({ success: true, data: comment });
   } catch (error) {
     if (sendCommentLifecycleError(res, error)) return;
@@ -129,31 +65,13 @@ export async function addComment(req: Request, res: Response): Promise<void> {
 // Returns comments in their original chronological order.
 export async function getComments(req: Request, res: Response): Promise<void> {
   try {
-    const dreamId = String(req.params.id);
-    if (!Types.ObjectId.isValid(dreamId)) {
-      res.status(400).json({ success: false, message: 'Invalid dreamId.' });
-      return;
-    }
-
-    const dream = await findAccessibleDream(
-      dreamId,
-      String(req.user?._id || '') || undefined,
-    );
-    if (!dream) {
-      res.status(404).json({ success: false, message: 'Dream not found.' });
-      return;
-    }
-
-    const comments = await Comment.find({
-      dreamId: dream._id,
-      is_deleted: { $ne: true },
-    })
-      .select('-is_deleted -deleted_at -deleted_by -deleted_by_role')
-      .sort({ created_at: 1 })
-      .populate('userId', 'username display_name avatar')
-      .lean();
+    const comments = await listDreamComments({
+      dreamId: String(req.params.id),
+      viewerId: String(req.user?._id || '') || undefined,
+    });
     res.status(200).json({ success: true, data: comments });
   } catch (error) {
+    if (sendCommentLifecycleError(res, error)) return;
     res.status(500).json({
       success: false,
       message: 'Failed to fetch comments.',
@@ -170,7 +88,10 @@ export async function editComment(req: Request, res: Response): Promise<void> {
       authorId: req.user!._id as Types.ObjectId,
       content: req.body?.content,
     });
-    await comment.populate('userId', 'username display_name avatar');
+    await comment.populate([
+      { path: 'userId', select: 'username display_name avatar streakCount' },
+      { path: 'replyToUserId', select: 'username display_name avatar streakCount' },
+    ]);
     res.status(200).json({ success: true, data: comment });
   } catch (error) {
     if (sendCommentLifecycleError(res, error)) return;

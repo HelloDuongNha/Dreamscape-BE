@@ -13,6 +13,7 @@ import {
 import {
   canonicalizeOracleEvidenceClaim,
   isResearchableOracleEvidenceClaim,
+  isSourceSearchableOracleEvidenceClaim,
   sanitizeOracleUnresolvedMarkers,
 } from '../../../../../shared/evidence/evidenceClaim';
 import {
@@ -93,6 +94,11 @@ export function groundDreamCitationClaims(
     const rule = support?.rule || findSupportingRule(candidate, context.citableRules);
     const binding = createBinding(candidate, rule);
     if (!support) {
+      if (!isSourceSearchableOracleEvidenceClaim(
+        binding.evidenceClaim || binding.claimText,
+      )) {
+        continue;
+      }
       bindings.push(binding);
       writeEvidenceClaimMarker(analysis, binding);
       continue;
@@ -140,6 +146,7 @@ export function groundDreamCitationClaims(
   }
 
   markUnsupportedDreamInterpretations(analysis);
+  for (const binding of bindings) writeEvidenceClaimMarker(analysis, binding);
   analysis.citation_contract_version = DREAM_CITATION_CONTRACT_VERSION;
   analysis.claim_bindings = bindings;
   analysis.citations = citations.sort((left, right) => left.index - right.index);
