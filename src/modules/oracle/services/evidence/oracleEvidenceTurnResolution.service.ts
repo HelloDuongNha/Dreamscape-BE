@@ -92,10 +92,13 @@ async function findOccurrenceTurnIds(
     }).select('_id').lean()
     : [];
   return [...new Set([
-    String(gap.turnId),
-    ...(gap.occurrenceTurnIds || []).map(String),
-    ...legacyOccurrences.map((turn) => String(turn._id)),
-  ])];
+    gap.turnId,
+    ...(gap.occurrenceTurnIds || []),
+    ...legacyOccurrences.map((turn) => turn._id),
+  ]
+    .filter(Boolean)
+    .map(String)
+    .filter(Types.ObjectId.isValid))];
 }
 
 async function resolveTurn(input: {
@@ -131,7 +134,9 @@ async function resolveTurn(input: {
       turn.set({ contentBlocks });
       await turn.save();
     }
-    return null;
+    const alreadyResolved = existingCitation?.ruleLinks?.some((link) =>
+      String(link.ruleId) === String(input.rule._id));
+    return alreadyResolved ? citationIndex : null;
   }
   const citations: OracleCitation[] = existingCitation
     ? turn.citations.map((citation) => citation !== existingCitation

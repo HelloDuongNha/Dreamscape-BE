@@ -4,6 +4,7 @@ import {
   evidenceClaimContentPaths,
   readEvidenceClaimContent,
   resolveEvidenceClaim,
+  sameEvidenceSource,
   writeEvidenceClaimMarker,
   type EvidenceClaimBinding,
   type EvidenceClaimContentPath,
@@ -127,10 +128,45 @@ async function resolveDreamPost(
   support: NonNullable<Awaited<ReturnType<typeof loadRuleEvidenceSupport>>>,
 ): Promise<boolean> {
   const changed = resolveDreamRecordCitationState(dream, variants, rule, support);
-  if (!changed) return false;
-  await dream.save();
-  emitDreamCitationStateChanged(dream);
-  return true;
+  if (changed) {
+    await dream.save();
+    emitDreamCitationStateChanged(dream);
+    return true;
+  }
+  return dreamRecordAlreadyHasResolution(dream, variants, rule, support);
+}
+
+function dreamRecordAlreadyHasResolution(
+  dream: any,
+  variants: string[],
+  rule: EvidenceGapRuleInput,
+  support: NonNullable<Awaited<ReturnType<typeof loadRuleEvidenceSupport>>>,
+): boolean {
+  return [
+    dream.ai_result,
+    dream.aiAnalysis,
+    ...(dream.edit_history || []).map((history: any) => history.ai_result),
+  ].some((analysis) => analysisAlreadyHasResolution(analysis, variants, rule, support));
+}
+
+function analysisAlreadyHasResolution(
+  analysis: any,
+  variants: string[],
+  rule: EvidenceGapRuleInput,
+  support: NonNullable<Awaited<ReturnType<typeof loadRuleEvidenceSupport>>>,
+): boolean {
+  if (!analysis || typeof analysis !== 'object') return false;
+  const normalizedVariants = new Set(variants.map(normalizeClaim));
+  const clusterKeys = new Set(variants.map(oracleEvidenceClaimClusterKey).filter(Boolean));
+  const source = {
+    sourceId: String(support.source._id),
+    doi: String((support.source as any).doi || (support.source as any).metadata?.doi || ''),
+  };
+  return (analysis.claim_bindings || []).some((binding: EvidenceClaimBinding) =>
+    binding.status === 'resolved'
+    && String(binding.ruleId || '') === String(rule._id)
+    && Boolean(binding.source && sameEvidenceSource(binding.source, source))
+    && bindingMatchesClaim(binding, normalizedVariants, clusterKeys));
 }
 
 // Resolves matching claims in the current result and every stored Dream version.
@@ -232,14 +268,7 @@ function findClaimBindings(analysis: any, variants: string[]): EvidenceClaimBind
   const clusterKeys = new Set(variants.map(oracleEvidenceClaimClusterKey).filter(Boolean));
   const stored = (analysis.claim_bindings || []).filter((binding: EvidenceClaimBinding) =>
     binding.status === 'unresolved'
-    && (
-      Boolean(binding.evidenceClaimKey && clusterKeys.has(binding.evidenceClaimKey))
-      || clusterKeys.has(oracleEvidenceClaimClusterKey(
-        binding.evidenceClaim || binding.claimText,
-      ))
-      || normalizedVariants.has(normalizeClaim(binding.evidenceClaim || binding.claimText))
-      || normalizedVariants.has(normalizeClaim(binding.claimText))
-    ));
+    && bindingMatchesClaim(binding, normalizedVariants, clusterKeys));
   if (stored.length) return stored;
 
   const recovered: EvidenceClaimBinding[] = [];
@@ -255,6 +284,19 @@ function findClaimBindings(analysis: any, variants: string[]): EvidenceClaimBind
     });
   }
   return recovered;
+}
+
+function bindingMatchesClaim(
+  binding: EvidenceClaimBinding,
+  normalizedVariants: Set<string>,
+  clusterKeys: Set<string>,
+): boolean {
+  return Boolean(binding.evidenceClaimKey && clusterKeys.has(binding.evidenceClaimKey))
+    || clusterKeys.has(oracleEvidenceClaimClusterKey(
+      binding.evidenceClaim || binding.claimText,
+    ))
+    || normalizedVariants.has(normalizeClaim(binding.evidenceClaim || binding.claimText))
+    || normalizedVariants.has(normalizeClaim(binding.claimText));
 }
 
 function replaceStoredBinding(analysis: any, binding: EvidenceClaimBinding): void {

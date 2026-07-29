@@ -1,6 +1,7 @@
 import { Types } from 'mongoose';
 import OracleEvidenceGap from '../../models/OracleEvidenceGap';
 import OracleTurn from '../../models/OracleTurn';
+import KnowledgeRuleV3 from '../../../rules_v3/models/KnowledgeRule';
 import {
   canonicalizeOracleEvidenceClaim,
   cleanOracleEvidenceClaim,
@@ -41,11 +42,13 @@ export async function captureDreamEvidenceGaps(input: {
   claimBindings?: EvidenceClaimBinding[];
 }): Promise<void> {
   await removeEvidenceOccurrences({ dreamIds: [input.dreamId] });
+  const preferredRules = await loadPreferredDreamEvidenceRules(input.claimBindings);
   await captureEvidenceGaps({
     userId: input.userId,
     occurrenceDreamId: input.dreamId,
     answer: input.answer,
     explicitClaims: collectDreamEvidenceClaims(input.claimBindings, input.answer),
+    preferredRules,
   });
 }
 
@@ -57,6 +60,7 @@ async function captureEvidenceGaps(input: {
   occurrenceDreamId?: Types.ObjectId;
   answer: string;
   explicitClaims?: string[];
+  preferredRules?: Map<string, EvidenceGapRuleInput>;
 }): Promise<void> {
   const claims = input.explicitClaims?.length
     ? groupExplicitResearchableClaims(input.explicitClaims)
@@ -68,9 +72,41 @@ async function captureEvidenceGaps(input: {
       normalizedClaim,
       claim: group.claim,
       variants: [...group.variants],
-    });
+    }, input.preferredRules?.get(normalizedClaim));
     if (gap) await resolveCapturedEvidenceGap(gap, groundedRule);
   }
+}
+
+async function loadPreferredDreamEvidenceRules(
+  bindings: EvidenceClaimBinding[] | undefined,
+): Promise<Map<string, EvidenceGapRuleInput>> {
+  const resolvedBindings = (bindings || []).filter((binding) =>
+    binding.status === 'resolved'
+    && Types.ObjectId.isValid(String(binding.ruleId || ''))
+    && isResearchableOracleEvidenceClaim(binding.evidenceClaim || binding.claimText));
+  const ruleIds = [...new Set(resolvedBindings.map((binding) => String(binding.ruleId)))];
+  if (!ruleIds.length) return new Map();
+
+  const rules = await KnowledgeRuleV3.find({
+    _id: { $in: ruleIds },
+    status: 'verified',
+  }).select(
+    '_id ruleCode statement subject outcome conditions dreamFeatureTags '
+    + 'status evidenceScore supportingSourceCount compositeComponents',
+  ).lean() as EvidenceGapRuleInput[];
+  const ruleById = new Map(rules.map((rule) => [String(rule._id), rule]));
+  const preferredRules = new Map<string, EvidenceGapRuleInput>();
+  for (const binding of resolvedBindings) {
+    const rule = ruleById.get(String(binding.ruleId));
+    if (!rule) continue;
+    const claim = canonicalizeOracleEvidenceClaim(
+      binding.evidenceClaim || binding.claimText,
+    );
+    const key = oracleEvidenceClaimClusterKey(claim)
+      || normalizeOracleEvidenceText(claim);
+    if (!preferredRules.has(key)) preferredRules.set(key, rule);
+  }
+  return preferredRules;
 }
 
 // Uses the persisted Dream ledger instead of rediscovering claims from rendered prose.
@@ -80,7 +116,6 @@ export function collectDreamEvidenceClaims(
 ): string[] {
   if (bindings) {
     return [...new Map(bindings
-      .filter((binding) => binding.status === 'unresolved')
       .map((binding) => cleanOracleEvidenceClaim(
         binding.evidenceClaim || binding.claimText,
       ))
@@ -158,14 +193,15 @@ async function upsertEvidenceGap(
     occurrenceDreamId?: Types.ObjectId;
   },
   claim: { normalizedClaim: string; claim: string; variants: string[] },
+  preferredRule?: EvidenceGapRuleInput,
 ): Promise<{ gap: any; groundedRule: EvidenceGapRuleInput | null }> {
   let gap = await OracleEvidenceGap.findOne({
     userId: input.userId,
     normalizedClaim: claim.normalizedClaim,
   });
-  let groundedRule: EvidenceGapRuleInput | null = null;
+  let groundedRule: EvidenceGapRuleInput | null = preferredRule || null;
   if (!gap) {
-    groundedRule = await findGroundedRuleForClaim(claim.claim);
+    groundedRule ||= await findGroundedRuleForClaim(claim.claim);
     if (groundedRule) {
       gap = await OracleEvidenceGap.findOne({
         userId: input.userId,

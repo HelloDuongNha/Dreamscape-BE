@@ -13,6 +13,7 @@ import {
 import {
   canonicalizeOracleEvidenceClaim,
   isResearchableOracleEvidenceClaim,
+  sanitizeOracleUnresolvedMarkers,
 } from '../../../../../shared/evidence/evidenceClaim';
 import {
   localizeOracleEvidenceClaim,
@@ -244,7 +245,9 @@ function markUnsupportedDreamInterpretations(analysis: ILLMOutput): void {
 function markUnsupportedDreamText(value: string): string {
   return value
     .split(/(?<=[.!?])\s+/u)
-    .map(sentence => markUnsupportedInterpretations(sentence))
+    .map(sentence => sanitizeOracleUnresolvedMarkers(
+      markUnsupportedInterpretations(sentence),
+    ))
     .join(' ');
 }
 

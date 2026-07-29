@@ -67,8 +67,13 @@ export function isResearchableOracleEvidenceClaim(claim: string): boolean {
   ) return false;
   const caseSpecific = /^(?:trong mơ,?\s*)?việc\b|^hình ảnh\b/iu.test(clean)
     && /phản ánh|cho thấy|minh họa|gợi ý|reflect|suggest|illustrat|indicat/iu.test(clean);
+  const quotedDetailCount = clean.match(/["“”'][^"“”']{2,}["“”']/gu)?.length || 0;
+  const caseAnchoredInterpretation = (
+    /^(?:sự xuất hiện của|chi tiết|hình ảnh|việc)\b/iu.test(clean)
+    || quotedDetailCount >= 2
+  ) && /phản ánh|cho thấy|minh họa|gợi ý|reflect|suggest|illustrat|indicat/iu.test(clean);
   if (
-    caseSpecific
+    (caseSpecific || caseAnchoredInterpretation)
     && normalizeOracleEvidenceText(canonical) === normalizeOracleEvidenceText(clean)
   ) return false;
   const value = normalizeOracleEvidenceText(clean);
