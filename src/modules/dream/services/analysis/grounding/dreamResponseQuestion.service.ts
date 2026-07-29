@@ -3,11 +3,6 @@ import {
   attachRuleQuestionContext,
   removeInternalAnalysisVocabulary,
 } from './dreamGroundingText.service';
-import {
-  sameEvidenceSource,
-  type EvidenceSourceIdentity,
-} from '../../../../../shared/evidence/citationClaim';
-
 interface ResponseQuestionContext {
   hypotheses: any[];
   ruleMap: Map<string, any>;
@@ -107,46 +102,19 @@ export function buildResponseQuestionContext(
   return { hypotheses, ruleMap, sourceByRule };
 }
 
-// Keeps one verification question for each academic source.
+// Keeps distinct rule/excerpt questions while removing true duplicates.
 export function deduplicateDreamQuestionsBySource(questions: any[]): any[] {
   const kept: any[] = [];
-  const usedSources: EvidenceSourceIdentity[] = [];
-  const usedFallbackKeys = new Set<string>();
+  const usedKeys = new Set<string>();
 
   for (const question of questions || []) {
-    const identities = questionSourceIdentities(question);
-    if (identities.length) {
-      if (identities.some((identity) =>
-        usedSources.some((used) => sameEvidenceSource(identity, used)))) {
-        continue;
-      }
-      usedSources.push(...identities);
-      kept.push(question);
-      continue;
-    }
-
-    const fallbackKey = String(
+    const key = String(
       question?.verificationKey
       || `${question?.ruleId || ''}:${question?.followUpQuestion || ''}`,
     ).trim();
-    if (!fallbackKey || usedFallbackKeys.has(fallbackKey)) continue;
-    usedFallbackKeys.add(fallbackKey);
+    if (!key || usedKeys.has(key)) continue;
+    usedKeys.add(key);
     kept.push(question);
   }
   return kept;
-}
-
-function questionSourceIdentities(question: any): EvidenceSourceIdentity[] {
-  const identities: EvidenceSourceIdentity[] = (question?.sources || [])
-    .map((source: any) => ({
-      sourceId: String(source?.sourceId || '').trim(),
-      doi: String(source?.doi || '').trim(),
-    }))
-    .filter((source: EvidenceSourceIdentity) => source.sourceId || source.doi);
-  const validationSourceId = String(question?.validationSourceId || '').trim();
-  if (validationSourceId && !identities.some((source) =>
-    sameEvidenceSource(source, { sourceId: validationSourceId }))) {
-    identities.push({ sourceId: validationSourceId });
-  }
-  return identities;
 }

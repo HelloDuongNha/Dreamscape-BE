@@ -42,15 +42,15 @@ export async function prepareDreamReanalysis(
   dream.retrievedContext = null;
   dream.realLifeHypothesesFeedback = [];
   dream.analysisMetadata = {
-    currentStage: 'queued',
+    currentStage: 'preparing',
     progress: 0,
     statusMessage: trigger === 'content_edit'
-      ? 'Đã thêm phiên bản mới vào hàng chờ phân tích.'
+      ? 'Đang chuẩn bị phân tích phiên bản mới.'
       : trigger === 'ai_enable'
-        ? 'Đã bật AI và thêm bài viết vào hàng chờ phân tích.'
-        : 'Đã thêm thay đổi chi tiết vào hàng chờ phân tích.',
-    currentMiniStep: 'Tác vụ sẽ tự bắt đầu khi tới lượt.',
-    queuePosition: 1,
+        ? 'Đã bật AI và đang chuẩn bị phân tích bài viết.'
+        : 'Đang chuẩn bị phân tích phần chi tiết đã thay đổi.',
+    currentMiniStep: 'Đang kiểm tra tài nguyên và thứ tự xử lý.',
+    queuePosition: 0,
     stageResults: {},
     enqueuedAt: startedAt,
     startedAt,

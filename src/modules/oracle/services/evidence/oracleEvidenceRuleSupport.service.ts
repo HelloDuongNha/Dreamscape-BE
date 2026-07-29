@@ -9,6 +9,7 @@ export interface EvidenceGapRuleInput {
   _id: Types.ObjectId;
   ruleCode?: string;
   statement?: string;
+  ruleStatement?: string;
   subject?: string;
   outcome?: string;
   status?: string;
@@ -31,6 +32,7 @@ const STRONG_MULTILINGUAL_VECTOR_MATCH = 0.82;
 export function buildEvidenceGapRuleText(rule: EvidenceGapRuleInput): string {
   return [
     rule.statement,
+    rule.ruleStatement,
     rule.subject,
     rule.outcome,
     ...(rule.compositeComponents || []).flatMap((component) => [

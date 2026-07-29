@@ -197,6 +197,7 @@ async function finalizeCompletedDream(
 }
 
 async function queueInitialDreamContinuation(dream: IDream): Promise<void> {
+  if ((dream.ai_result as any)?.creative_continuation) return;
   try {
     await queueDreamContinuation(dream, dream.userId);
   } catch (error: unknown) {

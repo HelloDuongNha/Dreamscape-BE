@@ -155,7 +155,10 @@ export function enqueueDreamAnalysis(job: DreamAnalysisQueueJob): boolean {
   scheduledRunKeys.add(key);
   userQueue(job.userId).push(job);
   addReadyUser(job.userId);
-  void refreshQueuedMetadata(job.userId);
+  scheduleReadyJobs();
+  if (queuesByUser.get(job.userId)?.includes(job)) {
+    void refreshQueuedMetadata(job.userId);
+  }
   requestSchedule();
   return true;
 }

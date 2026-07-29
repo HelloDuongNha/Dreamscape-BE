@@ -51,6 +51,8 @@ export async function listApprovedSources(query: ApprovedSourceCatalogQuery) {
 }
 
 export async function findApprovedSourceDetail(id: string) {
-  const source = await AcademicSource.findById(id).select(DETAIL_FIELDS);
+  const source = await AcademicSource.findOne({
+    $or: [{ _id: id }, { sourceContributionId: id }],
+  }).select(DETAIL_FIELDS);
   return source ? mapSourceOriginAndUrls(source) : null;
 }

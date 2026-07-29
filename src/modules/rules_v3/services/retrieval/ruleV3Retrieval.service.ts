@@ -3,6 +3,7 @@ import KnowledgeRuleEvidenceV3 from '../../models/KnowledgeRuleEvidence';
 import AcademicChunk from '../../../academic/models/AcademicChunk';
 import AcademicSource from '../../../academic/models/AcademicSource';
 import SourceContribution from '../../../academic/models/SourceContribution';
+import { isValidObjectId } from 'mongoose';
 import { generateEmbedding } from '../../../../infrastructure/llm.service';
 import { classifyRuleV3DreamApplication } from './ruleV3DreamApplication.service';
 import { expandDreamRetrievalConcepts } from './ruleV3RetrievalFeatures.service';
@@ -47,12 +48,29 @@ export async function retrieveApprovedRuleV3(dreamText: string, limit = 4) {
   const chunkIds = evidence.map(item => item.chunkId);
   const chunks = await AcademicChunk.find({ _id: { $in: chunkIds } }).lean();
   const chunkMap = new Map(chunks.map(chunk => [String(chunk._id), chunk]));
-  const sourceIds = [...new Set(evidence.map(item => String(item.sourceId)))];
-  const [sources, contributions] = await Promise.all([
-    AcademicSource.find({ _id: { $in: sourceIds } }).lean(),
-    SourceContribution.find({ _id: { $in: sourceIds } }).lean()
+  const sourceAliases = [...new Set([
+    ...evidence.map(item => item.sourceId),
+    ...chunks.flatMap(chunk => [chunk.sourceId, chunk.previewContributionId]),
+  ]
+    .map(value => String(value || '').trim())
+    .filter(value => isValidObjectId(value)))];
+  const [academicSources, contributedSources] = await Promise.all([
+    AcademicSource.find({
+      $or: [
+        { _id: { $in: sourceAliases } },
+        { sourceContributionId: { $in: sourceAliases } },
+      ],
+    }).lean(),
+    SourceContribution.find({ _id: { $in: sourceAliases } }).lean(),
   ]);
-  const sourceMap = new Map([...sources, ...contributions].map(source => [String(source._id), source]));
+  const sourceMap = new Map<string, any>();
+  for (const source of [...academicSources, ...contributedSources]) {
+    const sourceRecord: any = source;
+    sourceMap.set(String(sourceRecord._id), sourceRecord);
+    if (sourceRecord.sourceContributionId) {
+      sourceMap.set(String(sourceRecord.sourceContributionId), sourceRecord);
+    }
+  }
 
   const mappedRules = ranked.map(({ rule, score, vector, lexical, featureOverlap, statementOverlap }) => {
     const evidenceScore = Number(rule.evidenceScore) || 0;
@@ -95,10 +113,13 @@ export async function retrieveApprovedRuleV3(dreamText: string, limit = 4) {
     ruleVersion: 'v3'
   });
   });
-  const evidenceLinks = evidence.map(item => {
+  const evidenceLinks = evidence.flatMap(item => {
     const chunk: any = chunkMap.get(String(item.chunkId));
-    const source: any = sourceMap.get(String(item.sourceId));
-    return {
+    const source: any = sourceMap.get(String(chunk?.sourceId))
+      || sourceMap.get(String(chunk?.previewContributionId))
+      || sourceMap.get(String(item.sourceId));
+    if (!source?._id) return [];
+    return [{
       ruleId: rankedOwnerToPrimary.get(String(item.ruleId)) || item.ruleId,
       componentRuleId: item.ruleId,
       quote: item.exactQuote,
@@ -107,7 +128,7 @@ export async function retrieveApprovedRuleV3(dreamText: string, limit = 4) {
         _id: item.chunkId,
         text: chunk?.text || item.exactQuote,
         sourceId: {
-          _id: item.sourceId,
+          _id: source._id,
           title: source?.title || source?.metadata?.title || 'Tài liệu chưa xác định',
           authors: source?.authors || source?.metadata?.authors || [],
           year: source?.year || source?.metadata?.year,
@@ -118,7 +139,7 @@ export async function retrieveApprovedRuleV3(dreamText: string, limit = 4) {
           chunkBuildStatus: 'completed'
         }
       }
-    };
+    }];
   });
   return { rules: mappedRules, evidenceLinks };
 }

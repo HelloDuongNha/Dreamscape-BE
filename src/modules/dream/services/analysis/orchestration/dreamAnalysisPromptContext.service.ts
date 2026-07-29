@@ -50,7 +50,7 @@ export function buildDreamPromptContext(input: {
 
   const compactRulesText = input.usableRules
     .map(rule =>
-      `- RuleId: "${String(rule.ruleId || rule._id)}", ApplicationRole: "${rule.applicationRole}", ApplicationTier: "${rule.applicationTier || 'supported'}", RuleCode: "${rule.ruleCode}" (Statement: "${rule.ruleStatement}", Basis: "${rule.scientificBasis}", Classifications: "${rule.classifications.join(', ')}", Unified argument score: ${rule.evidenceScore ?? 0}/100)`,
+      `- RuleId: "${String(rule.ruleId || rule._id)}"; role: "${rule.applicationRole}"; tier: "${rule.applicationTier || 'supported'}"; statement: "${rule.ruleStatement}"; score: ${rule.evidenceScore ?? 0}/100`,
     )
     .join('\n');
 

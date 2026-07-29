@@ -2,7 +2,6 @@ import type { ILLMOutput } from '../../../../../infrastructure/llm.service';
 import {
   isResearchableOracleEvidenceClaim,
 } from '../../../../oracle/services/evidence/oracleEvidenceClaim.service';
-
 export interface DreamAnalysisDepth {
   acceptable: boolean;
   coreWordCount: number;
@@ -27,6 +26,7 @@ export function assessDreamAnalysisDepth(
   analysis: ILLMOutput,
   narrative: string,
   hasCitableRules = false,
+  resolvableEvidenceClaimCount?: number,
 ): DreamAnalysisDepth {
   const narrativeWords = countWords(narrative);
   const coreWordCount = countWords(analysis.core_analysis);
@@ -47,6 +47,8 @@ export function assessDreamAnalysisDepth(
   const thresholds = depthThresholds(narrativeWords);
   const evidenceClaims = validEvidenceClaims(analysis);
   const minimumEvidenceClaims = narrativeWords >= 120 ? 2 : 1;
+  const linkedEvidenceClaimCount = resolvableEvidenceClaimCount
+    ?? evidenceClaims.filter(item => item.supportRuleId).length;
 
   return {
     acceptable: coreWordCount >= thresholds.core
@@ -55,14 +57,14 @@ export function assessDreamAnalysisDepth(
       && symbolicNotes.length >= (narrativeWords >= 120 ? 2 : 1)
       && shallowSymbolCount === 0
       && evidenceClaims.length >= minimumEvidenceClaims
-      && (!hasCitableRules || evidenceClaims.some(item => item.supportRuleId)),
+      && (!hasCitableRules || linkedEvidenceClaimCount > 0),
     coreWordCount,
     reasoningWordCount,
     threadCount: threads.length,
     symbolicNoteCount: symbolicNotes.length,
     shallowSymbolCount,
     evidenceClaimCount: evidenceClaims.length,
-    linkedEvidenceClaimCount: evidenceClaims.filter(item => item.supportRuleId).length,
+    linkedEvidenceClaimCount,
   };
 }
 
@@ -72,11 +74,29 @@ export function selectDeeperDreamAnalysis(
   repaired: ILLMOutput,
   narrative: string,
   hasCitableRules = false,
+  firstResolvableEvidenceClaimCount?: number,
+  repairedResolvableEvidenceClaimCount?: number,
 ): ILLMOutput {
-  const firstDepth = assessDreamAnalysisDepth(first, narrative, hasCitableRules);
-  const repairedDepth = assessDreamAnalysisDepth(repaired, narrative, hasCitableRules);
+  const firstDepth = assessDreamAnalysisDepth(
+    first,
+    narrative,
+    hasCitableRules,
+    firstResolvableEvidenceClaimCount,
+  );
+  const repairedDepth = assessDreamAnalysisDepth(
+    repaired,
+    narrative,
+    hasCitableRules,
+    repairedResolvableEvidenceClaimCount,
+  );
   if (repairedDepth.acceptable !== firstDepth.acceptable) {
     return repairedDepth.acceptable ? repaired : first;
+  }
+  if (hasCitableRules
+    && repairedDepth.linkedEvidenceClaimCount !== firstDepth.linkedEvidenceClaimCount) {
+    return repairedDepth.linkedEvidenceClaimCount > firstDepth.linkedEvidenceClaimCount
+      ? repaired
+      : first;
   }
   if (repairedDepth.shallowSymbolCount !== firstDepth.shallowSymbolCount) {
     return repairedDepth.shallowSymbolCount < firstDepth.shallowSymbolCount
@@ -85,12 +105,6 @@ export function selectDeeperDreamAnalysis(
   }
   if (repairedDepth.evidenceClaimCount !== firstDepth.evidenceClaimCount) {
     return repairedDepth.evidenceClaimCount > firstDepth.evidenceClaimCount
-      ? repaired
-      : first;
-  }
-  if (hasCitableRules
-    && repairedDepth.linkedEvidenceClaimCount !== firstDepth.linkedEvidenceClaimCount) {
-    return repairedDepth.linkedEvidenceClaimCount > firstDepth.linkedEvidenceClaimCount
       ? repaired
       : first;
   }

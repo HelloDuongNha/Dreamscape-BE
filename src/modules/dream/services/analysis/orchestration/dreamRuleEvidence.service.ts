@@ -63,7 +63,7 @@ export async function retrieveDreamRuleEvidence(
       ...(linksByRule.get(databaseRuleId) || []),
       ...(publicRuleId ? (linksByRule.get(publicRuleId) || []) : []),
     ].filter((link, index, links) =>
-      links.findIndex(candidate => String(candidate._id) === String(link._id)) === index,
+      links.findIndex(candidate => evidenceLinkKey(candidate) === evidenceLinkKey(link)) === index,
     ).slice(0, 2);
     if (ruleLinks.length === 0) continue;
 
@@ -93,11 +93,14 @@ export async function retrieveDreamRuleEvidence(
     });
     const sources = deduplicateAcademicSources(ruleSources);
     const ruleId = String(rule.ruleId || rule._id);
-    validEvidenceMap.set(ruleId, ruleLinks.map(link => ({
+    const evidenceItems = ruleLinks.map(link => ({
       sourceId: String(link.chunkId.sourceId._id),
       chunkId: String(link.chunkId._id),
       quote: String(link.quote || '').trim(),
-    })).filter(item => item.quote));
+    })).filter(item => item.quote);
+    validEvidenceMap.set(ruleId, evidenceItems);
+    validSourcesMap.set(databaseRuleId, sources);
+    if (publicRuleId) validSourcesMap.set(publicRuleId, sources);
 
     const ruleText = ruleLinks
       .map(link => String(link.quote || link.chunkId.text || ''))
@@ -108,8 +111,6 @@ export async function retrieveDreamRuleEvidence(
 
     const truncatedRuleText = ruleText.substring(0, remainingChars);
     totalEvidenceChars += truncatedRuleText.length;
-    validSourcesMap.set(databaseRuleId, sources);
-    if (publicRuleId) validSourcesMap.set(publicRuleId, sources);
     const authors = sources.map(source => {
       const names = source.authors || [];
       if (names.length === 0) return 'N/A';
@@ -140,4 +141,12 @@ ${truncatedRuleText.split('\n').map(line => `- "${line}"`).join('\n')}
       ? `\n[Component D Academic Evidence]\nFor each matching rule below: Use the rule definition and the provided academic evidence together. Do not introduce claims beyond the rule and evidence.\n${promptEvidenceText.trim()}\n`
       : '',
   };
+}
+
+function evidenceLinkKey(link: any): string {
+  return [
+    String(link?.ruleId?._id || link?.ruleId || ''),
+    String(link?.chunkId?._id || link?.chunkId || ''),
+    String(link?.chunkId?.sourceId?._id || link?.chunkId?.sourceId || ''),
+  ].join(':');
 }

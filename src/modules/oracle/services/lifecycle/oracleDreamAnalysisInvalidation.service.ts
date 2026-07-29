@@ -31,8 +31,11 @@ export function invalidateDreamAnalysis(
     analysis.claim_bindings = invalidatedBindings;
   }
   invalidateLegacyMarkers(analysis, invalidIndexes);
-  analysis.citations = (analysis.citations || [])
-    .filter((citation: any) => !sourceMatchesPlan(citation, plan));
+  analysis.citations = compactDreamCitations(
+    analysis,
+    (analysis.citations || [])
+      .filter((citation: any) => !sourceMatchesPlan(citation, plan)),
+  );
   analysis.scientific_context_notes = (analysis.scientific_context_notes || [])
     .map((note: any) => ({
       ...note,
@@ -105,6 +108,46 @@ export function pruneDreamRetrievedContext(
   });
   return previousRuleCount !== componentD.appliedRules.length
     || previousLinkCount !== componentD.evidenceLinks.length;
+}
+
+function compactDreamCitations(analysis: any, citations: any[]): any[] {
+  const ordered = [...citations].sort(
+    (left, right) => Number(left.index) - Number(right.index),
+  );
+  const indexMap = new Map<number, number>();
+  const compacted = ordered.map((citation, position) => {
+    const previousIndex = Number(citation.index);
+    const nextIndex = position + 1;
+    if (Number.isInteger(previousIndex) && previousIndex > 0) {
+      indexMap.set(previousIndex, nextIndex);
+    }
+    return { ...citation, index: nextIndex };
+  });
+
+  remapDreamCitationMarkers(analysis, indexMap);
+  for (const binding of analysis.claim_bindings || []) {
+    if (binding.status !== 'resolved' || !binding.citationIndex) continue;
+    const nextIndex = indexMap.get(Number(binding.citationIndex));
+    if (nextIndex) binding.citationIndex = nextIndex;
+  }
+  return compacted;
+}
+
+function remapDreamCitationMarkers(analysis: any, indexMap: Map<number, number>): void {
+  const remap = (value: unknown) => String(value || '').replace(
+    /\[(\d+)\]/gu,
+    (marker, rawIndex) => {
+      const nextIndex = indexMap.get(Number(rawIndex));
+      return nextIndex ? `[${nextIndex}]` : marker;
+    },
+  );
+  for (const field of ['core_analysis', 'summary'] as const) {
+    analysis[field] = remap(analysis[field]);
+  }
+  for (const thread of analysis.interpretive_threads || []) {
+    thread.reasoning = remap(thread.reasoning);
+    thread.alternativeExplanation = remap(thread.alternativeExplanation);
+  }
 }
 
 function invalidCitationIndexes(

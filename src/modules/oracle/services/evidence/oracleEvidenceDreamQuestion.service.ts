@@ -1,4 +1,3 @@
-import { sameEvidenceSource } from '../../../../shared/evidence/citationClaim';
 import {
   buildOracleCitationVerificationQuestion,
   localizeOracleRuleStatement,
@@ -15,7 +14,7 @@ type RuleSupport = {
   };
 };
 
-// Adds one localized case question for each academic source.
+// Adds one localized case question for each distinct rule and excerpt.
 export function appendDreamVerificationQuestion(
   analysis: any,
   rule: EvidenceGapRuleInput,
@@ -27,12 +26,6 @@ export function appendDreamVerificationQuestion(
     ? analysis.real_life_hypotheses
     : [];
   const source = support.source as any;
-  const sourceIdentity = {
-    sourceId,
-    doi: String(source.doi || source.metadata?.doi || ''),
-  };
-  if (hasQuestionForSource(hypotheses, sourceIdentity)) return;
-
   const verificationKey = `${String(rule._id)}:${String(support.evidence._id)}`
     + `:dream-citation-${ORACLE_CITATION_QUESTION_VERSION}`;
   if (hypotheses.some((item: any) =>
@@ -88,13 +81,4 @@ export function appendDreamVerificationQuestion(
     userFeedback: null,
   });
   analysis.real_life_hypotheses = hypotheses;
-}
-
-function hasQuestionForSource(hypotheses: any[], source: any): boolean {
-  return hypotheses.some((hypothesis: any) =>
-    (hypothesis.sources || []).some((itemSource: any) =>
-      sameEvidenceSource(itemSource, source))
-    || sameEvidenceSource({
-      sourceId: String(hypothesis.validationSourceId || ''),
-    }, source));
 }

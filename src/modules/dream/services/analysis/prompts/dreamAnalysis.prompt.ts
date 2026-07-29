@@ -13,6 +13,16 @@ export interface DreamAnalysisPromptInput {
   culturalAnalysisAllowed: boolean;
 }
 
+export interface DreamAnalysisRepairInput {
+  prompt: string;
+  coreWordCount: number;
+  threadCount: number;
+  shallowSymbolCount: number;
+  evidenceClaimCount: number;
+  linkedEvidenceClaimCount: number;
+  hasCitableRules: boolean;
+}
+
 /**
  * Builds the model instruction only. Retrieval, validation and persistence stay
  * outside this file so prompt wording cannot silently change business rules.
@@ -209,4 +219,28 @@ Reasoning and evidence rules:
     core_analysis. Do not repeat "không chắc", "cần xác nhận", or the dream
     disclaimer in the summary, threads, and each symbolic note.
 `;
+}
+
+// Re-runs the same grounded task when the first answer is too shallow to show.
+export function buildDreamAnalysisRepairPrompt(input: DreamAnalysisRepairInput): string {
+  const problems = [
+    `core_analysis has ${input.coreWordCount} words`,
+    `there are ${input.threadCount} interpretive threads`,
+    `${input.shallowSymbolCount} symbolic notes are one-line or generic`,
+    `there are ${input.evidenceClaimCount} exact research-claim locations`,
+    input.hasCitableRules && input.linkedEvidenceClaimCount === 0
+      ? 'retrieved academic evidence was ignored'
+      : '',
+  ].filter(Boolean);
+
+  return `${input.prompt}
+
+[QUALITY_REPAIR]
+The previous attempt was rejected before display because: ${problems.join('; ')}.
+Create the complete JSON again from the supplied evidence and narrative.
+Do not shorten or patch the previous answer. Follow the required word ranges,
+connect events into a coherent interpretation, write contextual symbolic notes
+with at least two sentences each, and copy every supported general research
+sentence into evidence_claims with its exact retrieved supportRuleId.
+[/QUALITY_REPAIR]`;
 }

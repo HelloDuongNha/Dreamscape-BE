@@ -1,9 +1,15 @@
 import mongoose from 'mongoose';
 import { logger } from '../../../../../infrastructure/logger';
 import { generateAnalysis, ILLMOutput } from '../../../../../infrastructure/llm.service';
-import { generateDreamContinuation } from '../creation/dreamContinuation.service';
-import { resolveDreamAnalysisModel } from '../grounding/dreamAnalysisQuality.service';
-import { buildDreamAnalysisPrompt } from '../prompts/dreamAnalysis.prompt';
+import {
+  assessDreamAnalysisDepth,
+  resolveDreamAnalysisModel,
+  selectDeeperDreamAnalysis,
+} from '../grounding/dreamAnalysisQuality.service';
+import {
+  buildDreamAnalysisPrompt,
+  buildDreamAnalysisRepairPrompt,
+} from '../prompts/dreamAnalysis.prompt';
 import {
   DreamAnalysisProgress,
   DreamAnalysisReporter,
@@ -11,7 +17,11 @@ import {
   DreamAnalysisStage,
 } from './dreamAnalysisOrchestration.types';
 import { finalizeDreamAnalysisOutput } from './dreamAnalysisOutput.service';
-import { groundDreamCitationClaims } from '../grounding/dreamCitationGrounding.service';
+import {
+  countResolvableDreamCitationClaims,
+  groundDreamCitationClaims,
+  type DreamCitationGroundingContext,
+} from '../grounding/dreamCitationGrounding.service';
 import { buildDreamAnalysisResult } from './dreamAnalysisResult.service';
 import {
   buildDreamProfilePrompt,
@@ -174,7 +184,41 @@ async function generateGroundedAnalysis(
     'Mô hình đang tổng hợp các mạch diễn giải có căn cứ...',
     'Đang nối chuỗi sự kiện, cảm xúc, trường hợp tương đồng và phần tri thức đã kiểm chứng.',
   );
-  const rawAnalysis = await callDreamAnalysisModel(prompt, request.abortSignal);
+  const firstAnalysis = await callDreamAnalysisModel(prompt, request.abortSignal);
+  const citationContext = buildCitationGroundingContext(rules);
+  const firstResolvableClaimCount = countResolvableDreamCitationClaims(
+    firstAnalysis,
+    citationContext,
+  );
+  const depth = assessDreamAnalysisDepth(
+    firstAnalysis,
+    context.dreamNarrative,
+    rules.usableRules.length > 0,
+    firstResolvableClaimCount,
+  );
+  let rawAnalysis = firstAnalysis;
+  if (!depth.acceptable) {
+    const repairedAnalysis = await callDreamAnalysisModel(
+      buildDreamAnalysisRepairPrompt({
+        prompt,
+        ...depth,
+        hasCitableRules: rules.usableRules.length > 0,
+      }),
+      request.abortSignal,
+      resolveDreamRepairModel(),
+    );
+    rawAnalysis = selectDeeperDreamAnalysis(
+      firstAnalysis,
+      repairedAnalysis,
+      context.dreamNarrative,
+      rules.usableRules.length > 0,
+      firstResolvableClaimCount,
+      countResolvableDreamCitationClaims(
+        repairedAnalysis,
+        citationContext,
+      ),
+    );
+  }
   await report(
     'generating_analysis',
     82,
@@ -202,30 +246,32 @@ async function generateGroundedAnalysis(
     culturalProfileUsed: profile.culturalProfileUsed,
     similarDreams: context.similarDreamResult.matches,
   });
-  groundDreamCitationClaims(analysis, {
+  groundDreamCitationClaims(analysis, citationContext);
+  return analysis;
+}
+
+function buildCitationGroundingContext(
+  rules: RetrievedRuleEvidence,
+): DreamCitationGroundingContext {
+  return {
     citableRules: rules.usableRules,
     validSourcesMap: rules.validSourcesMap,
     validEvidenceMap: rules.validEvidenceMap,
-  });
-  await report(
-    'finalizing',
-    92,
-    'Đang viết phần tiếp theo của giấc mơ...',
-    'Phần phân tích đã hoàn tất; đang dùng bộ sáng tác riêng để nối tiếp câu chuyện.',
-  );
-  analysis.creative_continuation = await generateDreamContinuation(context.dreamNarrative);
-  return analysis;
+  };
 }
 
 async function callDreamAnalysisModel(
   prompt: string,
   abortSignal?: AbortSignal,
+  model = resolveDreamAnalysisModel(),
 ): Promise<ILLMOutput> {
   try {
     const analysis = await generateAnalysis(prompt, abortSignal, {
-      model: resolveDreamAnalysisModel(),
+      model,
       numCtx: resolveDreamAnalysisContextWindow(),
       numPredict: 3200,
+      temperature: 0.2,
+      seed: Math.floor(Math.random() * 2_147_483_647),
     });
     analysis.analysis_mode = 'llm_grounded';
     return analysis;
@@ -237,12 +283,18 @@ async function callDreamAnalysisModel(
   }
 }
 
+function resolveDreamRepairModel(): string {
+  return process.env.DREAM_OLLAMA_REPAIR_MODEL
+    || process.env.OLLAMA_FALLBACK_MODEL
+    || 'qwen2.5:14b';
+}
+
 function resolveDreamAnalysisContextWindow(): number {
   return Math.max(
     4096,
     Number(process.env.DREAM_CONTEXT_WINDOW)
       || Number(process.env.ORACLE_CONTEXT_WINDOW)
-      || 32768,
+      || 16384,
   );
 }
 

@@ -56,11 +56,11 @@ export async function restartDreamAnalysis(
     addition.analysisRunId = runId;
   }
   dream.analysisMetadata = {
-    currentStage: 'queued',
+    currentStage: 'preparing',
     progress: 0,
-    statusMessage: 'Đã thêm lần thử lại vào hàng chờ.',
-    currentMiniStep: 'Tác vụ sẽ tự bắt đầu khi tới lượt.',
-    queuePosition: 1,
+    statusMessage: 'Đang chuẩn bị lần phân tích lại.',
+    currentMiniStep: 'Đang kiểm tra tài nguyên và thứ tự xử lý.',
+    queuePosition: 0,
     stageResults: {},
     enqueuedAt: startedAt,
     startedAt,

@@ -654,7 +654,13 @@ export async function generateStructuredJson<T>(
 export async function generateAnalysis(
   prompt: string,
   abortSignal?: AbortSignal,
-  options: { numCtx?: number; numPredict?: number; model?: string } = {},
+  options: {
+    temperature?: number;
+    seed?: number;
+    numCtx?: number;
+    numPredict?: number;
+    model?: string;
+  } = {},
 ): Promise<ILLMOutput> {
   let rawResult: Record<string, unknown>;
   try {
