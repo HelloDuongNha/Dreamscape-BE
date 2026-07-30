@@ -10,8 +10,7 @@ import {
 import { ORACLE_RUN_EVENT_RETENTION_MS } from '../src/config/oracleConfig';
 
 const OPERATIONAL_COLLECTIONS = ['oracleruns', 'oraclerunevents'] as const;
-const RETIRED_FEEDBACK_COLLECTION = 'oraclerulefeedbacks';
-const THREAD_COLLECTION = 'oraclethreads';
+const OPERATIONS_BACKUP_PREFIX = 'operations__';
 
 interface MigrationContext {
   client: MongoClient;
@@ -25,8 +24,10 @@ async function run(): Promise<void> {
   const context = await prepareMigration();
   try {
     await createVerifiedBackup(context);
+    await verifyNoCrossDomainConflicts(context);
     await copyOperationalCollections(context);
     await verifyOperationalCopies(context);
+    await verifyCoreSnapshotUnchanged(context);
     await cleanCoreOracleData(context);
     await applyOperationalRetention(context);
     await verifyFinalState(context);
@@ -70,14 +71,56 @@ async function createVerifiedBackup(context: MigrationContext): Promise<void> {
   }
 
   const core = context.client.db(context.coreName);
-  for (const name of [
-    ...OPERATIONAL_COLLECTIONS,
-    THREAD_COLLECTION,
-    RETIRED_FEEDBACK_COLLECTION,
-  ]) {
+  for (const name of OPERATIONAL_COLLECTIONS) {
     await copyCollection(core.collection(name), backupDb.collection(name));
     await assertCollectionsEqual(core.collection(name), backupDb.collection(name));
   }
+
+  const operations = context.client.db(context.operationsName);
+  for (const name of OPERATIONAL_COLLECTIONS) {
+    const backupName = operationsBackupCollection(name);
+    await copyCollection(
+      operations.collection(name),
+      backupDb.collection(backupName),
+    );
+    await assertCollectionsEqual(
+      operations.collection(name),
+      backupDb.collection(backupName),
+    );
+  }
+}
+
+async function verifyNoCrossDomainConflicts(
+  context: MigrationContext,
+): Promise<void> {
+  const core = context.client.db(context.coreName);
+  const operations = context.client.db(context.operationsName);
+  const [coreRuns, operationRuns, coreEvents, operationEvents] = await Promise.all([
+    core.collection('oracleruns').find({}).toArray(),
+    operations.collection('oracleruns').find({}).toArray(),
+    core.collection('oraclerunevents').find({}).toArray(),
+    operations.collection('oraclerunevents').find({}).toArray(),
+  ]);
+
+  assertSharedIdsCompatible(coreRuns, operationRuns, 'oracleruns');
+  assertSharedIdsCompatible(
+    coreEvents,
+    operationEvents,
+    'oraclerunevents',
+    ['expiresAt'],
+  );
+  assertNoDifferentIdKeyCollision(
+    coreRuns,
+    operationRuns,
+    document => `${String(document.userId)}:${String(document.clientRequestId)}`,
+    'oracleruns userId/clientRequestId',
+  );
+  assertNoDifferentIdKeyCollision(
+    coreEvents,
+    operationEvents,
+    document => `${String(document.runId)}:${String(document.sequence)}`,
+    'oraclerunevents runId/sequence',
+  );
 }
 
 async function copyOperationalCollections(context: MigrationContext): Promise<void> {
@@ -98,19 +141,31 @@ async function verifyOperationalCopies(context: MigrationContext): Promise<void>
   }
 }
 
+async function verifyCoreSnapshotUnchanged(
+  context: MigrationContext,
+): Promise<void> {
+  const core = context.client.db(context.coreName);
+  const backup = context.client.db(context.backupName);
+  for (const name of OPERATIONAL_COLLECTIONS) {
+    await assertCollectionsEqual(
+      backup.collection(name),
+      core.collection(name),
+    );
+  }
+}
+
 async function cleanCoreOracleData(context: MigrationContext): Promise<void> {
   const core = context.client.db(context.coreName);
+  const backup = context.client.db(context.backupName);
   for (const name of OPERATIONAL_COLLECTIONS) {
     const collection = core.collection(name);
-    const ids = await readIds(collection);
+    // Delete only the records captured in the verified backup. If an old
+    // backend writes a new record during migration, final verification fails
+    // instead of silently deleting a record that was never copied.
+    const ids = await readIds(backup.collection(name));
     if (ids.length) await collection.deleteMany({ _id: { $in: ids } });
   }
 
-  await core.collection(THREAD_COLLECTION).updateMany(
-    { attachedDreamIds: { $exists: true } },
-    { $unset: { attachedDreamIds: '' } },
-  );
-  await core.collection(RETIRED_FEEDBACK_COLLECTION).deleteMany({});
 }
 
 async function applyOperationalRetention(context: MigrationContext): Promise<void> {
@@ -155,15 +210,78 @@ async function verifyFinalState(context: MigrationContext): Promise<void> {
       backupIds,
       name === 'oraclerunevents' ? ['expiresAt'] : [],
     );
+
+    const operationsBackup = backup.collection(operationsBackupCollection(name));
+    const operationsBackupIds = await readIds(operationsBackup);
+    await assertCollectionsEqual(
+      operationsBackup,
+      operations.collection(name),
+      operationsBackupIds,
+      name === 'oraclerunevents' ? ['expiresAt'] : [],
+    );
   }
 
-  const attachedCount = await core
-    .collection(THREAD_COLLECTION)
-    .countDocuments({ attachedDreamIds: { $exists: true } });
-  if (attachedCount !== 0) throw new Error('attachedDreamIds cleanup did not finish.');
+  await verifyOracleReferences(context);
 
-  const retiredCount = await core.collection(RETIRED_FEEDBACK_COLLECTION).countDocuments();
-  if (retiredCount !== 0) throw new Error('Retired Oracle feedback still exists in core.');
+}
+
+async function verifyOracleReferences(context: MigrationContext): Promise<void> {
+  const core = context.client.db(context.coreName);
+  const operations = context.client.db(context.operationsName);
+  const [referencedRunIds, eventRunIds, operationRunIds] = await Promise.all([
+    core.collection('oracleturns').distinct(
+      'runId',
+      { runId: { $type: 'objectId' } },
+    ),
+    operations.collection('oraclerunevents').distinct('runId'),
+    operations.collection('oracleruns').distinct('_id'),
+  ]);
+
+  const operationIds = new Set(operationRunIds.map(String));
+  const missingTurnRuns = referencedRunIds.filter(id => !operationIds.has(String(id)));
+  const missingEventRuns = eventRunIds.filter(id => !operationIds.has(String(id)));
+  if (missingTurnRuns.length || missingEventRuns.length) {
+    throw new Error(
+      `Oracle reference verification failed: ${missingTurnRuns.length} turn run(s) `
+      + `and ${missingEventRuns.length} event run(s) are missing from operations.`,
+    );
+  }
+}
+
+function assertSharedIdsCompatible(
+  source: Document[],
+  target: Document[],
+  label: string,
+  ignoredFields: string[] = [],
+): void {
+  const targetById = new Map(target.map(document => [String(document._id), document]));
+  for (const document of source) {
+    const existing = targetById.get(String(document._id));
+    if (!existing) continue;
+    if (
+      digestDocuments([document], ignoredFields)
+      !== digestDocuments([existing], ignoredFields)
+    ) {
+      throw new Error(`${label} contains conflicting records for _id ${String(document._id)}.`);
+    }
+  }
+}
+
+function assertNoDifferentIdKeyCollision(
+  source: Document[],
+  target: Document[],
+  keyFor: (document: Document) => string,
+  label: string,
+): void {
+  const targetByKey = new Map(target.map(document => [keyFor(document), document]));
+  for (const document of source) {
+    const existing = targetByKey.get(keyFor(document));
+    if (existing && String(existing._id) !== String(document._id)) {
+      throw new Error(
+        `${label} collision between ${String(document._id)} and ${String(existing._id)}.`,
+      );
+    }
+  }
 }
 
 async function copyCollection(source: Collection, target: Collection): Promise<void> {
@@ -271,13 +389,15 @@ function requiredEnv(name: string): string {
   return value;
 }
 
+function operationsBackupCollection(name: string): string {
+  return `${OPERATIONS_BACKUP_PREFIX}${name}`;
+}
+
 function printCompletion(context: MigrationContext): void {
   console.log(JSON.stringify({
     success: true,
     core: context.coreName,
     operations: context.operationsName,
-    retiredCollection: RETIRED_FEEDBACK_COLLECTION,
-    removedThreadField: 'attachedDreamIds',
     backup: context.dropBackupOnSuccess ? 'deleted-after-verification' : context.backupName,
   }, null, 2));
 }
