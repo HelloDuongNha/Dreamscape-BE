@@ -9,6 +9,7 @@ import {
 import {
   login,
   googleLogin,
+  completeGoogleOnboarding,
   logout,
   register,
 } from '../modules/identity/controllers/authentication.controller';
@@ -166,6 +167,7 @@ const router = Router();
  */
 router.post('/register', register);
 router.post('/google', googleLogin);
+router.post('/google/complete', completeGoogleOnboarding);
 
 // ─── POST /api/auth/login ─────────────────────────────────────────────────────
 

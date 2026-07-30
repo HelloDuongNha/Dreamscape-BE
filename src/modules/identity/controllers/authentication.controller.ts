@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
 import {
   IdentityRequestError,
+  parseGoogleOnboardingRequest,
   parseLoginRequest,
   parseRegistrationRequest,
 } from '../dto/authentication.dto';
@@ -9,6 +10,7 @@ import {
   authenticateWithGoogle,
   authenticateWithPassword,
   beginRegistration,
+  completeGoogleRegistration,
 } from '../services/auth/authentication.service';
 import { removeCurrentSession } from '../services/auth/sessionLifecycle.service';
 import { presentAuthenticatedUser } from '../services/presentation/authenticatedUser.service';
@@ -75,9 +77,36 @@ export async function googleLogin(
       idToken,
       readIdentityClientContext(req),
     );
+    if (authenticated.status === 'onboarding_required') {
+      res.status(200).json({ success: true, ...authenticated });
+      return;
+    }
     res.status(200).json({
       success: true,
+      status: authenticated.status,
       message: 'Google sign-in successful.',
+      token: authenticated.token,
+      user: presentAuthenticatedUser(authenticated.user),
+    });
+  } catch (error) {
+    handleAuthenticationError(error, res, next);
+  }
+}
+
+export async function completeGoogleOnboarding(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const authenticated = await completeGoogleRegistration(
+      parseGoogleOnboardingRequest(req.body),
+      readIdentityClientContext(req),
+    );
+    res.status(201).json({
+      success: true,
+      status: 'authenticated',
+      message: 'Google registration completed.',
       token: authenticated.token,
       user: presentAuthenticatedUser(authenticated.user),
     });

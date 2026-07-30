@@ -12,6 +12,14 @@ export interface LoginRequestDto {
   password: string;
 }
 
+export interface GoogleOnboardingRequestDto {
+  onboardingToken: string;
+  username: string;
+  display_name: string;
+  password: string;
+  confirmPassword: string;
+}
+
 export class IdentityRequestError extends Error {
   constructor(
     public readonly statusCode: number,
@@ -48,6 +56,25 @@ export function parseLoginRequest(body: unknown): LoginRequestDto {
   return {
     email: input.email as string,
     password: input.password as string,
+  };
+}
+
+export function parseGoogleOnboardingRequest(body: unknown): GoogleOnboardingRequestDto {
+  const input = asRequestRecord(body);
+  const onboardingToken = input.onboardingToken as string;
+  const username = input.username as string;
+  const displayName = input.display_name as string;
+  const password = input.password as string;
+  const confirmPassword = input.confirmPassword as string;
+  if (!onboardingToken || !username || !displayName || !password || !confirmPassword) {
+    throw new IdentityRequestError(400, 'All Google registration fields must be provided.');
+  }
+  return {
+    onboardingToken,
+    username,
+    display_name: displayName,
+    password,
+    confirmPassword,
   };
 }
 

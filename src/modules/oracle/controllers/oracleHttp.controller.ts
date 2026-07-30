@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { Types } from 'mongoose';
+import { logger } from '../../../infrastructure/logger';
 import { OracleContractError } from '../services/oracle.types';
 
 export function oracleRequesterId(req: Request): Types.ObjectId {
@@ -11,6 +12,7 @@ export function oracleRequesterId(req: Request): Types.ObjectId {
 
 export function sendOracleError(res: Response, error: unknown): void {
   if (!(error instanceof OracleContractError)) {
+    logger.error('Unhandled Oracle request error.', error);
     res.status(500).json({
       success: false,
       code: 'oracle_internal_error',
