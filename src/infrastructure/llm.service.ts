@@ -1,4 +1,5 @@
 import { logger } from './logger';
+import { ollamaRequestHeaders } from './ollamaHttp';
 import type {
   EvidenceClaimBinding,
   EvidenceClaimContentPath,
@@ -548,7 +549,7 @@ export async function generateEmbedding(text: string): Promise<number[]> {
       `${baseUrl}/api/embeddings`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: ollamaRequestHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           model: embedModel,
           prompt: text,
@@ -598,7 +599,7 @@ export async function generateStructuredJson<T>(
       `${baseUrl}/api/chat`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: ollamaRequestHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           model,
           messages: [{ role: 'user', content: prompt }],

@@ -24,6 +24,7 @@ import {
   shouldReplaceStoredTitle,
   toDoclingExtractedDocument,
 } from './doclingImportSupport.service';
+import { DoclingDocumentRepairProfileService } from './doclingDocumentRepairProfile.service';
 
 export { detectFrontMatterAuthors } from './doclingImportSupport.service';
 
@@ -98,6 +99,10 @@ export async function runDoclingPdfImport(input: DoclingImportInput): Promise<Do
     await input.onStage?.('parsing_layout', { pageCount: run.result.pageCount });
     await input.onStage?.('cleaning_ocr', { pageCount: run.result.pageCount });
     const adapter = DoclingAdapterService.mapToCanonicalBlocks(run.result, run.artifacts);
+    adapter.canonicalOutput.blocks = DoclingDocumentRepairProfileService.apply(
+      adapter.canonicalOutput.blocks,
+      input.originalFile.fileHash,
+    );
     const frontMatterAuthors = detectFrontMatterAuthors(adapter.canonicalOutput.blocks);
     const frontMatterTitle = detectFrontMatterTitle(
       adapter.canonicalOutput.blocks,

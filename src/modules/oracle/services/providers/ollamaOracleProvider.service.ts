@@ -3,6 +3,7 @@ import type {
   OracleModelRequest,
   OracleModelResult,
 } from './oracleModel.types';
+import { ollamaRequestHeaders } from '../../../../infrastructure/ollamaHttp';
 
 export class OllamaOracleModelAdapter implements OracleModelAdapter {
   readonly name = 'ollama' as const;
@@ -20,7 +21,7 @@ export class OllamaOracleModelAdapter implements OracleModelAdapter {
     ).replace(/\/+$/u, '');
     const response = await fetch(`${baseUrl}/api/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: ollamaRequestHeaders({ 'Content-Type': 'application/json' }),
       signal: request.signal,
       body: JSON.stringify({
         model: this.modelOverride || request.model,
