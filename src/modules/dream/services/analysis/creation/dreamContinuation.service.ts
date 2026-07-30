@@ -1,6 +1,7 @@
 import { generateStructuredJson } from '../../../../../infrastructure/llm.service';
 import {
   buildDreamContinuationPrompt,
+  dreamContinuationLanguage,
   selectFinalDreamScene,
 } from '../prompts/dreamContinuation.prompt';
 
@@ -14,6 +15,8 @@ export interface DreamContinuation {
 }
 
 const activeContinuationControllers = new Map<string, AbortController>();
+const FOREIGN_SCRIPT_PATTERN =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 
 function normalizeForComparison(value: string): string {
   return value.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLocaleLowerCase('vi');
@@ -52,7 +55,8 @@ function validateContinuation(value: any, narrative: string, strict = true): Dre
   const hasRequiredCore = Boolean(
     title
     && connectionToCurrentDream
-    && isLongFormDreamContinuation(continuation),
+    && isLongFormDreamContinuation(continuation)
+    && !FOREIGN_SCRIPT_PATTERN.test(`${title}\n${continuation}\n${connectionToCurrentDream}`),
   );
   const hasGrounding = groundedAnchors.length >= 2
     && Boolean(startingAnchor)
@@ -69,7 +73,9 @@ function validateContinuation(value: any, narrative: string, strict = true): Dre
     title,
     continuation,
     connectionToCurrentDream,
-    disclaimer: 'Đây là đoạn sáng tác tham khảo, không phải dự báo hay kết luận tâm lý.',
+    disclaimer: dreamContinuationLanguage(narrative) === 'Vietnamese'
+      ? 'Đây là đoạn sáng tác tham khảo, không phải dự báo hay kết luận tâm lý.'
+      : 'This is a fictional continuation for inspiration, not a prediction or psychological conclusion.',
     inspirationIndexes: [],
   };
 }
@@ -78,6 +84,7 @@ function buildRepairPrompt(
   narrative: string,
   candidate: Record<string, unknown>,
 ): string {
+  const language = dreamContinuationLanguage(narrative);
   return `You are repairing a structured creative continuation of a dream.
 
 Original dream (the only canon):
@@ -88,8 +95,8 @@ ${JSON.stringify(candidate)}
 
 Return JSON only with exactly these fields:
 {
-  "title": "short Vietnamese title",
-  "continuation": "280-450 Vietnamese words in 4-7 paragraphs, beginning with a natural return to sleep and ending with a causally earned awakening",
+  "title": "short ${language} title",
+  "continuation": "280-450 ${language} words in 4-7 paragraphs, beginning with a natural return to sleep and ending with a causally earned awakening",
   "connectionToCurrentDream": "one concise sentence",
   "sourceAnchors": ["two exact short excerpts from the original dream"],
   "startingAnchor": "an exact excerpt from the final unresolved scene",
@@ -97,7 +104,7 @@ Return JSON only with exactly these fields:
   "endingWakeReaction": "the exact final sentence, describing a new specific feeling after waking"
 }
 
-Keep the candidate's strongest ideas, but repair continuity. Continue only from the original dream's final moment; do not continue any old generated branch. Use only existing people, places and objects except one small connecting detail. The ending must earn the awakening through a concrete sensory or reality-breaking change, not an arbitrary alarm or an abrupt sentence.`;
+Keep every user-facing field entirely in natural ${language}; replace any untranslated foreign-script fragment with the intended ${language} wording. Keep the candidate's strongest ideas, but repair continuity. Continue only from the original dream's final moment; do not continue any old generated branch. Use only existing people, places and objects except one small connecting detail. The ending must earn the awakening through a concrete sensory or reality-breaking change, not an arbitrary alarm or an abrupt sentence.`;
 }
 
 // Writes a new fictional branch without rerunning the scientific analysis.

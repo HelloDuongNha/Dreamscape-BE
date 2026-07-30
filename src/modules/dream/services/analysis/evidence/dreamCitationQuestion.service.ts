@@ -16,7 +16,7 @@ type RuleSupport = {
   };
 };
 
-// Adds one localized case question for each distinct rule and excerpt.
+// Adds one localized case question per rule and merges any additional excerpts.
 export function appendDreamVerificationQuestion(
   analysis: any,
   rule: EvidenceGapRuleInput,
@@ -28,18 +28,44 @@ export function appendDreamVerificationQuestion(
     ? analysis.real_life_hypotheses
     : [];
   const source = support.source as any;
+  const ruleId = String(rule._id);
   const verificationKey = `${String(rule._id)}:${String(support.evidence._id)}`
     + `:dream-citation-${ORACLE_CITATION_QUESTION_VERSION}`;
-  if (hypotheses.some((item: any) =>
-    String(item.verificationKey || '') === verificationKey)) {
+  const existingIndex = hypotheses.findIndex((item: any) =>
+    linkedRuleIds(item).includes(ruleId));
+  if (existingIndex >= 0) {
+    const existing = hypotheses[existingIndex];
+    hypotheses[existingIndex] = {
+      ...existing,
+      ruleId,
+      ruleIds: [...new Set([...linkedRuleIds(existing), ruleId])],
+      verificationKey: existing.verificationKey || verificationKey,
+      validationSourceId: existing.validationSourceId || sourceId,
+      validationExactQuote: existing.validationExactQuote
+        || String(support.evidence.exactQuote || ''),
+      evidenceFromDream: [...new Set([
+        ...(existing.evidenceFromDream || []),
+        ...evidenceFromDream,
+      ].map(String).filter(Boolean))],
+      sources: mergeQuestionSources(existing.sources || [], [{
+        sourceId,
+        title: String(source.title || source.metadata?.title || 'Academic source'),
+        authors: source.authors || source.metadata?.authors || [],
+        year: source.year || source.metadata?.year,
+        journal: source.journal || source.publisher,
+        doi: source.doi || source.metadata?.doi,
+        chunkIds: [String(support.evidence.chunkId)],
+      }]),
+    };
+    analysis.real_life_hypotheses = hypotheses;
     return;
   }
 
   const question = buildOracleCitationVerificationQuestion(rule);
   const statement = localizeOracleRuleStatement(rule);
   hypotheses.push({
-    ruleId: String(rule._id),
-    ruleIds: [String(rule._id)],
+    ruleId,
+    ruleIds: [ruleId],
     hypothesis: statement.vi || String(rule.statement || ''),
     localizedHypothesis: statement,
     evidenceFromDream: [...new Set(evidenceFromDream.map(String).filter(Boolean))],
@@ -83,4 +109,31 @@ export function appendDreamVerificationQuestion(
     userFeedback: null,
   });
   analysis.real_life_hypotheses = hypotheses;
+}
+
+// Returns the stable rule identities represented by one verification question.
+function linkedRuleIds(question: any): string[] {
+  return [...new Set([
+    question?.ruleId,
+    ...(Array.isArray(question?.ruleIds) ? question.ruleIds : []),
+  ].map(value => String(value || '').trim()).filter(Boolean))];
+}
+
+// Merges citations without duplicating one source while retaining all excerpt chunks.
+function mergeQuestionSources(existing: any[], additions: any[]): any[] {
+  const sources = new Map<string, any>();
+  for (const source of [...existing, ...additions]) {
+    const key = String(source?.sourceId || source?.doi || source?.title || '').trim();
+    if (!key) continue;
+    const current = sources.get(key);
+    sources.set(key, {
+      ...(current || {}),
+      ...source,
+      chunkIds: [...new Set([
+        ...(current?.chunkIds || []),
+        ...(source?.chunkIds || []),
+      ].map(String).filter(Boolean))],
+    });
+  }
+  return [...sources.values()];
 }

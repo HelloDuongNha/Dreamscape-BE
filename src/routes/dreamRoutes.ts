@@ -485,7 +485,7 @@ router.patch('/:id/comments-policy', authMiddleware, updateCommentPolicy);
  *         description: Invalid dreamId
  */
 router.get('/:id/comments', optionalAuthMiddleware, getComments);
-router.get('/:id', authMiddleware, getDream);
+router.get('/:id', optionalAuthMiddleware, getDream);
 
 // ─── POST /api/dreams/analyze ─────────────────────────────────────────────────
 

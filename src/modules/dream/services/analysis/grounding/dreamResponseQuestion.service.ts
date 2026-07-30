@@ -120,8 +120,8 @@ function appendMissingSourceQuestions(
   evidenceLinks: any[],
 ): any[] {
   const next = [...hypotheses];
-  const usedVerificationKeys = new Set(
-    next.map(item => String(item?.verificationKey || '')).filter(Boolean),
+  const usedQuestionKeys = new Set(
+    next.map(dreamQuestionIdentity).filter(Boolean),
   );
   for (const link of evidenceLinks || []) {
     if (next.length >= 4) break;
@@ -136,7 +136,7 @@ function appendMissingSourceQuestions(
     const evidenceId = String(link?.evidenceId || link?.chunkIds?.[0] || '').trim();
     const verificationKey = `${ruleId}:${evidenceId}`
       + `:dream-citation-${ORACLE_CITATION_QUESTION_VERSION}`;
-    if (usedVerificationKeys.has(verificationKey)) continue;
+    if (usedQuestionKeys.has(`rule:${ruleId}`)) continue;
     const question = buildOracleCitationVerificationQuestion(rule);
     const statement = localizeOracleRuleStatement(rule);
     next.push({
@@ -176,24 +176,77 @@ function appendMissingSourceQuestions(
         : {}),
       userFeedback: null,
     });
-    usedVerificationKeys.add(verificationKey);
+    usedQuestionKeys.add(`rule:${ruleId}`);
   }
   return deduplicateDreamQuestionsBySource(next);
 }
 
-// Keeps distinct rule/excerpt questions while removing true duplicates.
+// Keeps one case question per rule and folds duplicate excerpt records into it.
 export function deduplicateDreamQuestionsBySource(questions: any[]): any[] {
-  const kept: any[] = [];
-  const usedKeys = new Set<string>();
-
+  const kept = new Map<string, any>();
   for (const question of questions || []) {
-    const key = String(
-      question?.verificationKey
-      || `${question?.ruleId || ''}:${question?.followUpQuestion || ''}`,
-    ).trim();
-    if (!key || usedKeys.has(key)) continue;
-    usedKeys.add(key);
-    kept.push(question);
+    const key = dreamQuestionIdentity(question);
+    if (!key) continue;
+    const existing = kept.get(key);
+    if (!existing) {
+      kept.set(key, question);
+      continue;
+    }
+    kept.set(key, mergeDuplicateQuestion(existing, question));
   }
-  return kept;
+  return [...kept.values()];
+}
+
+// Builds the logical identity independently from the evidence excerpt version.
+function dreamQuestionIdentity(question: any): string {
+  const ruleIds = [...new Set([
+    question?.ruleId,
+    ...(Array.isArray(question?.ruleIds) ? question.ruleIds : []),
+  ].map(value => String(value || '').trim()).filter(Boolean))].sort();
+  if (ruleIds.length) return `rule:${ruleIds.join('|')}`;
+  const dimension = String(question?.questionDimension || '').trim();
+  if (dimension) return `dimension:${dimension}`;
+  const verificationKey = String(question?.verificationKey || '').trim();
+  if (verificationKey) return `verification:${verificationKey}`;
+  const text = String(question?.followUpQuestion || '')
+    .normalize('NFKC')
+    .trim()
+    .replace(/\s+/gu, ' ')
+    .toLocaleLowerCase('vi');
+  return text ? `question:${text}` : '';
+}
+
+// Preserves the answered record and merges supporting source metadata from its duplicate.
+function mergeDuplicateQuestion(left: any, right: any): any {
+  const preferred = left?.userFeedback == null && right?.userFeedback != null ? right : left;
+  const other = preferred === left ? right : left;
+  const sources = new Map<string, any>();
+  for (const source of [...(preferred?.sources || []), ...(other?.sources || [])]) {
+    const key = String(source?.sourceId || source?.doi || source?.title || '').trim();
+    if (!key) continue;
+    const current = sources.get(key);
+    sources.set(key, {
+      ...(current || {}),
+      ...source,
+      chunkIds: [...new Set([
+        ...(current?.chunkIds || []),
+        ...(source?.chunkIds || []),
+      ].map(String).filter(Boolean))],
+    });
+  }
+  return {
+    ...other,
+    ...preferred,
+    ruleIds: [...new Set([
+      preferred?.ruleId,
+      ...(preferred?.ruleIds || []),
+      other?.ruleId,
+      ...(other?.ruleIds || []),
+    ].map(value => String(value || '').trim()).filter(Boolean))],
+    evidenceFromDream: [...new Set([
+      ...(preferred?.evidenceFromDream || []),
+      ...(other?.evidenceFromDream || []),
+    ].map(String).filter(Boolean))],
+    sources: [...sources.values()],
+  };
 }

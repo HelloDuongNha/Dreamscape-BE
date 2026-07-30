@@ -6,6 +6,8 @@ import {
   sendConversationMessage,
   searchOrCreateConversation,
   deleteConversation,
+  deleteMessageForMe,
+  unsendMessage,
 } from '../modules/messaging/controllers/conversationController';
 
 const router = Router();
@@ -156,6 +158,8 @@ router.post('/search', searchOrCreateConversation);
  */
 router.get('/messages/:conversationId', getMessages);
 router.post('/messages/:conversationId', sendConversationMessage);
+router.patch('/messages/:messageId/delete-for-me', deleteMessageForMe);
+router.patch('/messages/:messageId/unsend', unsendMessage);
 
 /**
  * @swagger

@@ -13,6 +13,20 @@ export interface PlainMessage {
   conversationId: unknown;
   senderId: unknown;
   content: string;
+  messageType: 'text' | 'shared_post';
+  sharedPostId?: unknown;
+  replyToMessageId?: unknown;
+  forwarded?: boolean;
+  unsentAt?: Date;
+  replyTo?: {
+    _id: unknown;
+    senderId: unknown;
+    content: string;
+    messageType: 'text' | 'shared_post';
+    sharedPostId?: unknown;
+    unsentAt?: Date;
+    content_unavailable?: boolean;
+  };
   timestamp: Date;
   status: 'sent' | 'delivered' | 'seen';
   content_unavailable?: boolean;
@@ -23,6 +37,10 @@ export async function persistEncryptedMessage(input: {
   conversationId: Types.ObjectId;
   senderId: Types.ObjectId;
   content: string;
+  messageType?: 'text' | 'shared_post';
+  sharedPostId?: Types.ObjectId;
+  replyToMessageId?: Types.ObjectId;
+  forwarded?: boolean;
   clientMessageId?: string;
 }): Promise<PlainMessage> {
   const content = input.content.normalize('NFKC').trim();
@@ -33,6 +51,10 @@ export async function persistEncryptedMessage(input: {
   if (clientMessageId) {
     const existing = await Message.findOne({
       senderId: input.senderId,
+      messageType: input.messageType || 'text',
+      sharedPostId: input.sharedPostId,
+      replyToMessageId: input.replyToMessageId,
+      forwarded: input.forwarded === true,
       clientMessageId,
     });
     if (existing) {
@@ -65,6 +87,10 @@ export async function persistEncryptedMessage(input: {
       conversationId: input.conversationId,
       senderId: input.senderId,
       clientMessageId,
+      messageType: input.messageType || 'text',
+      sharedPostId: input.sharedPostId,
+      replyToMessageId: input.replyToMessageId,
+      forwarded: input.forwarded === true,
       ...contentEnvelope,
       searchTokens: search.tokens,
       searchKeyVersion: search.keyVersion,
@@ -100,6 +126,10 @@ export async function persistEncryptedMessage(input: {
     conversationId: message.conversationId,
     senderId: message.senderId,
     content,
+    messageType: message.messageType || 'text',
+    sharedPostId: message.sharedPostId,
+    replyToMessageId: message.replyToMessageId,
+    forwarded: message.forwarded === true,
     timestamp: message.timestamp,
     status: message.status,
   };
@@ -125,7 +155,12 @@ export function presentMessage(document: any): PlainMessage {
     _id: document._id,
     conversationId: document.conversationId,
     senderId: document.senderId,
-    content: readMessageContent(document),
+    content: document.unsentAt ? '' : readMessageContent(document),
+    messageType: document.messageType || 'text',
+    sharedPostId: document.sharedPostId,
+    replyToMessageId: document.replyToMessageId,
+    forwarded: document.forwarded === true,
+    unsentAt: document.unsentAt,
     timestamp: document.timestamp,
     status: document.status,
   };
@@ -140,6 +175,11 @@ export function presentMessageSafely(document: any): PlainMessage {
       conversationId: document.conversationId,
       senderId: document.senderId,
       content: '',
+      messageType: document.messageType || 'text',
+      sharedPostId: document.sharedPostId,
+      replyToMessageId: document.replyToMessageId,
+      forwarded: document.forwarded === true,
+      unsentAt: document.unsentAt,
       timestamp: document.timestamp,
       status: document.status,
       content_unavailable: true,

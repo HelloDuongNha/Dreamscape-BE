@@ -9,6 +9,13 @@ import mongoose, { Document, Schema, Types } from 'mongoose';
 export interface IMessage extends Document {
   conversationId: Types.ObjectId; // FK → Conversation._id
   senderId: Types.ObjectId; // FK → User._id
+  messageType: 'text' | 'shared_post';
+  sharedPostId?: Types.ObjectId;
+  replyToMessageId?: Types.ObjectId;
+  forwarded: boolean;
+  deletedFor: Types.ObjectId[];
+  unsentAt?: Date;
+  unsentBy?: Types.ObjectId;
   clientMessageId?: string;
   content?: string;
   ciphertext?: string;
@@ -34,6 +41,32 @@ const MessageSchema = new Schema<IMessage>(
       type: Schema.Types.ObjectId,
       ref: 'User',
       required: [true, 'senderId is required'],
+    },
+    messageType: {
+      type: String,
+      enum: ['text', 'shared_post'],
+      default: 'text',
+    },
+    sharedPostId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Dream',
+    },
+    replyToMessageId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Message',
+    },
+    forwarded: {
+      type: Boolean,
+      default: false,
+    },
+    deletedFor: [{
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+    }],
+    unsentAt: Date,
+    unsentBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
     },
     clientMessageId: {
       type: String,
@@ -73,6 +106,7 @@ const MessageSchema = new Schema<IMessage>(
 //   db.messages.find({ conversationId }).sort({ timestamp: 1 })
 // Leading conversationId covers single-field lookups too.
 MessageSchema.index({ conversationId: 1, timestamp: 1 });
+MessageSchema.index({ sharedPostId: 1, timestamp: -1 });
 MessageSchema.index({ conversationId: 1, searchKeyVersion: 1, searchTokens: 1 });
 MessageSchema.index(
   { senderId: 1, clientMessageId: 1 },

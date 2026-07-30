@@ -20,6 +20,12 @@ interface ContinuationPromptInput {
   previousContinuations: string[];
 }
 
+export type DreamContinuationLanguage = 'Vietnamese' | 'English';
+
+export function dreamContinuationLanguage(narrative: string): DreamContinuationLanguage {
+  return /[ăâđêôơưà-ỹ]/iu.test(narrative) ? 'Vietnamese' : 'English';
+}
+
 // Keeps generation focused on the last part of long narratives without naming any fixed motif.
 export function selectFinalDreamScene(narrative: string): string {
   const compact = narrative.replace(/\s+/gu, ' ').trim();
@@ -31,6 +37,7 @@ export function selectFinalDreamScene(narrative: string): string {
 // Builds an alternative part 2 while treating older versions only as text to avoid copying.
 export function buildDreamContinuationPrompt(input: ContinuationPromptInput): string {
   const finalScene = selectFinalDreamScene(input.narrative);
+  const language = dreamContinuationLanguage(input.narrative);
   const previous = input.previousContinuations.length
     ? input.previousContinuations
       .map((continuation, index) => `Alternative ${index + 1}: ${continuation}`)
@@ -38,7 +45,8 @@ export function buildDreamContinuationPrompt(input: ContinuationPromptInput): st
     : 'None';
 
   return `
-Write one fictional dream continuation in natural Vietnamese.
+Write one fictional dream continuation entirely in natural ${language}.
+Do not insert untranslated words or characters from another language.
 
 ${POST_DREAM_CONTINUATION_RULES}
 
@@ -50,7 +58,7 @@ or the way an existing unresolved detail develops.
 Return JSON only:
 {
   "title": "a short title grounded in this dream",
-  "continuation": "280-450 Vietnamese words in 4-7 paragraphs, including the return-to-sleep opening and final waking sentence",
+  "continuation": "280-450 ${language} words in 4-7 paragraphs, including the return-to-sleep opening and final waking sentence",
   "connectionToCurrentDream": "one concise sentence naming the original unresolved detail being continued",
   "sourceAnchors": ["two to four exact short excerpts copied from DREAM_NARRATIVE"],
   "startingAnchor": "one exact excerpt copied from FINAL_SCENE that identifies the unresolved moment where this version begins",

@@ -27,12 +27,36 @@ export async function loadUserConversations(userId: Types.ObjectId) {
 
   return Promise.all(
     conversations.map(async (conversation) => {
-      const unread_count = await Message.countDocuments({
-        conversationId: conversation._id,
-        senderId: { $ne: userId },
-        status: { $ne: 'seen' },
-      });
-      return { ...presentConversation(conversation), unread_count };
+      const [unread_count, latestVisibleMessage] = await Promise.all([
+        Message.countDocuments({
+          conversationId: conversation._id,
+          senderId: { $ne: userId },
+          status: { $ne: 'seen' },
+          deletedFor: { $ne: userId },
+        }),
+        Message.findOne({
+          conversationId: conversation._id,
+          deletedFor: { $ne: userId },
+        }).sort({ timestamp: -1 }).lean(),
+      ]);
+      const presentedConversation = presentConversation(conversation);
+      if (!latestVisibleMessage) {
+        return {
+          ...presentedConversation,
+          last_message: '',
+          last_message_unsent: false,
+          unread_count,
+        };
+      }
+      const latest = presentMessageSafely(latestVisibleMessage);
+      return {
+        ...presentedConversation,
+        last_message: latest.unsentAt ? '' : latest.content,
+        last_message_unsent: Boolean(latest.unsentAt),
+        preview_unavailable: latest.content_unavailable,
+        updated_at: latest.timestamp,
+        unread_count,
+      };
     }),
   );
 }
@@ -56,13 +80,39 @@ export async function loadConversationMessages(
 
   const messages = await Message.find({
     conversationId: new Types.ObjectId(conversationId),
+    deletedFor: { $ne: userId },
   })
     .sort({ timestamp: 1 })
     .limit(50)
     .populate('senderId', USER_PUBLIC)
     .lean();
 
-  return messages.map(presentMessageSafely);
+  const presented = messages.map(presentMessageSafely);
+  const replyIds = presented
+    .map(message => message.replyToMessageId)
+    .filter((value): value is Types.ObjectId => value instanceof Types.ObjectId);
+  if (!replyIds.length) return presented;
+
+  const replyDocuments = await Message.find({ _id: { $in: replyIds } }).lean();
+  const replies = new Map(replyDocuments.map(document => {
+    const reply = presentMessageSafely(document);
+    return [String(reply._id), {
+      _id: reply._id,
+      senderId: reply.senderId,
+      content: reply.content,
+      messageType: reply.messageType,
+      sharedPostId: reply.sharedPostId,
+      unsentAt: reply.unsentAt,
+      content_unavailable: reply.content_unavailable,
+    }];
+  }));
+
+  return presented.map(message => ({
+    ...message,
+    replyTo: message.replyToMessageId
+      ? replies.get(String(message.replyToMessageId))
+      : undefined,
+  }));
 }
 
 function assertConversationId(conversationId: string): void {

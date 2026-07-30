@@ -15,6 +15,10 @@ import {
   deliverOutgoingMessage,
   MessageDeliveryError,
 } from '../services/message/messageDelivery.service';
+import {
+  deleteMessageForParticipant,
+  unsendOwnMessage,
+} from '../services/message/messageLifecycle.service';
 
 export async function getConversations(
   req: Request,
@@ -48,6 +52,10 @@ export async function sendConversationMessage(
     const delivery = await deliverOutgoingMessage(String(req.user!._id), {
       conversationId: String(req.params.conversationId),
       content: req.body?.content,
+      messageType: req.body?.messageType,
+      sharedPostId: req.body?.sharedPostId,
+      replyToMessageId: req.body?.replyToMessageId,
+      forwarded: req.body?.forwarded,
       tempId: req.body?.tempId,
       clientMessageId: req.body?.clientMessageId,
     });
@@ -95,6 +103,49 @@ export async function deleteConversation(
     res.status(200).json({ success: true, message: 'Conversation deleted.' });
   } catch (error) {
     respondConversationError(res, error, 'Failed to delete conversation.');
+  }
+}
+
+export async function deleteMessageForMe(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  try {
+    const result = await deleteMessageForParticipant(
+      String(req.params.messageId),
+      req.user!._id as Types.ObjectId,
+    );
+    const io = req.app.get('io') as SocketIOServer | undefined;
+    io?.to(String(req.user!._id)).emit('message_deleted_for_me', {
+      messageId: result.messageId,
+      conversationId: result.conversationId,
+    });
+    res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    respondConversationError(res, error, 'Failed to delete message.');
+  }
+}
+
+export async function unsendMessage(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  try {
+    const result = await unsendOwnMessage(
+      String(req.params.messageId),
+      req.user!._id as Types.ObjectId,
+    );
+    const io = req.app.get('io') as SocketIOServer | undefined;
+    for (const participantId of result.participantIds) {
+      io?.to(participantId).emit('message_unsent', {
+        messageId: result.messageId,
+        conversationId: result.conversationId,
+        unsentAt: result.unsentAt,
+      });
+    }
+    res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    respondConversationError(res, error, 'Failed to unsend message.');
   }
 }
 
