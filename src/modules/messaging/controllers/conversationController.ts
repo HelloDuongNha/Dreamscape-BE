@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { Types } from 'mongoose';
+import type { Server as SocketIOServer } from 'socket.io';
 import { parseConversationSearchRequest } from '../dto/conversation.dto';
 import {
   deleteParticipantConversation,
@@ -10,6 +11,10 @@ import {
   loadConversationMessages,
   loadUserConversations,
 } from '../services/conversation/conversationRead.service';
+import {
+  deliverOutgoingMessage,
+  MessageDeliveryError,
+} from '../services/message/messageDelivery.service';
 
 export async function getConversations(
   req: Request,
@@ -32,6 +37,27 @@ export async function getMessages(req: Request, res: Response): Promise<void> {
     res.status(200).json({ success: true, data });
   } catch (error) {
     respondConversationError(res, error, 'Failed to fetch messages.');
+  }
+}
+
+export async function sendConversationMessage(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  try {
+    const delivery = await deliverOutgoingMessage(String(req.user!._id), {
+      conversationId: String(req.params.conversationId),
+      content: req.body?.content,
+      tempId: req.body?.tempId,
+      clientMessageId: req.body?.clientMessageId,
+    });
+    const io = req.app.get('io') as SocketIOServer | undefined;
+    if (io && delivery.recipientId) {
+      io.to(delivery.recipientId).emit('receive_message', delivery.recipientPayload);
+    }
+    res.status(201).json({ success: true, data: delivery.senderPayload });
+  } catch (error) {
+    respondConversationError(res, error, 'Failed to send message.');
   }
 }
 
@@ -81,6 +107,13 @@ function respondConversationError(
     res.status(error.statusCode).json({
       success: false,
       message: error.message,
+    });
+    return;
+  }
+  if (error instanceof MessageDeliveryError) {
+    res.status(400).json({
+      success: false,
+      ...error.clientPayload,
     });
     return;
   }

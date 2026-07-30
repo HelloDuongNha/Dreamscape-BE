@@ -89,6 +89,11 @@ export async function inspectPdfRemotely(
       RemotePdfInspectionResponse & { detail?: string; error?: string }
     ) | null;
     if (!response.ok || !payload?.probe) {
+      if (response.status === 404) {
+        throw new Error(
+          'Docling worker chưa cung cấp endpoint /inspect. Hãy cập nhật và restart worker đang chạy.',
+        );
+      }
       throw new Error(
         payload?.detail
         || payload?.error
@@ -284,8 +289,17 @@ function safeExtension(fileName?: string, format?: string): string {
 }
 
 function getRemoteUrl(): string | null {
-  const value = process.env.DOCLING_WORKER_URL?.trim().replace(/\/+$/, '');
-  return value || null;
+  const value = process.env.DOCLING_WORKER_URL?.trim();
+  if (!value) return null;
+  try {
+    const parsed = new URL(value);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+    // Worker routes (/health, /inspect, /extract) are mounted at the origin.
+    // Ignore an accidental /api suffix copied from the public backend URL.
+    return parsed.origin;
+  } catch {
+    return null;
+  }
 }
 
 function getRemoteToken(): string | null {

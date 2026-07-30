@@ -3,6 +3,7 @@ import authMiddleware from '../middleware/authMiddleware';
 import {
   getConversations,
   getMessages,
+  sendConversationMessage,
   searchOrCreateConversation,
   deleteConversation,
 } from '../modules/messaging/controllers/conversationController';
@@ -154,6 +155,7 @@ router.post('/search', searchOrCreateConversation);
  *         description: Unauthorized
  */
 router.get('/messages/:conversationId', getMessages);
+router.post('/messages/:conversationId', sendConversationMessage);
 
 /**
  * @swagger
