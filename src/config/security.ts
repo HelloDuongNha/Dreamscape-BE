@@ -31,6 +31,12 @@ export function buildCorsOptions(): CorsOptions {
 // Trust proxy headers only when deployment explicitly declares its proxy depth.
 export function configureTrustedProxy(app: Application): void {
   const raw = process.env.TRUST_PROXY?.trim();
+  if (!raw && process.env.RENDER?.trim().toLowerCase() === 'true') {
+    // Render terminates public traffic at one trusted proxy hop. Without this,
+    // every visitor shares the proxy IP and therefore the same rate-limit key.
+    app.set('trust proxy', 1);
+    return;
+  }
   if (!raw) return;
   if (/^\d+$/u.test(raw)) {
     app.set('trust proxy', Number.parseInt(raw, 10));
@@ -56,21 +62,30 @@ export const rateLimitPolicies = {
     scope: 'auth-login',
     limit: positiveInteger(process.env.RATE_LIMIT_LOGIN_MAX, 10),
     windowMs: positiveInteger(process.env.RATE_LIMIT_LOGIN_WINDOW_MS, 15 * 60_000),
+    keyBy: 'ip-and-email' as const,
+  },
+  googleAuth: {
+    scope: 'auth-google',
+    limit: positiveInteger(process.env.RATE_LIMIT_GOOGLE_AUTH_MAX, 30),
+    windowMs: positiveInteger(process.env.RATE_LIMIT_GOOGLE_AUTH_WINDOW_MS, 15 * 60_000),
   },
   register: {
     scope: 'auth-register',
     limit: positiveInteger(process.env.RATE_LIMIT_REGISTER_MAX, 20),
     windowMs: positiveInteger(process.env.RATE_LIMIT_REGISTER_WINDOW_MS, 15 * 60_000),
+    keyBy: 'ip-and-email' as const,
   },
   otp: {
     scope: 'auth-otp',
     limit: positiveInteger(process.env.RATE_LIMIT_OTP_MAX, 15),
     windowMs: positiveInteger(process.env.RATE_LIMIT_OTP_WINDOW_MS, 15 * 60_000),
+    keyBy: 'ip-and-email' as const,
   },
   recovery: {
     scope: 'auth-recovery',
     limit: positiveInteger(process.env.RATE_LIMIT_RECOVERY_MAX, 10),
     windowMs: positiveInteger(process.env.RATE_LIMIT_RECOVERY_WINDOW_MS, 30 * 60_000),
+    keyBy: 'ip-and-email' as const,
   },
   ai: {
     scope: 'ai-generation',

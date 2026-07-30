@@ -7,6 +7,7 @@ export interface RateLimitPolicy {
   scope: string;
   limit: number;
   windowMs: number;
+  keyBy?: 'ip' | 'ip-and-email';
 }
 
 interface RateLimitState {
@@ -33,7 +34,7 @@ export function createRateLimitMiddleware(policy: RateLimitPolicy): RequestHandl
       return;
     }
 
-    const key = buildRateLimitKey(policy.scope, req.ip || req.socket.remoteAddress || 'unknown');
+    const key = buildRateLimitKey(policy.scope, requestIdentity(req, policy));
     const state = await consumeWindow(key, policy);
     const remaining = Math.max(0, policy.limit - state.count);
     const retryAfterSeconds = Math.max(1, Math.ceil((state.resetAt - Date.now()) / 1000));
@@ -55,6 +56,15 @@ export function createRateLimitMiddleware(policy: RateLimitPolicy): RequestHandl
       retryAfterSeconds,
     });
   };
+}
+
+function requestIdentity(req: Request, policy: RateLimitPolicy): string {
+  const ipAddress = req.ip || req.socket.remoteAddress || 'unknown';
+  if (policy.keyBy !== 'ip-and-email') return ipAddress;
+  const email = typeof req.body?.email === 'string'
+    ? req.body.email.trim().toLowerCase()
+    : 'email-unavailable';
+  return `${ipAddress}:${email}`;
 }
 
 async function consumeWindow(key: string, policy: RateLimitPolicy): Promise<RateLimitState> {
