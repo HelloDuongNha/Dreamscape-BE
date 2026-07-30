@@ -122,23 +122,52 @@ function buildSearchableDreamFilter(
 function buildMoodFilter(level: DreamMoodLevel, prefix = ''): Record<string, unknown> {
   const valenceField = `${prefix}ai_result.emotional_valence`;
   const toneField = `${prefix}ai_result.emotional_tone_key`;
+  const toneLabelField = `${prefix}ai_result.emotional_tone`;
+  const moodTagField = `${prefix}mood_tag`;
   const { valence, legacyTones } = MOOD_FILTERS[level];
-  return {
+  const missingValence = {
     $or: [
-      { [valenceField]: valence },
-      {
-        $and: [
-          {
-            $or: [
-              { [valenceField]: { $exists: false } },
-              { [valenceField]: null },
-            ],
-          },
-          { [toneField]: { $in: legacyTones } },
-        ],
-      },
+      { [valenceField]: { $exists: false } },
+      { [valenceField]: null },
     ],
   };
+  const legacyFallbacks: Record<string, unknown>[] = legacyTones.length
+    ? [{ [toneField]: { $in: legacyTones } }]
+    : [];
+
+  // DreamMoodTag renders an unkeyed legacy label as neutral/mixed. Apply the
+  // same rule in search, but only when a visible label exists; records with no
+  // mood data at all must not appear as mixed-colour results.
+  if (level === 'mixed') {
+    legacyFallbacks.push({
+      $and: [
+        {
+          $or: [
+            { [toneField]: { $exists: false } },
+            { [toneField]: null },
+            { [toneField]: '' },
+          ],
+        },
+        {
+          $or: [
+            { [toneLabelField]: { $type: 'string', $regex: /\S/ } },
+            { [moodTagField]: { $type: 'string', $regex: /\S/ } },
+          ],
+        },
+      ],
+    });
+  }
+
+  const clauses: Record<string, unknown>[] = [{ [valenceField]: valence }];
+  if (legacyFallbacks.length) {
+    clauses.push({
+      $and: [
+        missingValence,
+        { $or: legacyFallbacks },
+      ],
+    });
+  }
+  return { $or: clauses };
 }
 
 async function retrieveTextMatchCandidates(
