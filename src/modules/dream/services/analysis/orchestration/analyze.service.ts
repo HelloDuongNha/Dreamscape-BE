@@ -23,20 +23,18 @@ import {
   type DreamCitationGroundingContext,
 } from '../grounding/dreamCitationGrounding.service';
 import { buildDreamAnalysisResult } from './dreamAnalysisResult.service';
-import {
-  buildDreamProfilePrompt,
-  loadDreamAnalysisProfile,
-} from './dreamAnalysisProfile.service';
 import { buildDreamPromptContext } from './dreamAnalysisPromptContext.service';
 import { retrieveDreamAnalysisContext } from './dreamContextRetrieval.service';
 import { retrieveDreamRuleEvidence } from './dreamRuleEvidence.service';
 
 export type { DreamAnalysisProgress, DreamAnalysisStage } from './dreamAnalysisOrchestration.types';
 
-type DreamProfileData = Awaited<ReturnType<typeof loadDreamAnalysisProfile>>;
 type RetrievedDreamContext = Awaited<ReturnType<typeof retrieveDreamAnalysisContext>>;
 type RetrievedRuleEvidence = Awaited<ReturnType<typeof retrieveDreamRuleEvidence>>;
-type DreamProfilePrompt = ReturnType<typeof buildDreamProfilePrompt>;
+
+const DREAM_ANALYSIS_USER_CONTEXT =
+  'No demographic, zodiac, personality-test, or preset symbolic profile is available. '
+  + 'Use only the current narrative, observed prior cases, similar dreams, and cited knowledge.';
 
 interface DreamAnalysisRequest {
   userId: string;
@@ -57,42 +55,36 @@ export async function runDreamAnalysis(
   const request = { userId, dreamText, sleepContext, abortSignal };
   const report = createProgressReporter(onProgress, abortSignal);
 
-  const profile = await prepareDreamProfile(userId, report);
+  await prepareDreamInput(report);
   const context = await retrieveDreamContext(request, report);
   const rules = await retrieveGroundedRules(context, report);
-  const profilePrompt = buildDreamProfilePrompt(profile);
-  const prompt = buildGroundedPrompt(context, rules, profilePrompt);
-  const analysis = await generateGroundedAnalysis(request, context, rules, profilePrompt, prompt, report);
+  const prompt = buildGroundedPrompt(context, rules);
+  const analysis = await generateGroundedAnalysis(request, context, rules, prompt, report);
 
   return buildDreamAnalysisResult({
-    profile,
     context,
     rules,
-    profilePrompt,
     analysis,
     report,
   });
 }
 
-async function prepareDreamProfile(
-  userId: string,
+async function prepareDreamInput(
   report: DreamAnalysisReporter,
-): Promise<DreamProfileData> {
+): Promise<void> {
   await report(
     'preparing',
     8,
-    'Đang chuẩn bị hồ sơ và ngữ cảnh phân tích...',
-    'Đang đọc hồ sơ và tách phần lời kể cần phân tích.',
+    'Đang chuẩn bị ngữ cảnh phân tích...',
+    'Đang tách phần lời kể cần phân tích.',
   );
-  const profile = await loadDreamAnalysisProfile(userId);
   await report(
     'preparing',
     18,
     'Đã chuẩn bị xong đầu vào phân tích.',
-    'Đã tách lời kể khỏi thông tin khi thức và nạp các tùy chọn cá nhân được cho phép.',
-    'Đã nạp hồ sơ và các lựa chọn cá nhân hóa được người dùng cho phép.',
+    'Đã tách lời kể khỏi thông tin khi thức.',
+    'Chỉ dùng lời kể, các trường hợp đã quan sát và tri thức có nguồn.',
   );
-  return profile;
 }
 
 async function retrieveDreamContext(
@@ -144,7 +136,6 @@ async function retrieveGroundedRules(
 function buildGroundedPrompt(
   context: RetrievedDreamContext,
   rules: RetrievedRuleEvidence,
-  profile: DreamProfilePrompt,
 ): string {
   const promptContext = buildDreamPromptContext({
     retrievedSymbols: context.symbols,
@@ -158,7 +149,7 @@ function buildGroundedPrompt(
     dreamNarrative: context.dreamNarrative,
     wakingContext: context.wakingReactionText,
     sleepContext: context.enrichedSleepContext,
-    profileContext: profile.profileText,
+    profileContext: DREAM_ANALYSIS_USER_CONTEXT,
     evidenceContext: rules.promptEvidenceSection,
     ruleContext: promptContext.compactRulesText,
     recognizedSymbolContext: promptContext.recognizedSymbolText,
@@ -166,7 +157,7 @@ function buildGroundedPrompt(
     observedSymbolContext: promptContext.observedSymbolText,
     similarDreamContext: promptContext.similarDreamText,
     contextualMotifs: context.contextualMotifHints,
-    culturalAnalysisAllowed: profile.culturalProfileUsed,
+    culturalAnalysisAllowed: false,
   });
 }
 
@@ -174,7 +165,6 @@ async function generateGroundedAnalysis(
   request: DreamAnalysisRequest,
   context: RetrievedDreamContext,
   rules: RetrievedRuleEvidence,
-  profile: DreamProfilePrompt,
   prompt: string,
   report: DreamAnalysisReporter,
 ): Promise<ILLMOutput> {
@@ -243,7 +233,7 @@ async function generateGroundedAnalysis(
     questionRules: rules.questionRules,
     validSourcesMap: rules.validSourcesMap,
     validEvidenceMap: rules.validEvidenceMap,
-    culturalProfileUsed: profile.culturalProfileUsed,
+    culturalProfileUsed: false,
     similarDreams: context.similarDreamResult.matches,
   });
   groundDreamCitationClaims(analysis, citationContext);

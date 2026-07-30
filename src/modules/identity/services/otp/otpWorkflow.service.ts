@@ -7,7 +7,6 @@ import {
 import { IOtp } from '../../models/Otp';
 import User, { IUser } from '../../models/User';
 import { AuthenticationClientContext, signIdentityToken } from '../auth/authentication.service';
-import { synchronizeUserDreamProfile } from '../profile/dreamProfileSync.service';
 import { markSessionRecentlyAuthenticated } from '../security/sessionSecurity.service';
 import { parseUserAgent } from '../auth/userAgent.service';
 import {
@@ -177,7 +176,6 @@ async function completeRegistrationVerification(
 
   const sessionId = createInitialSession(user, client);
   await user.save();
-  await synchronizeUserDreamProfile(user, 'initialize');
   await record.deleteOne();
 
   return {

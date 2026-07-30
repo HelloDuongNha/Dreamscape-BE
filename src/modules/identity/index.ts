@@ -3,7 +3,6 @@ export * from './controllers/otp.controller';
 export * from './controllers/profile.controller';
 export * from './controllers/session.controller';
 export * from './controllers/userController';
-export * from './services/profile/profileBuilder.service';
 export * from './services/engagement/rank.service';
 export * from './services/auth/userAgent.service';
 export * from './services/presentation/publicUser.service';

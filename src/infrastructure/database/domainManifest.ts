@@ -15,7 +15,6 @@ export const DATABASE_DOMAIN_COLLECTIONS: Record<DatabaseDomain, readonly string
     'otps',
     'user_achievements',
     'user_contribution_stats',
-    'user_dream_profiles',
     'users',
   ],
   knowledge: [
@@ -60,6 +59,7 @@ export const LEGACY_COLLECTIONS = [
 export const RETIRED_COLLECTIONS = [
   'dreamsymbols',
   'oraclerulefeedbacks',
+  'user_dream_profiles',
 ] as const;
 
 export function domainForCollection(collectionName: string): DatabaseDomain | null {

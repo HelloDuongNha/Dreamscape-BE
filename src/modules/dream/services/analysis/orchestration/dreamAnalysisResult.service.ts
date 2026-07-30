@@ -3,18 +3,12 @@ import {
   DreamAnalysisReporter,
   DreamAnalysisResult,
 } from './dreamAnalysisOrchestration.types';
-import {
-  buildDreamProfilePrompt,
-  loadDreamAnalysisProfile,
-} from './dreamAnalysisProfile.service';
 import { retrieveDreamAnalysisContext } from './dreamContextRetrieval.service';
 import { retrieveDreamRuleEvidence } from './dreamRuleEvidence.service';
 
 interface BuildDreamAnalysisResultInput {
-  profile: Awaited<ReturnType<typeof loadDreamAnalysisProfile>>;
   context: Awaited<ReturnType<typeof retrieveDreamAnalysisContext>>;
   rules: Awaited<ReturnType<typeof retrieveDreamRuleEvidence>>;
-  profilePrompt: ReturnType<typeof buildDreamProfilePrompt>;
   analysis: ILLMOutput;
   report: DreamAnalysisReporter;
 }
@@ -38,11 +32,6 @@ export async function buildDreamAnalysisResult(
     matchedVariants: symbol.matchedVariants,
     matchedTextVariant: symbol.matchedTextVariant,
   }));
-  const measuredPsychologicalProfileUsed =
-    input.profile.measuredPsychologicalProfile.bigFive.enabled === true
-    || input.profile.measuredPsychologicalProfile.chronotype.enabled === true
-    || input.profile.measuredPsychologicalProfile.schemas.enabled === true;
-
   await input.report(
     'finalizing',
     96,
@@ -69,18 +58,6 @@ export async function buildDreamAnalysisResult(
           embeddingModel: process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text',
           retrievalStrategy: input.context.strategyUsed,
           vectorBackend: input.context.vectorBackend,
-        },
-      },
-      componentB: {
-        usedProfileFields: {
-          culturalProfileUsed: input.profilePrompt.culturalProfileUsed,
-          measuredPsychologicalProfileUsed,
-          learnedPersonalPatternUsed: input.context.personalSymbolPatterns.length > 0,
-          ...(!input.profilePrompt.culturalProfileUsed ? {
-            reason: input.profilePrompt.hasBirthProfile
-              ? 'cultural_sources_unavailable'
-              : 'missing_birth_profile',
-          } : {}),
         },
       },
       componentC: {

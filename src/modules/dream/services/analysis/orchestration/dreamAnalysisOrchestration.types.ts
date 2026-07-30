@@ -52,14 +52,6 @@ export interface DreamAnalysisResult {
         vectorBackend: string;
       };
     };
-    componentB: {
-      usedProfileFields: {
-        culturalProfileUsed: boolean;
-        measuredPsychologicalProfileUsed: boolean;
-        learnedPersonalPatternUsed: boolean;
-        reason?: string;
-      };
-    };
     componentC: {
       similarDreams: SimilarDreamMatch[];
       personalSymbolPatterns: Array<{ symbol: string; occurrences: number; recentMeaning: string }>;

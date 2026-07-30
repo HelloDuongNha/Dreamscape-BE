@@ -11,4 +11,3 @@ export * from './controllers/dreamRead.controller';
 export * from './controllers/dreamUpdate.controller';
 export { default as Dream } from './models/Dream';
 export { default as DreamSymbolObservation } from './models/DreamSymbolObservation';
-export { default as UserDreamProfile } from './models/UserDreamProfile';

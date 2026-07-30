@@ -1,7 +1,6 @@
 import mongoose from 'mongoose';
 import { UpdateProfileRequestDto } from '../../dto/profile.dto';
 import User from '../../models/User';
-import { synchronizeUserDreamProfile } from './dreamProfileSync.service';
 
 export class ProfileUpdateError extends Error {
   constructor(
@@ -32,7 +31,6 @@ export async function updateIdentityProfile(
   applyPersonalDetails(user, input);
 
   await user.save();
-  await synchronizeUserDreamProfile(user, 'refresh');
   return user;
 }
 
