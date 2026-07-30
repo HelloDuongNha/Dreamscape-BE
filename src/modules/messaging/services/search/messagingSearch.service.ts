@@ -10,7 +10,7 @@ import {
   readConversationPreview,
 } from '../message/messagePersistence.service';
 
-const USER_PUBLIC = 'username display_name avatar bio lastHeartbeatAt';
+const USER_PUBLIC = 'username display_name avatar bio lastHeartbeatAt streakCount';
 const MAX_MESSAGE_RESULTS = 50;
 
 export interface MessagingConversationSearchResult {
@@ -50,6 +50,7 @@ function publicUser(user: any): Record<string, unknown> {
     display_name: String(user?.display_name ?? ''),
     avatar: String(user?.avatar ?? ''),
     bio: String(user?.bio ?? ''),
+    streakCount: Number(user?.streakCount) || 0,
   };
 }
 

@@ -1,10 +1,10 @@
 import type { Request, Response } from 'express';
 import { parsePdfImportOptions } from '../dto/pdfSource.dto';
-import {
-  cancelUploadedPdfImport,
-  runUploadedPdfImport,
-} from '../services/ingestion/pdf/uploadedPdfImport.service';
 import { getPdfImportProgress } from '../services/ingestion/pdf/pdfImportProgress.service';
+import {
+  cancelDispatchedPdfImport,
+  dispatchUploadedPdfImport,
+} from '../services/ingestion/pdf/uploadedPdfImportDispatch.service';
 
 type PdfImportTarget = 'approved_source' | 'contribution';
 
@@ -29,7 +29,7 @@ async function cancelImport(
   req: Request,
   res: Response,
 ): Promise<void> {
-  const cancelled = await cancelUploadedPdfImport(targetType, req.params.id as string);
+  const cancelled = await cancelDispatchedPdfImport(targetType, req.params.id as string);
   if (!cancelled) {
     res.status(409).json({ success: false, message: 'Tác vụ nhập PDF không còn chạy.' });
     return;
@@ -45,13 +45,19 @@ async function processImport(
 ): Promise<void> {
   try {
     const options = parsePdfImportOptions(req.body);
-    const result = await runUploadedPdfImport({
+    const result = await dispatchUploadedPdfImport({
       targetType,
       targetId: req.params.id as string,
       ...options,
       userId: req.user?._id,
     });
-    res.status(200).json(result);
+    res.status(202).json({
+      success: true,
+      ...result,
+      message: result.reused
+        ? 'Tác vụ nhập PDF này đang được xử lý.'
+        : 'Đã đưa tác vụ nhập PDF vào hàng xử lý.',
+    });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message || fallbackMessage });
   }

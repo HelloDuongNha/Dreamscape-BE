@@ -15,6 +15,11 @@ import {
   createDoclingRunDirectory,
   validateDoclingArtifactPath,
 } from './doclingWorkspace.service';
+import {
+  extractPdfRemotely,
+  hasRemoteDoclingConfiguration,
+  probeRemoteDocling,
+} from './doclingRemoteClient.service';
 
 export interface DoclingRunResult {
   result: DoclingExtractionResult;
@@ -24,6 +29,7 @@ export interface DoclingRunResult {
 
 export class DoclingClientService {
   public static async isAvailable(): Promise<boolean> {
+    if (hasRemoteDoclingConfiguration()) return probeRemoteDocling();
     return isDoclingAvailable();
   }
 
@@ -32,6 +38,9 @@ export class DoclingClientService {
     doOcr: boolean = false,
     abortSignal?: AbortSignal,
   ): Promise<DoclingRunResult> {
+    if (hasRemoteDoclingConfiguration()) {
+      return extractPdfRemotely(pdfPath, doOcr, abortSignal);
+    }
     const pythonBin = getDoclingPythonBin();
     const noopCleanup = async () => {};
 

@@ -8,6 +8,7 @@ import AcademicSource from '../../models/AcademicSource';
 import {
   createOriginalPdfReadStream,
   hasStoredOriginalPdf,
+  originalPdfAssetExists,
 } from './originalPdfStorage.service';
 
 export interface ApprovedSourceDocumentStatus {
@@ -88,6 +89,15 @@ export async function resolveApprovedSourceDocument(id: string): Promise<Approve
   if (!source) return null;
 
   if (hasStoredOriginalPdf(source.originalFile)) {
+    const exists = await originalPdfAssetExists(source.originalFile!);
+    if (!exists) {
+      return {
+        canEmbed: false,
+        hasPdf: false,
+        sourceKind: 'stored_pdf_missing',
+        message: 'Tham chiếu PDF gốc còn tồn tại nhưng tệp đã mất khỏi kho lưu trữ.',
+      };
+    }
     return {
       viewUrl: `/sources/approved/${source._id}/pdf-inline`,
       canEmbed: true,
@@ -145,6 +155,13 @@ export async function openApprovedSourcePdf(id: string): Promise<ApprovedSourceP
         filename: source.originalFile?.originalFileName || 'document.pdf',
       };
     } catch (error: any) {
+      if (String(error?.message || '').includes('không còn tồn tại')) {
+        throw new ApprovedSourceDocumentError(
+          404,
+          'Tệp PDF gốc không còn tồn tại trong kho lưu trữ.',
+          'ORIGINAL_PDF_MISSING',
+        );
+      }
       if ((source as any).pmcid) {
         throw new ApprovedSourceDocumentError(
           400,

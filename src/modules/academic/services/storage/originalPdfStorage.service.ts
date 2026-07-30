@@ -5,6 +5,7 @@ import {
   createFirebasePdfReadStream,
   deleteFirebasePdf,
   downloadFirebasePdf,
+  firebasePdfExists,
   uploadFirebasePdf,
 } from '../../../../infrastructure/storage/firebasePdfStorage.service';
 
@@ -53,6 +54,18 @@ export async function createOriginalPdfReadStream(file: OriginalPdfReference): P
     return Readable.fromWeb(response.body as any);
   }
   throw new Error('Tài liệu không có tệp PDF gốc hợp lệ trong kho lưu trữ.');
+}
+
+export async function originalPdfAssetExists(file: OriginalPdfReference): Promise<boolean> {
+  if (file.storageProvider === 'firebase'
+    && file.firebaseStorageBucket
+    && file.firebaseStoragePath) {
+    return firebasePdfExists(file.firebaseStorageBucket, file.firebaseStoragePath);
+  }
+  if (file.storageProvider === 'cloudinary' && file.cloudinaryPublicId) {
+    return true;
+  }
+  return false;
 }
 
 export async function deleteOriginalPdfAsset(file?: OriginalPdfReference | null): Promise<void> {

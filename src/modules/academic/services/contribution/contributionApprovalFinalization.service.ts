@@ -9,6 +9,7 @@ import AcademicDocument from '../../models/AcademicDocument';
 import { IAcademicSource } from '../../models/AcademicSource';
 import AcademicSection from '../../models/AcademicSection';
 import { importFullTextForSource } from '../source/fullTextImport.service';
+import { hasStoredOriginalPdf } from '../storage/originalPdfStorage.service';
 
 async function promotePreview(
   academicSource: IAcademicSource,
@@ -52,6 +53,7 @@ export async function finalizeApprovedSource(
   prepared: PreparedApprovalContext,
   reviewerId: Types.ObjectId,
 ): Promise<ApprovalOutcome> {
+  const hasOriginalPdf = hasStoredOriginalPdf(academicSource.originalFile);
   if (prepared.previewDocument) {
     await promotePreview(academicSource, prepared.contribution, reviewerId);
     return {
@@ -59,7 +61,8 @@ export async function finalizeApprovedSource(
       warning: false,
     };
   }
-  if (prepared.metadata.openAccessStatus === 'hybrid') {
+  if (!prepared.uploadedPdf && !hasOriginalPdf
+    && prepared.metadata.openAccessStatus === 'hybrid') {
     return {
       message: 'Hybrid Open Access metadata saved. Full text import is available only if a direct public PDF/HTML URL exists.',
       warning: true,
@@ -67,7 +70,10 @@ export async function finalizeApprovedSource(
     };
   }
   if (academicSource.allowedUse !== 'open_access_fulltext'
-    || (!academicSource.pdfUrl && !academicSource.url && !academicSource.fullTextUrl)) {
+    || (!hasOriginalPdf
+      && !academicSource.pdfUrl
+      && !academicSource.url
+      && !academicSource.fullTextUrl)) {
     return {
       message: 'Nguồn đã được duyệt, nhưng chưa có toàn văn để nhập.',
       warning: true,

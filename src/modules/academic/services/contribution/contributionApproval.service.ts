@@ -18,6 +18,10 @@ import {
   startAutomaticRuleV3Extraction,
   type AutomaticRuleExtractionStart,
 } from '../../../rules_v3/services/extraction/ruleV3AutomaticExtraction.service';
+import {
+  hasStoredOriginalPdf,
+  originalPdfAssetExists,
+} from '../storage/originalPdfStorage.service';
 
 export type ContributionApprovalResult =
   | { status: 200; body: Record<string, unknown> }
@@ -33,6 +37,10 @@ export async function approveSourceContribution(
   previousStatus: string,
 ): Promise<ContributionApprovalResult> {
   if (await findDuplicateSource(contribution)) return duplicateApprovalResult();
+  if (contribution.sourceOrigin === 'uploaded_pdf'
+    && !await hasValidUploadedPdf(contribution)) {
+    return missingUploadedPdfResult();
+  }
 
   const prepared = await prepareContribution(contribution, title);
   const academicSource = createAcademicSource(contribution, prepared);
@@ -55,6 +63,16 @@ export async function approveSourceContribution(
   const ruleExtraction = await startRuleExtractionBestEffort(academicSource);
   await reconcileEvidenceGapsBestEffort(academicSource, contribution);
   return buildApprovalResult(contribution, academicSource, outcome, ruleExtraction);
+}
+
+async function hasValidUploadedPdf(contribution: ApprovalContribution): Promise<boolean> {
+  if (!hasStoredOriginalPdf(contribution.originalFile)) return false;
+  try {
+    return await originalPdfAssetExists(contribution.originalFile!);
+  } catch (error) {
+    console.error('Failed to verify uploaded PDF before approval:', error);
+    return false;
+  }
 }
 
 // Keep the reviewed scholarly title authoritative after reader promotion or import.
@@ -167,6 +185,17 @@ function duplicateApprovalResult(): ContributionApprovalResult {
     body: {
       success: false,
       message: 'An academic source with the same contribution ID, DOI, or URL already exists.',
+    },
+  };
+}
+
+function missingUploadedPdfResult(): ContributionApprovalResult {
+  return {
+    status: 409,
+    body: {
+      success: false,
+      code: 'UPLOADED_PDF_REFERENCE_MISSING',
+      message: 'Tài liệu PDF đã tải lên không còn tham chiếu tệp gốc hợp lệ. Hãy tải lại PDF trước khi duyệt.',
     },
   };
 }

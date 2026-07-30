@@ -5,6 +5,7 @@ import {
   JoinConversationPayload,
   MarkAsSeenPayload,
   MessageDeliveredPayload,
+  SendMessageAcknowledgement,
   SendMessagePayload,
 } from '../../dto/realtime.dto';
 import {
@@ -69,7 +70,10 @@ function registerSendMessageHandler(
   socket: AuthenticatedMessagingSocket,
   userId: string,
 ): void {
-  socket.on('send_message', async (payload: SendMessagePayload) => {
+  socket.on('send_message', async (
+    payload: SendMessagePayload,
+    acknowledge?: (result: SendMessageAcknowledgement) => void,
+  ) => {
     try {
       const delivery = await deliverOutgoingMessage(userId, payload);
       if (delivery.recipientId) {
@@ -79,6 +83,10 @@ function registerSendMessageHandler(
         );
       }
       socket.emit('receive_message', delivery.senderPayload);
+      acknowledge?.({
+        success: true,
+        data: delivery.senderPayload,
+      });
       logger.info('Encrypted message persisted and delivered.', {
         userId,
         conversationId: delivery.conversationId,
@@ -86,17 +94,28 @@ function registerSendMessageHandler(
       });
     } catch (error) {
       if (error instanceof MessageDeliveryError) {
-        socket.emit('error_message', error.clientPayload);
+        const clientPayload: Record<string, unknown> = {
+          ...error.clientPayload,
+          tempId: payload?.tempId,
+        };
+        acknowledge?.({
+          success: false,
+          code: String(clientPayload.code || 'message_send_failed'),
+          message: String(clientPayload.message || error.message),
+        });
+        socket.emit('error_message', clientPayload);
         return;
       }
       logger.error('Messaging send failed.', error, {
         userId,
         conversationId: payload?.conversationId,
       });
-      socket.emit('error_message', {
+      const failure = {
         code: 'message_send_failed',
         tempId: payload?.tempId,
-      });
+      };
+      acknowledge?.({ success: false, code: failure.code });
+      socket.emit('error_message', failure);
     }
   });
 }

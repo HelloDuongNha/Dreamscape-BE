@@ -83,6 +83,12 @@ export async function createFirebasePdfReadStream(bucketName: string, objectPath
   return file.createReadStream({ validation: true });
 }
 
+export async function firebasePdfExists(bucketName: string, objectPath: string): Promise<boolean> {
+  if (!bucketName || !objectPath) return false;
+  const [exists] = await getFirebaseStorage().bucket(bucketName).file(objectPath).exists();
+  return exists;
+}
+
 export async function deleteFirebasePdf(bucketName: string, objectPath: string): Promise<void> {
   if (!bucketName || !objectPath) return;
   await getFirebaseStorage().bucket(bucketName).file(objectPath).delete({ ignoreNotFound: true });

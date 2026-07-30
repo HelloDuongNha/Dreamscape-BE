@@ -9,6 +9,7 @@ import mongoose, { Document, Schema, Types } from 'mongoose';
 export interface IMessage extends Document {
   conversationId: Types.ObjectId; // FK → Conversation._id
   senderId: Types.ObjectId; // FK → User._id
+  clientMessageId?: string;
   content?: string;
   ciphertext?: string;
   iv?: string;
@@ -33,6 +34,11 @@ const MessageSchema = new Schema<IMessage>(
       type: Schema.Types.ObjectId,
       ref: 'User',
       required: [true, 'senderId is required'],
+    },
+    clientMessageId: {
+      type: String,
+      trim: true,
+      maxlength: [128, 'clientMessageId must not exceed 128 characters'],
     },
     content: {
       type: String,
@@ -68,6 +74,13 @@ const MessageSchema = new Schema<IMessage>(
 // Leading conversationId covers single-field lookups too.
 MessageSchema.index({ conversationId: 1, timestamp: 1 });
 MessageSchema.index({ conversationId: 1, searchKeyVersion: 1, searchTokens: 1 });
+MessageSchema.index(
+  { senderId: 1, clientMessageId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { clientMessageId: { $type: 'string' } },
+  },
+);
 
 // ─── Model Export ─────────────────────────────────────────────────────────────
 

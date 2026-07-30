@@ -2,6 +2,7 @@ import AcademicSource from '../../../models/AcademicSource';
 import SourceContribution from '../../../models/SourceContribution';
 
 export type PdfImportStage =
+  | 'queued'
   | 'received'
   | 'inspecting_text'
   | 'ocr_processing'
@@ -35,9 +36,32 @@ export interface PdfImportProgressState {
   timingDeltaSeconds?: number;
   failureCode?: string;
   failureMessage?: string;
+  result?: PdfImportTerminalResult;
+  queuePosition?: number;
+}
+
+export interface PdfImportTerminalResult {
+  success: boolean;
+  cancelled?: boolean;
+  readerCreated: boolean;
+  requiresOcr: boolean;
+  selectedSource: 'jats' | 'html' | 'pdf_text' | 'docling_pdf' | 'none';
+  metadataEnriched: boolean;
+  resolvedTitle?: string;
+  detectedIdentifiers?: { doi?: string; isbn?: string; pmcid?: string };
+  message: string;
 }
 
 type TargetType = 'contribution' | 'approved_source';
+const ACTIVE_PDF_IMPORT_STAGES: PdfImportStage[] = [
+  'queued',
+  'received',
+  'inspecting_text',
+  'ocr_processing',
+  'parsing_layout',
+  'cleaning_ocr',
+  'compiling_reader',
+];
 
 function modelFor(targetType: TargetType): any {
   return targetType === 'contribution' ? SourceContribution : AcademicSource;
@@ -134,6 +158,15 @@ export async function startPdfImportProgress(
   targetId: string,
 ): Promise<PdfImportProgressState> {
   const model = modelFor(targetType);
+  const progress = await buildInitialPdfImportProgress(model, targetId);
+  await model.updateOne({ _id: targetId }, { $set: { pdfImportProgress: progress } });
+  return progress;
+}
+
+async function buildInitialPdfImportProgress(
+  model: any,
+  targetId: string,
+): Promise<PdfImportProgressState> {
   const target = await model
     .findById(targetId)
     .select('pdfImportHistory pdfPageCount extractionMethod originalFile.fileSize')
@@ -161,7 +194,6 @@ export async function startPdfImportProgress(
     fileSizeBytes,
     ocrExpected,
   };
-  await model.updateOne({ _id: targetId }, { $set: { pdfImportProgress: progress } });
   return progress;
 }
 
@@ -169,7 +201,7 @@ export async function updatePdfImportProgress(
   targetType: TargetType,
   targetId: string,
   stage: PdfImportStage,
-  patch: Partial<Pick<PdfImportProgressState, 'pageCount' | 'ocrExpected' | 'expectedDurationSeconds'>> = {},
+  patch: Partial<Pick<PdfImportProgressState, 'pageCount' | 'ocrExpected' | 'expectedDurationSeconds' | 'queuePosition'>> = {},
 ): Promise<void> {
   const set: Record<string, unknown> = {
     'pdfImportProgress.stage': stage,
@@ -179,6 +211,28 @@ export async function updatePdfImportProgress(
     if (value !== undefined) set[`pdfImportProgress.${key}`] = value;
   }
   await modelFor(targetType).updateOne({ _id: targetId }, { $set: set });
+}
+
+export async function queuePdfImportProgress(
+  targetType: TargetType,
+  targetId: string,
+  queuePosition: number,
+): Promise<boolean> {
+  const model = modelFor(targetType);
+  const progress = await buildInitialPdfImportProgress(model, targetId);
+  progress.stage = 'queued';
+  progress.queuePosition = queuePosition;
+  const claimed = await model.updateOne(
+    {
+      _id: targetId,
+      $or: [
+        { 'pdfImportProgress.stage': { $exists: false } },
+        { 'pdfImportProgress.stage': { $nin: ACTIVE_PDF_IMPORT_STAGES } },
+      ],
+    },
+    { $set: { pdfImportProgress: progress } },
+  );
+  return claimed.modifiedCount === 1;
 }
 
 export async function finishPdfImportProgress(
@@ -260,4 +314,54 @@ export async function cancelPdfImportProgress(
       },
     },
   );
+}
+
+export async function recordPdfImportTerminalResult(
+  targetType: TargetType,
+  targetId: string,
+  result: PdfImportTerminalResult,
+): Promise<void> {
+  await modelFor(targetType).updateOne(
+    { _id: targetId },
+    {
+      $set: {
+        'pdfImportProgress.result': result,
+        'pdfImportProgress.updatedAt': new Date(),
+      },
+    },
+  );
+}
+
+export async function recoverInterruptedPdfImports(): Promise<number> {
+  const now = new Date();
+  const failureMessage = 'Tác vụ nhập PDF bị gián đoạn khi máy chủ khởi động lại. PDF gốc vẫn được giữ; bạn có thể thử lại.';
+  const update = {
+    $set: {
+      'pdfImportProgress.stage': 'failed',
+      'pdfImportProgress.updatedAt': now,
+      'pdfImportProgress.completedAt': now,
+      'pdfImportProgress.failureCode': 'PDF_IMPORT_INTERRUPTED',
+      'pdfImportProgress.failureMessage': failureMessage,
+      'pdfImportProgress.queuePosition': 0,
+      'pdfImportProgress.result': {
+        success: false,
+        readerCreated: false,
+        requiresOcr: false,
+        selectedSource: 'none',
+        metadataEnriched: false,
+        message: failureMessage,
+      },
+    },
+  };
+  const [contributions, sources] = await Promise.all([
+    SourceContribution.updateMany(
+      { 'pdfImportProgress.stage': { $in: ACTIVE_PDF_IMPORT_STAGES } },
+      update,
+    ),
+    AcademicSource.updateMany(
+      { 'pdfImportProgress.stage': { $in: ACTIVE_PDF_IMPORT_STAGES } },
+      update,
+    ),
+  ]);
+  return contributions.modifiedCount + sources.modifiedCount;
 }

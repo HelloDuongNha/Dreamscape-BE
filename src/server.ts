@@ -7,6 +7,7 @@ import { recoverInterruptedReaderReplacements } from './modules/academic/service
 import { recoverIncompleteRuleV3Replacements } from './modules/rules_v3/services/lifecycle/ruleV3ReplacementJournal.service';
 import { runBackgroundAnalysis } from './modules/dream/services/analysis/execution/dreamAnalysisRunner.service';
 import { recoverPendingDreamAnalysisQueue } from './modules/dream/services/analysis/execution/dreamAnalysisRecovery.service';
+import { recoverInterruptedPdfImports } from './modules/academic/services/ingestion/pdf/pdfImportProgress.service';
 import {
   assertMessagingSecurityConfigured,
 } from './modules/messaging/services/crypto/messagingCrypto.service';
@@ -26,6 +27,10 @@ const startServer = async (): Promise<void> => {
   await connectDB();
   await initializeRedis();
   await recoverInterruptedReaderReplacements();
+  const interruptedPdfImports = await recoverInterruptedPdfImports();
+  if (interruptedPdfImports > 0) {
+    console.warn(`Recovered ${interruptedPdfImports} interrupted PDF import task(s) as failed.`);
+  }
   await recoverIncompleteRuleV3Replacements();
   await recoverPendingDreamAnalysisQueue(runBackgroundAnalysis);
 

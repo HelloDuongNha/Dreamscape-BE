@@ -16,16 +16,29 @@ export interface PlainMessage {
   timestamp: Date;
   status: 'sent' | 'delivered' | 'seen';
   content_unavailable?: boolean;
+  deduplicated?: boolean;
 }
 
 export async function persistEncryptedMessage(input: {
   conversationId: Types.ObjectId;
   senderId: Types.ObjectId;
   content: string;
+  clientMessageId?: string;
 }): Promise<PlainMessage> {
   const content = input.content.normalize('NFKC').trim();
   if (!content || content.length > 2000) {
     throw new Error('Message content must contain between 1 and 2000 characters.');
+  }
+  const clientMessageId = normalizeClientMessageId(input.clientMessageId);
+  if (clientMessageId) {
+    const existing = await Message.findOne({
+      senderId: input.senderId,
+      clientMessageId,
+    });
+    if (existing) {
+      assertSameConversation(existing.conversationId, input.conversationId);
+      return { ...presentMessage(existing), deduplicated: true };
+    }
   }
 
   const messageId = new Types.ObjectId();
@@ -45,15 +58,25 @@ export async function persistEncryptedMessage(input: {
   });
   const timestamp = new Date();
 
-  const message = await Message.create({
-    _id: messageId,
-    conversationId: input.conversationId,
-    senderId: input.senderId,
-    ...contentEnvelope,
-    searchTokens: search.tokens,
-    searchKeyVersion: search.keyVersion,
-    timestamp,
-  });
+  let message;
+  try {
+    message = await Message.create({
+      _id: messageId,
+      conversationId: input.conversationId,
+      senderId: input.senderId,
+      clientMessageId,
+      ...contentEnvelope,
+      searchTokens: search.tokens,
+      searchKeyVersion: search.keyVersion,
+      timestamp,
+    });
+  } catch (error: any) {
+    if (error?.code !== 11000 || !clientMessageId) throw error;
+    const existing = await Message.findOne({ senderId: input.senderId, clientMessageId });
+    if (!existing) throw error;
+    assertSameConversation(existing.conversationId, input.conversationId);
+    return { ...presentMessage(existing), deduplicated: true };
+  }
 
   try {
     await Conversation.findByIdAndUpdate(input.conversationId, {
@@ -80,6 +103,21 @@ export async function persistEncryptedMessage(input: {
     timestamp: message.timestamp,
     status: message.status,
   };
+}
+
+function assertSameConversation(actual: unknown, expected: Types.ObjectId): void {
+  if (String(actual) !== String(expected)) {
+    throw new Error('clientMessageId is already bound to another conversation.');
+  }
+}
+
+function normalizeClientMessageId(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (!normalized) return undefined;
+  if (!/^[a-zA-Z0-9:_-]{1,128}$/u.test(normalized)) {
+    throw new Error('clientMessageId is invalid.');
+  }
+  return normalized;
 }
 
 export function presentMessage(document: any): PlainMessage {

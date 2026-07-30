@@ -9,6 +9,7 @@ import AcademicSource, {
 } from '../../models/AcademicSource';
 import { sanitizeAcademicSourceData } from '../source/sourceSanitizer';
 import { loadContributionReaderStats } from './contributionReaderStats.service';
+import { hasStoredOriginalPdf } from '../storage/originalPdfStorage.service';
 
 // Normalize contribution data and prepare its reader state for approval.
 export async function prepareContribution(
@@ -124,10 +125,12 @@ function applyReaderAccess(
   hasPreviewDocument: boolean,
 ): void {
   contribution.allowedUse = 'open_access_fulltext';
-  contribution.readableInApp = true;
   contribution.fullTextStatus = hasPreviewDocument
     ? 'imported'
-    : contribution.fullTextStatus || 'available';
+    : contribution.fullTextStatus === 'imported'
+      ? 'imported'
+      : 'available';
+  contribution.readableInApp = contribution.fullTextStatus === 'imported';
   contribution.fullTextSourceType = uploadedPdf
     ? 'pdf'
     : contribution.fullTextSourceType || 'unknown';
@@ -191,11 +194,7 @@ function asMetadata(value: unknown): Record<string, unknown> {
 }
 
 function hasUploadedPdf(contribution: ApprovalContribution): boolean {
-  return Boolean(
-    contribution.originalFile
-    && (contribution.originalFile.originalFileName
-      || contribution.originalFile.cloudinarySecureUrl),
-  );
+  return hasStoredOriginalPdf(contribution.originalFile);
 }
 
 function isCloudinaryUrl(url: string): boolean {

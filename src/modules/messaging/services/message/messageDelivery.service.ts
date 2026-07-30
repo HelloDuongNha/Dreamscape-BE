@@ -25,6 +25,7 @@ export async function deliverOutgoingMessage(
     !Types.ObjectId.isValid(conversationId)
   ) {
     throw new MessageDeliveryError('Invalid send_message payload.', {
+      code: 'invalid_message_payload',
       message: 'Invalid send_message payload.',
     });
   }
@@ -36,7 +37,10 @@ export async function deliverOutgoingMessage(
   if (!conversation) {
     throw new MessageDeliveryError(
       'Not a participant in this conversation.',
-      { message: 'Not a participant in this conversation.' },
+      {
+        code: 'conversation_access_denied',
+        message: 'Not a participant in this conversation.',
+      },
     );
   }
 
@@ -44,6 +48,7 @@ export async function deliverOutgoingMessage(
     conversationId: new Types.ObjectId(conversationId),
     senderId: new Types.ObjectId(senderId),
     content: content.trim(),
+    clientMessageId: payload.clientMessageId || payload.tempId,
   });
   const recipientPayload = {
     _id: saved._id,
@@ -51,17 +56,23 @@ export async function deliverOutgoingMessage(
     senderId,
     content: saved.content,
     timestamp: saved.timestamp,
-    status: 'sent' as const,
+    status: saved.status,
   };
-  const recipientId = conversation.participant_ids
-    .map((id: Types.ObjectId) => id.toString())
-    .find((id: string) => id !== senderId);
+  const recipientId = saved.deduplicated
+    ? undefined
+    : conversation.participant_ids
+      .map((id: Types.ObjectId) => id.toString())
+      .find((id: string) => id !== senderId);
 
   return {
     conversationId,
     messageId: String(saved._id),
     recipientId,
     recipientPayload,
-    senderPayload: { ...recipientPayload, tempId: payload.tempId },
+    senderPayload: {
+      ...recipientPayload,
+      tempId: payload.tempId,
+      clientMessageId: payload.clientMessageId || payload.tempId,
+    },
   };
 }

@@ -79,6 +79,8 @@ export interface IAcademicSource extends Document {
     ocrUsed?: boolean;
     failureCode?: string;
     failureMessage?: string;
+    result?: Record<string, unknown>;
+    queuePosition?: number;
   }>;
   pdfImportProgress?: {
     stage: string;
@@ -335,6 +337,8 @@ const AcademicSourceSchema = new Schema<IAcademicSource>(
       ocrUsed: { type: Boolean },
       failureCode: { type: String },
       failureMessage: { type: String },
+      result: { type: Schema.Types.Mixed },
+      queuePosition: { type: Number, min: 0 },
       _id: false,
     }],
     pdfImportProgress: {

@@ -7,7 +7,7 @@ import {
   presentMessageSafely,
 } from '../message/messagePersistence.service';
 
-const USER_PUBLIC = 'username display_name avatar bio lastHeartbeatAt';
+const USER_PUBLIC = 'username display_name avatar bio lastHeartbeatAt streakCount';
 
 export class ConversationRequestError extends Error {
   constructor(
