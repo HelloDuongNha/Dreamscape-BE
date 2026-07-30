@@ -59,8 +59,8 @@ export const rateLimitPolicies = {
   },
   register: {
     scope: 'auth-register',
-    limit: positiveInteger(process.env.RATE_LIMIT_REGISTER_MAX, 5),
-    windowMs: positiveInteger(process.env.RATE_LIMIT_REGISTER_WINDOW_MS, 60 * 60_000),
+    limit: positiveInteger(process.env.RATE_LIMIT_REGISTER_MAX, 20),
+    windowMs: positiveInteger(process.env.RATE_LIMIT_REGISTER_WINDOW_MS, 15 * 60_000),
   },
   otp: {
     scope: 'auth-otp',
