@@ -2,7 +2,7 @@
 """Authenticated HTTP transport for DreamScape's existing Docling parser."""
 
 import hmac
-import importlib.util
+import importlib
 import json
 import os
 from pathlib import Path
@@ -23,6 +23,8 @@ MAX_INPUT_BYTES = int(os.environ.get("DOCLING_WORKER_MAX_INPUT_BYTES", str(250 *
 EXTRACTION_TIMEOUT_SECONDS = int(os.environ.get("DOCLING_WORKER_EXTRACTION_TIMEOUT_SECONDS", "1800"))
 OCR_TIMEOUT_SECONDS = int(os.environ.get("DOCLING_WORKER_OCR_TIMEOUT_SECONDS", "14400"))
 PARSER_PATH = Path(__file__).with_name("docling_parser.py").resolve()
+PDF_PROBE_PATH = PARSER_PATH.parents[2] / "pdf" / "runtime" / "pdf_text_layer_probe.py"
+PDF_TEXT_PARSER_PATH = PARSER_PATH.parents[2] / "pdf" / "legacy" / "runtime" / "smart_reader_parser.py"
 EXTRACTION_LOCK = threading.BoundedSemaphore(
     value=max(1, int(os.environ.get("DOCLING_WORKER_CONCURRENCY", "1")))
 )
@@ -45,23 +47,19 @@ class WorkerHandler(BaseHTTPRequestHandler):
             return self._send_artifact()
         if self.path != "/health":
             return self._json(404, {"error": "not_found"})
-        available = PARSER_PATH.is_file() and importlib.util.find_spec("docling") is not None
+        available = self._runtime_available()
         return self._json(
             200 if available else 503,
             {"ok": available, "parser": "docling"},
         )
 
     def do_POST(self):
-        if self.path != "/extract":
+        if self.path not in ("/extract", "/inspect"):
             return self._json(404, {"error": "not_found"})
         if not self._authorized():
             return self._json(401, {"error": "unauthorized"})
         if self.headers.get("content-type", "").split(";", 1)[0] != "application/pdf":
             return self._json(415, {"error": "pdf_required"})
-        request_id = self.headers.get("x-docling-request-id", "").strip().lower()
-        if not REQUEST_ID_PATTERN.fullmatch(request_id):
-            return self._json(400, {"error": "invalid_request_id"})
-
         try:
             length = int(self.headers.get("content-length", "0"))
         except ValueError:
@@ -69,22 +67,21 @@ class WorkerHandler(BaseHTTPRequestHandler):
         if length <= 0 or length > MAX_INPUT_BYTES:
             return self._json(413, {"error": "invalid_pdf_size"})
 
+        if self.path == "/inspect":
+            return self._inspect_pdf(length)
+
+        request_id = self.headers.get("x-docling-request-id", "").strip().lower()
+        if not REQUEST_ID_PATTERN.fullmatch(request_id):
+            return self._json(400, {"error": "invalid_request_id"})
+
         with PROCESS_LOCK:
             ACTIVE_REQUESTS.add(request_id)
-        workspace = Path(tempfile.mkdtemp(prefix="dreamscape-docling-worker-"))
+        workspace = None
         preserve_workspace = False
         try:
-            pdf_path = workspace / "document.pdf"
+            workspace, pdf_path = self._receive_pdf(length, "dreamscape-docling-worker-")
             run_dir = workspace / "output"
             run_dir.mkdir(mode=0o700)
-            with pdf_path.open("wb") as output:
-                remaining = length
-                while remaining:
-                    chunk = self.rfile.read(min(1024 * 1024, remaining))
-                    if not chunk:
-                        raise ValueError("incomplete_request_body")
-                    output.write(chunk)
-                    remaining -= len(chunk)
 
             do_ocr = self.headers.get("x-docling-ocr", "false").lower() == "true"
             timeout_seconds = OCR_TIMEOUT_SECONDS if do_ocr else EXTRACTION_TIMEOUT_SECONDS
@@ -129,8 +126,102 @@ class WorkerHandler(BaseHTTPRequestHandler):
             return self._json(500, {"error": "worker_failed", "detail": str(error)[:2000]})
         finally:
             self._finish_request(request_id if 'request_id' in locals() else "")
-            if not preserve_workspace:
+            if workspace and not preserve_workspace:
                 shutil.rmtree(workspace, ignore_errors=True)
+
+    def _inspect_pdf(self, length):
+        workspace = None
+        try:
+            workspace, pdf_path = self._receive_pdf(length, "dreamscape-pdf-inspection-")
+            probe = self._run_json_process(
+                [sys.executable, str(PDF_PROBE_PATH), str(pdf_path)],
+                timeout=60,
+            )
+            if not probe.get("success"):
+                return self._json(422, {
+                    "error": "pdf_probe_failed",
+                    "detail": probe.get("errorDetail") or probe.get("errorCode") or "PDF probe failed.",
+                })
+
+            parsed_pdf = None
+            if probe.get("hasUsableTextLayer"):
+                parsed_pdf = self._run_json_process(
+                    [sys.executable, str(PDF_TEXT_PARSER_PATH), str(pdf_path)],
+                    timeout=45,
+                )
+                if not parsed_pdf.get("success"):
+                    return self._json(422, {
+                        "error": "pdf_text_parse_failed",
+                        "detail": parsed_pdf.get("errorDetail") or parsed_pdf.get("error") or "PDF text parsing failed.",
+                    })
+
+            return self._json(200, {
+                "probe": {
+                    "pageCount": probe.get("pageCount", 0),
+                    "pagesWithText": probe.get("pagesWithText", 0),
+                    "totalCharacterCount": probe.get("totalCharacterCount", 0),
+                    "textPageRatio": probe.get("textPageRatio", 0),
+                    "averageCharactersPerPage": probe.get("averageCharactersPerPage", 0),
+                    "hasUsableTextLayer": probe.get("hasUsableTextLayer") is True,
+                },
+                "parsedPdf": parsed_pdf,
+            })
+        except subprocess.TimeoutExpired:
+            return self._json(504, {"error": "pdf_inspection_timeout"})
+        except Exception as error:
+            return self._json(500, {"error": "pdf_inspection_failed", "detail": str(error)[:2000]})
+        finally:
+            if workspace:
+                shutil.rmtree(workspace, ignore_errors=True)
+
+    def _receive_pdf(self, length, prefix):
+        workspace = Path(tempfile.mkdtemp(prefix=prefix))
+        pdf_path = workspace / "document.pdf"
+        try:
+            with pdf_path.open("wb") as output:
+                remaining = length
+                while remaining:
+                    chunk = self.rfile.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise ValueError("incomplete_request_body")
+                    output.write(chunk)
+                    remaining -= len(chunk)
+            return workspace, pdf_path
+        except Exception:
+            shutil.rmtree(workspace, ignore_errors=True)
+            raise
+
+    @staticmethod
+    def _run_json_process(command, timeout):
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        try:
+            payload = json.loads(completed.stdout.strip())
+        except json.JSONDecodeError as error:
+            detail = completed.stderr.strip()[-2000:] or "Process returned malformed JSON."
+            raise RuntimeError(detail) from error
+        if completed.returncode != 0 and payload.get("success") is not False:
+            detail = completed.stderr.strip()[-2000:] or f"Process exited with code {completed.returncode}."
+            raise RuntimeError(detail)
+        return payload
+
+    @staticmethod
+    def _runtime_available():
+        if not all(path.is_file() for path in (PARSER_PATH, PDF_PROBE_PATH, PDF_TEXT_PARSER_PATH)):
+            return False
+        try:
+            importlib.import_module("docling")
+            importlib.import_module("fitz")
+            importlib.import_module("cv2")
+            return True
+        except Exception as error:
+            sys.stderr.write(f"[docling-worker] runtime health check failed: {error}\n")
+            return False
 
     def do_DELETE(self):
         if not self._authorized():

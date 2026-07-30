@@ -10,12 +10,18 @@ From the backend repository and inside the Python environment where Docling is
 already installed:
 
 ```bash
+sudo apt-get install -y libglib2.0-0 libgl1
 python -m pip install -r src/modules/academic/services/ingestion/docling/runtime/requirements.txt
 export DOCLING_WORKER_TOKEN='<a separate random secret>'
 export DOCLING_WORKER_PORT=8000
 export DOCLING_WORKER_CONCURRENCY=1
 python src/modules/academic/services/ingestion/docling/runtime/docling_worker.py
 ```
+
+`libglib2.0-0` supplies `libgthread-2.0.so.0`, which OpenCV/EasyOCR requires on
+Debian and Ubuntu. The worker health endpoint also verifies both Docling and
+PyMuPDF because Render delegates PDF text-layer inspection to this worker as
+well as the heavier Docling extraction.
 
 Expose port `8000` through an HTTPS tunnel. Do not expose Ollama's port for this
 job: Render needs this authenticated worker endpoint, not direct access to the

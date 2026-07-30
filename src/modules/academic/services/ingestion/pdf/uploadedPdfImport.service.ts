@@ -107,7 +107,8 @@ export async function runUploadedPdfImport(
     const extractedDoc = await extractPdfTextLayer({
       targetType,
       targetId,
-      force: forceReplace
+      force: forceReplace,
+      abortSignal: abortController.signal,
     });
     throwIfCancelled();
 

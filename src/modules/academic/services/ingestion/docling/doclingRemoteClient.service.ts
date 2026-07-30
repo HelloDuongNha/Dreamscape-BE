@@ -3,6 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { DOCLING_EXTRACTION_TIMEOUT_MS, DOCLING_OCR_TIMEOUT_MS } from '../../../../../config/pdfLimits';
 import { DoclingArtifactDescriptor, DoclingExtractionResult } from '../../types/docling.types';
+import type { PdfTextLayerProbeResult } from '../pdf/pdfTextLayerProbe.service';
+import type { RawPdfParserOutput } from '../pdf/legacy/PdfParser';
 import {
   createDoclingRunCleanup,
   createDoclingRunDirectory,
@@ -16,6 +18,11 @@ interface RemoteArtifact extends Omit<DoclingArtifactDescriptor, 'filePath'> {
 interface RemoteExtractionResponse {
   result: DoclingExtractionResult;
   artifacts: RemoteArtifact[];
+}
+
+interface RemotePdfInspectionResponse {
+  probe: PdfTextLayerProbeResult;
+  parsedPdf?: RawPdfParserOutput;
 }
 
 export interface RemoteDoclingRunResult {
@@ -48,6 +55,50 @@ export async function probeRemoteDocling(): Promise<boolean> {
     return false;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+export async function inspectPdfRemotely(
+  pdfPath: string,
+  abortSignal?: AbortSignal,
+): Promise<RemotePdfInspectionResponse> {
+  const url = getRemoteUrl();
+  const token = getRemoteToken();
+  if (!url || !token) throw new Error('Remote Docling worker is not configured.');
+
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  abortSignal?.addEventListener('abort', abort, { once: true });
+  const timer = setTimeout(abort, 90_000);
+
+  try {
+    const fileSize = (await fs.promises.stat(pdfPath)).size;
+    const response = await fetch(`${url}/inspect`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/pdf',
+        'content-length': String(fileSize),
+        'ngrok-skip-browser-warning': 'true',
+      },
+      body: fs.createReadStream(pdfPath) as any,
+      signal: controller.signal,
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
+    const payload = await response.json().catch(() => null) as (
+      RemotePdfInspectionResponse & { detail?: string; error?: string }
+    ) | null;
+    if (!response.ok || !payload?.probe) {
+      throw new Error(
+        payload?.detail
+        || payload?.error
+        || `Remote PDF inspection returned HTTP ${response.status}.`,
+      );
+    }
+    return payload;
+  } finally {
+    clearTimeout(timer);
+    abortSignal?.removeEventListener('abort', abort);
   }
 }
 

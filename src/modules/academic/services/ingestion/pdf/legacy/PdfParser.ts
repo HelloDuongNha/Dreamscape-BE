@@ -2,13 +2,86 @@ import { spawn } from 'child_process';
 import path from 'path';
 import { CanonicalBlocksOutput, CanonicalBlock, SemanticType } from '../../../types/canonical.types';
 
-export async function parsePdf(filePath: string): Promise<CanonicalBlocksOutput> {
+export interface RawPdfParserOutput {
+  success?: boolean;
+  title?: string;
+  error?: string;
+  warnings?: string[];
+  sections?: Array<{
+    heading?: string | null;
+    sectionType?: string;
+    blocks?: Array<Record<string, any>>;
+  }>;
+}
+
+export function mapRawPdfParserOutput(parsedData: RawPdfParserOutput): CanonicalBlocksOutput {
   const blocks: CanonicalBlock[] = [];
   const warnings: string[] = ['Phân tích tài liệu PDF bằng bộ phân giải PyMuPDF.'];
-  let title = 'Tài liệu PDF';
+  let title = parsedData.title || 'Tài liệu PDF';
 
+  if (!parsedData.success) {
+    return {
+      title,
+      parserEngine: 'PdfParser',
+      sourceType: 'pdf',
+      warnings: [...warnings, `Lỗi Parser PDF: ${parsedData.error || 'Phân tích PDF thất bại.'}`],
+      blocks,
+      success: false,
+      error: parsedData.error || 'Phân tích PDF thất bại.',
+    };
+  }
+
+  let globalOrder = 0;
+  for (const sec of parsedData.sections || []) {
+    const secHeading = sec.heading || null;
+    for (const block of sec.blocks || []) {
+      let blockType = block.blockType || 'paragraph';
+      let semanticType: SemanticType = 'paragraph';
+      if (blockType === 'heading') semanticType = 'heading';
+      else if (blockType === 'list_item') semanticType = 'list';
+      else if (blockType === 'reference') semanticType = 'reference';
+      else if (blockType === 'figure') semanticType = 'figure';
+      else if (blockType === 'table') semanticType = 'table';
+      else if (blockType === 'metadata') semanticType = 'metadata';
+      else if (blockType === 'page_break') semanticType = 'footnote';
+
+      if (sec.sectionType === 'abstract') {
+        semanticType = 'abstract';
+      } else if (sec.sectionType === 'metadata') {
+        semanticType = 'metadata';
+        blockType = 'metadata';
+      } else if (sec.sectionType === 'references' || secHeading?.toUpperCase() === 'REFERENCES') {
+        semanticType = 'reference';
+        blockType = 'reference';
+      }
+
+      blocks.push({
+        blockType,
+        semanticType,
+        sectionHeading: secHeading,
+        text: block.text,
+        html: block.html,
+        marker: block.marker || undefined,
+        order: globalOrder++,
+        pageNumber: block.pageNumber || undefined,
+      });
+    }
+  }
+
+  if (parsedData.warnings) warnings.push(...parsedData.warnings);
+  return {
+    title,
+    parserEngine: 'PdfParser',
+    sourceType: 'pdf',
+    warnings,
+    blocks,
+    success: true,
+  };
+}
+
+export async function parsePdf(filePath: string): Promise<CanonicalBlocksOutput> {
   try {
-    const parsedData: any = await new Promise((resolve, reject) => {
+    const parsedData = await new Promise<RawPdfParserOutput>((resolve, reject) => {
       const pythonBin = process.env.PYTHON_BIN || 'python3';
       const parserScriptPath = path.join(__dirname, 'runtime/smart_reader_parser.py');
       const pyProcess = spawn(pythonBin, [parserScriptPath, filePath]);
@@ -43,84 +116,15 @@ export async function parsePdf(filePath: string): Promise<CanonicalBlocksOutput>
       });
     });
 
-    if (!parsedData || !parsedData.success) {
-      throw new Error(parsedData?.error || 'Phân tích PDF thất bại.');
-    }
-
-    if (parsedData.title) {
-      title = parsedData.title;
-    }
-
-    let globalOrder = 0;
-    const sections = parsedData.sections || [];
-
-    for (const sec of sections) {
-      const secHeading = sec.heading || null;
-      const secBlocks = sec.blocks || [];
-
-      for (const b of secBlocks) {
-        let btype = b.blockType || 'paragraph';
-        // Map block type to semantic type
-        let semType: SemanticType = 'paragraph';
-        if (btype === 'heading') {
-          semType = 'heading';
-        } else if (btype === 'list_item') {
-          semType = 'list';
-        } else if (btype === 'reference') {
-          semType = 'reference';
-        } else if (btype === 'figure') {
-          semType = 'figure';
-        } else if (btype === 'table') {
-          semType = 'table';
-        } else if (btype === 'metadata') {
-          semType = 'metadata';
-        } else if (btype === 'page_break') {
-          semType = 'footnote'; // default fallback semantic type
-        }
-
-        if (sec.sectionType === 'abstract') {
-          semType = 'abstract';
-        } else if (sec.sectionType === 'metadata') {
-          semType = 'metadata';
-          btype = 'metadata';
-        } else if (sec.sectionType === 'references' || secHeading?.toUpperCase() === 'REFERENCES') {
-          semType = 'reference';
-          btype = 'reference';
-        }
-
-        blocks.push({
-          blockType: btype,
-          semanticType: semType,
-          sectionHeading: secHeading,
-          text: b.text,
-          html: b.html,
-          marker: b.marker || undefined,
-          order: globalOrder++,
-          pageNumber: b.pageNumber || undefined
-        });
-      }
-    }
-
-    if (parsedData.warnings) {
-      warnings.push(...parsedData.warnings);
-    }
-
-    return {
-      title,
-      parserEngine: 'PdfParser',
-      sourceType: 'pdf',
-      warnings,
-      blocks,
-      success: true
-    };
+    return mapRawPdfParserOutput(parsedData);
 
   } catch (err: any) {
     return {
-      title,
+      title: 'Tài liệu PDF',
       parserEngine: 'PdfParser',
       sourceType: 'pdf',
-      warnings: [...warnings, `Lỗi Parser PDF: ${err.message}`],
-      blocks,
+      warnings: [`Phân tích tài liệu PDF bằng bộ phân giải PyMuPDF.`, `Lỗi Parser PDF: ${err.message}`],
+      blocks: [],
       success: false,
       error: err.message
     };

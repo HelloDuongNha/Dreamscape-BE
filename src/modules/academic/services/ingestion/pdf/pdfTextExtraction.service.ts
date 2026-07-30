@@ -3,15 +3,20 @@ import path from 'path';
 import mongoose from 'mongoose';
 import SourceContribution from '../../../models/SourceContribution';
 import AcademicSource from '../../../models/AcademicSource';
-import { parsePdf } from './legacy/PdfParser';
+import { mapRawPdfParserOutput, parsePdf } from './legacy/PdfParser';
 import { downloadOriginalPdfAsset, hasStoredOriginalPdf } from '../../storage/originalPdfStorage.service';
 import { ExtractedDocument, ExtractedPage, ExtractedBlock } from '../../types/extractedDocument.types';
 import { probePdfTextLayer } from './pdfTextLayerProbe.service';
+import {
+  hasRemoteDoclingConfiguration,
+  inspectPdfRemotely,
+} from '../docling/doclingRemoteClient.service';
 
 export interface ExtractPdfInput {
   targetType: 'contribution' | 'approved_source';
   targetId: string;
   force?: boolean;
+  abortSignal?: AbortSignal;
 }
 
 function mapBlockType(bt: string): 'heading' | 'paragraph' | 'figure' | 'table' | 'reference' | 'page_break' | 'metadata' {
@@ -81,7 +86,10 @@ export async function extractPdfTextLayer(input: ExtractPdfInput): Promise<Extra
     // 4. Probe the text layer without running layout reconstruction. This is
     // intentionally cheap even for very large scanned books and prevents the
     // legacy 30-second parser from blocking OCR routing.
-    const probe = await probePdfTextLayer(tempPath);
+    const remoteInspection = hasRemoteDoclingConfiguration()
+      ? await inspectPdfRemotely(tempPath, input.abortSignal)
+      : null;
+    const probe = remoteInspection?.probe || await probePdfTextLayer(tempPath);
     const physicalPageCount = probe.pageCount;
 
     if (!probe.hasUsableTextLayer) {
@@ -121,7 +129,9 @@ export async function extractPdfTextLayer(input: ExtractPdfInput): Promise<Extra
     }
 
     // 5. Parse layout blocks via existing PyMuPDF wrapper
-    const parseOutput = await parsePdf(tempPath);
+    const parseOutput = remoteInspection?.parsedPdf
+      ? mapRawPdfParserOutput(remoteInspection.parsedPdf)
+      : await parsePdf(tempPath);
     if (!parseOutput.success) {
       throw new Error(parseOutput.error || 'Phân tích tài liệu PDF thất bại.');
     }
