@@ -14,6 +14,9 @@ import {
   markMessageDeliveredByRecipient,
 } from '../conversation/conversationAuthorization.service';
 import {
+  acknowledgePendingDeliveriesForRecipient,
+} from '../conversation/conversationDeliveryReceipt.service';
+import {
   deliverOutgoingMessage,
   MessageDeliveryError,
 } from '../message/messageDelivery.service';
@@ -32,6 +35,9 @@ export function registerMessagingSocketHandlers(
   void publishUserOnline(io, userId).catch((error) => {
     logger.error('Could not publish online presence.', error, { userId });
   });
+  void publishPendingDeliveryReceipts(io, userId).catch((error) => {
+    logger.error('Could not publish pending delivery receipts.', error, { userId });
+  });
   logger.info('Messaging socket connected.', { userId, socketId: socket.id });
 
   registerJoinConversationHandler(socket, userId);
@@ -39,6 +45,20 @@ export function registerMessagingSocketHandlers(
   registerDeliveryReceiptHandler(io, socket, userId);
   registerSeenReceiptHandler(io, socket, userId);
   registerDisconnectHandler(io, socket, userId);
+}
+
+// Reconciles messages received while offline and notifies every connected sender.
+async function publishPendingDeliveryReceipts(
+  io: SocketIOServer,
+  recipientId: string,
+): Promise<void> {
+  const batches = await acknowledgePendingDeliveriesForRecipient(recipientId);
+  for (const batch of batches) {
+    io.to(batch.senderId).emit('message_status_updated', {
+      messageIds: batch.messageIds,
+      status: 'delivered',
+    });
+  }
 }
 
 function registerJoinConversationHandler(

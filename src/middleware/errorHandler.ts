@@ -37,13 +37,18 @@ const errorHandler = (
     res.status(err.status).json({ success: false, code: err.code, message: err.message });
     return;
   }
+  if (err instanceof EmailDeliveryError) {
+    res.status(err.status).json({
+      success: false,
+      code: err.code,
+      message: err.message,
+    });
+    return;
+  }
 
   res.status(500).json({
     success: false,
-    message:
-      err instanceof EmailDeliveryError
-        ? err.message
-        : 'Internal Server Error',
+    message: 'Internal Server Error',
   });
 };
 

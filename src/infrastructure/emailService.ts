@@ -14,6 +14,9 @@ interface EmailTransportConfig {
   user: string;
   password: string;
   from: string;
+  connectionTimeoutMs: number;
+  greetingTimeoutMs: number;
+  socketTimeoutMs: number;
 }
 
 interface OtpMailTransport {
@@ -30,6 +33,9 @@ interface OtpEmailInput {
 let transporter: Transporter | null = null;
 
 export class EmailDeliveryError extends Error {
+  readonly code = 'email_delivery_failed';
+  readonly status = 503;
+
   constructor() {
     super('Verification email could not be sent. Please try again later.');
     this.name = 'EmailDeliveryError';
@@ -90,6 +96,9 @@ export function resolveEmailTransportConfig(): EmailTransportConfig {
     user,
     password,
     from: configuredFrom || `"DreamScape" <${user}>`,
+    connectionTimeoutMs: readPositiveTimeout('SMTP_CONNECTION_TIMEOUT_MS', 10_000),
+    greetingTimeoutMs: readPositiveTimeout('SMTP_GREETING_TIMEOUT_MS', 10_000),
+    socketTimeoutMs: readPositiveTimeout('SMTP_SOCKET_TIMEOUT_MS', 15_000),
   };
 }
 
@@ -101,12 +110,25 @@ function getTransporter(config: EmailTransportConfig): Transporter {
     port: config.port,
     secure: config.secure,
     pool: true,
+    connectionTimeout: config.connectionTimeoutMs,
+    greetingTimeout: config.greetingTimeoutMs,
+    socketTimeout: config.socketTimeoutMs,
     auth: {
       user: config.user,
       pass: config.password,
     },
   });
   return transporter;
+}
+
+function readPositiveTimeout(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive number of milliseconds.`);
+  }
+  return value;
 }
 
 function resolvePurposeLabel(purpose: OtpPurpose): string {

@@ -14,7 +14,7 @@ import {
 } from './otpCrypto.service';
 
 const OTP_LIFETIME_MS = 5 * 60 * 1000;
-const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
+const OTP_RESEND_COOLDOWN_MS = 15 * 1000;
 const RECOVERY_GRANT_LIFETIME_MS = 10 * 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
 const MAX_SENDS_PER_FLOW = 5;
