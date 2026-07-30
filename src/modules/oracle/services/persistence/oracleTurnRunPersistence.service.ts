@@ -90,7 +90,7 @@ async function reserveTurnSequences(
   const thread = await OracleThread.findOneAndUpdate(
     { _id: input.threadId, userId: input.userId, deletedAt: { $exists: false } },
     { $inc: { nextTurnSequence: 2 }, $set: { lastTurnAt: new Date() } },
-    { new: false, session },
+    { returnDocument: 'before', session },
   );
   if (!thread) {
     throw new OracleContractError('oracle_not_found', 'Oracle thread was not found.');
@@ -155,14 +155,14 @@ async function createTurnPair(
       parentTurnId: records.userTurnId,
       branchRootTurnId: input.branchRootTurnId || records.userTurnId,
     },
-  ], { session });
+  ], { session, ordered: true });
 }
 
 async function markRunQueued(runId: Types.ObjectId, session?: ClientSession): Promise<IOracleRun> {
   const run = await OracleRun.findByIdAndUpdate(
     runId,
     { $set: { status: 'queued' } },
-    { new: true, session },
+    { returnDocument: 'after', session },
   );
   if (!run) {
     throw new OracleContractError('oracle_persistence_failed', 'Oracle run could not be initialized.');
