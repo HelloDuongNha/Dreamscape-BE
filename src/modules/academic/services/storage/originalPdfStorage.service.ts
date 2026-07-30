@@ -15,6 +15,7 @@ export interface OriginalPdfReference {
   cloudinaryPublicId?: string;
   cloudinarySecureUrl?: string;
   originalFileName?: string;
+  fileHash?: string;
 }
 
 export function hasStoredOriginalPdf(file?: OriginalPdfReference | null): boolean {

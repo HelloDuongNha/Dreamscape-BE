@@ -1,6 +1,7 @@
 import { RuleV3GeminiProvider } from './ruleV3GeminiProvider.service';
 import { RuleV3OllamaProvider } from './ruleV3OllamaProvider.service';
 import type { RuleV3GenerationProvider } from './ruleV3GenerationProvider.types';
+import { ollamaRequestHeaders } from '../../../../infrastructure/ollamaHttp';
 
 export type RuleV3ProviderName = 'ollama' | 'gemini';
 export type RuleV3ProviderFailure =
@@ -79,7 +80,10 @@ async function fetchOllamaModels(baseUrl: string): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 1500);
   try {
-    return await fetch(`${baseUrl}/api/tags`, { signal: controller.signal });
+    return await fetch(`${baseUrl}/api/tags`, {
+      headers: ollamaRequestHeaders(),
+      signal: controller.signal,
+    });
   } finally {
     clearTimeout(timeout);
   }

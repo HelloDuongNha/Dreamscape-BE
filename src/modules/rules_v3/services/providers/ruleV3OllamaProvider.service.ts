@@ -9,6 +9,7 @@ import {
 import { OLLAMA_JSON_SCHEMA } from './ruleV3ProviderContract.service';
 import { buildRuleV3ExtractionPrompt } from './ruleV3ExtractionPrompt.service';
 import { DEFAULT_OLLAMA_MODEL } from '../../../../infrastructure/llm.service';
+import { ollamaRequestHeaders } from '../../../../infrastructure/ollamaHttp';
 
 export class RuleV3OllamaProvider implements RuleV3GenerationProvider {
   name = 'ollama' as const;
@@ -31,7 +32,7 @@ export class RuleV3OllamaProvider implements RuleV3GenerationProvider {
     try {
       response = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: ollamaRequestHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           model: this.modelName,
           prompt,
