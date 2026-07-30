@@ -55,7 +55,7 @@ export function oracleEvidenceClaimClusterKey(claim: string): string {
   const work = has(/công việc|dự án|lịch họp|buổi trình bày|work|project|meeting/iu);
   const intrusion = has(/xâm lấn|mang.+vào giấc ngủ|không gian nghỉ ngơi|intrud|spillover|carry.+sleep/iu);
   const action = has(/hành động(?: cụ thể)?|chuẩn bị|lập kế hoạch|action|prepar|planning/iu);
-  const reduction = has(/giảm|giải tỏa|tan biến|reduce|relief|decreas/iu);
+  const reduction = has(/giảm|giải tỏa|tan biến|reduce|reduction|relief|decreas/iu);
   const weakAssociation = has(/liên kết yếu|kết nối xa|weak association|remote association/iu);
   const lateNight = has(/cuối đêm|gần sáng|(?:phần\s+)?cuối(?:\s+của)?\s+giấc ngủ|later in the night|later in the sleep period|late in sleep|final quartile/iu);
   const insight = has(/bất ngờ|sáng tỏ|tìm ra giải pháp|surpris|insight|eureka/iu);

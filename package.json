@@ -10,12 +10,14 @@
     "typecheck": "tsc --noEmit",
     "verify:route-contract": "tsx scripts/verifyRouteContract.ts",
     "verify:refactor-baseline": "npm run typecheck && npm run verify:route-contract",
+    "test": "tsx --test test/*.test.ts",
+    "test:report": "tsx --test --test-reporter=spec test/*.test.ts",
     "migrate:dream-citations": "tsx scripts/migrateDreamCitationBindings.ts",
     "migrate:message-encryption": "tsx scripts/migrateMessageEncryption.ts",
     "migrate:domain-databases": "tsx scripts/migrateDomainDatabases.ts",
     "migrate:oracle-operations": "tsx scripts/migrateOracleOperationsDomain.ts",
     "eval:rag": "tsx scripts/evaluateRagQuality.ts --offline",
-    "eval:rag:online": "tsx scripts/evaluateRagQuality.ts --online",
+    "benchmark:api": "tsx scripts/benchmarkApi.ts",
     "repair:uploaded-pdf-sources": "ts-node scripts/repair_approved_pdf_sources.ts"
   },
   "keywords": [

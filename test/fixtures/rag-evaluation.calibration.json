@@ -1,0 +1,38 @@
+{
+  "datasetType": "calibration",
+  "cases": [
+    {
+      "id": "CAL-RAG-01",
+      "relevantContextIds": ["rule-memory", "chunk-memory"],
+      "retrievedContextIds": ["rule-memory", "chunk-memory", "chunk-noise"],
+      "forbiddenContextIds": ["private-dream-b"],
+      "claims": [
+        {
+          "text": "The response links the dream to memory without making a diagnosis.",
+          "citationIds": ["rule-memory", "chunk-memory"],
+          "supported": true
+        }
+      ],
+      "answerRelevance": 1
+    },
+    {
+      "id": "CAL-RAG-02",
+      "relevantContextIds": ["rule-threat"],
+      "retrievedContextIds": ["chunk-noise", "rule-threat"],
+      "forbiddenContextIds": ["private-dream-b"],
+      "claims": [
+        {
+          "text": "The response uses the threat rule.",
+          "citationIds": ["rule-threat"],
+          "supported": true
+        },
+        {
+          "text": "The response adds an unsupported fixed meaning.",
+          "citationIds": [],
+          "supported": false
+        }
+      ],
+      "answerRelevance": 0.5
+    }
+  ]
+}
