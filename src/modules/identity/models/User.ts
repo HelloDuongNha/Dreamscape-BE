@@ -6,8 +6,9 @@ export interface IUser extends Document {
   display_name: string;
   email: string;
   role: 'admin' | 'user';
-  password: string;
+  password?: string;
   authMethod: 'password' | 'google' | 'password_google';
+  googleUid?: string;
   avatar: string;
   avatarAsset?: {
     provider: 'cloudinary';
@@ -88,7 +89,9 @@ const UserSchema = new Schema<IUser>(
     },
     password: {
       type: String,
-      required: [true, 'Password is required'],
+      required(this: IUser) {
+        return this.authMethod === 'password' || this.authMethod === 'password_google';
+      },
       minlength: [8, 'Password must be at least 8 characters'],
       select: false,
     },
@@ -96,6 +99,13 @@ const UserSchema = new Schema<IUser>(
       type: String,
       enum: ['password', 'google', 'password_google'],
       default: 'password',
+    },
+    googleUid: {
+      type: String,
+      trim: true,
+      unique: true,
+      sparse: true,
+      select: false,
     },
     avatar: {
       type: String,
@@ -248,6 +258,7 @@ const UserSchema = new Schema<IUser>(
 
 UserSchema.pre('save', async function () {
   if (!this.isModified('password')) return;
+  if (!this.password) return;
   // Registration stores only a bcrypt hash in the short-lived OTP payload.
   // `$locals` is server-only and prevents that trusted hash from being hashed twice.
   if (this.$locals.passwordAlreadyHashed === true) return;
@@ -258,6 +269,7 @@ UserSchema.pre('save', async function () {
 UserSchema.methods.comparePassword = async function (
   candidatePassword: string,
 ): Promise<boolean> {
+  if (!this.password) return false;
   return bcrypt.compare(candidatePassword, this.password);
 };
 

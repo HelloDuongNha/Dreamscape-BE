@@ -60,6 +60,7 @@ app.use(requestShapeGuard);
 // The broad policy protects API capacity; sensitive paths add tighter limits.
 app.use('/api', createRateLimitMiddleware(rateLimitPolicies.global));
 app.use('/api/auth/login', createRateLimitMiddleware(rateLimitPolicies.login));
+app.use('/api/auth/google', createRateLimitMiddleware(rateLimitPolicies.login));
 app.use('/api/auth/register', createRateLimitMiddleware(rateLimitPolicies.register));
 app.use('/api/auth/verify-otp', createRateLimitMiddleware(rateLimitPolicies.otp));
 app.use('/api/auth/resend-otp', createRateLimitMiddleware(rateLimitPolicies.otp));

@@ -5,13 +5,14 @@ import {
   AuthenticatedMessagingSocket,
 } from '../modules/messaging/services/realtime/socketAuthentication.service';
 import { registerMessagingSocketHandlers } from '../modules/messaging/services/realtime/messagingSocketHandlers.service';
+import { configuredOrigins } from './security';
 
 let activeSocketServer: SocketIOServer | null = null;
 
 export function initSocket(httpServer: HTTPServer): SocketIOServer {
   const io = new SocketIOServer(httpServer, {
     cors: {
-      origin: process.env.CORS_ORIGIN ?? 'http://localhost:5173',
+      origin: configuredOrigins(),
       methods: ['GET', 'POST'],
       credentials: true,
     },

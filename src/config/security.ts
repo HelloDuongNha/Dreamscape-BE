@@ -6,7 +6,7 @@ function positiveInteger(value: string | undefined, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function configuredOrigins(): string[] {
+export function configuredOrigins(): string[] {
   return (process.env.CORS_ORIGIN || 'http://localhost:5173')
     .split(',')
     .map(origin => origin.trim())

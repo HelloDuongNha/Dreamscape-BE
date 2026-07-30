@@ -113,8 +113,7 @@ export async function resetPasswordWithGrant(input: {
   if (!user) {
     throw new AccountSecurityError('recovery_grant_invalid', 400, 'Invalid or expired recovery grant.');
   }
-  assertPasswordAccount(user);
-  if (await user.comparePassword(input.newPassword)) {
+  if (user.password && await user.comparePassword(input.newPassword)) {
     throw new AccountSecurityError(
       'password_reused',
       409,
@@ -125,6 +124,7 @@ export async function resetPasswordWithGrant(input: {
   const grantRecordId = await consumeRecoveryGrant(input.email, input.recoveryGrant);
   try {
     user.password = input.newPassword;
+    if (user.authMethod === 'google') user.authMethod = 'password_google';
     await user.save();
   } catch (error) {
     // A consumed grant is restored only when persistence fails, so a transient DB

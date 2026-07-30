@@ -8,6 +8,7 @@ import {
 } from '../modules/identity/controllers/otp.controller';
 import {
   login,
+  googleLogin,
   logout,
   register,
 } from '../modules/identity/controllers/authentication.controller';
@@ -164,6 +165,7 @@ const router = Router();
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post('/register', register);
+router.post('/google', googleLogin);
 
 // ─── POST /api/auth/login ─────────────────────────────────────────────────────
 

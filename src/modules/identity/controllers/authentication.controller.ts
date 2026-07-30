@@ -6,6 +6,7 @@ import {
 } from '../dto/authentication.dto';
 import {
   AuthenticationError,
+  authenticateWithGoogle,
   authenticateWithPassword,
   beginRegistration,
 } from '../services/auth/authentication.service';
@@ -55,6 +56,28 @@ export async function login(
     res.status(200).json({
       success: true,
       message: 'Login successful.',
+      token: authenticated.token,
+      user: presentAuthenticatedUser(authenticated.user),
+    });
+  } catch (error) {
+    handleAuthenticationError(error, res, next);
+  }
+}
+
+export async function googleLogin(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const idToken = typeof req.body?.idToken === 'string' ? req.body.idToken : '';
+    const authenticated = await authenticateWithGoogle(
+      idToken,
+      readIdentityClientContext(req),
+    );
+    res.status(200).json({
+      success: true,
+      message: 'Google sign-in successful.',
       token: authenticated.token,
       user: presentAuthenticatedUser(authenticated.user),
     });

@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
+import { getFirebaseAuth } from '../../../../config/firebaseAdmin';
 import {
   requireEnvironmentSecret,
   requireEnvironmentVariable,
@@ -78,6 +79,56 @@ export async function authenticateWithPassword(
   };
 }
 
+export async function authenticateWithGoogle(
+  idToken: string,
+  client: AuthenticationClientContext,
+) {
+  if (!idToken.trim()) throw new AuthenticationError(400, 'Google ID token is required.');
+
+  let decoded;
+  try {
+    decoded = await getFirebaseAuth().verifyIdToken(idToken, true);
+  } catch {
+    throw new AuthenticationError(401, 'Google sign-in could not be verified.');
+  }
+  if (decoded.firebase?.sign_in_provider !== 'google.com') {
+    throw new AuthenticationError(401, 'The verified identity is not a Google sign-in.');
+  }
+  if (!decoded.email || decoded.email_verified !== true) {
+    throw new AuthenticationError(401, 'Google must verify the account email first.');
+  }
+
+  const email = decoded.email.trim().toLowerCase();
+  let user = await User.findOne({ googleUid: decoded.uid }).select('+googleUid');
+  if (!user) {
+    user = await User.findOne({ email }).select('+googleUid');
+    if (user?.googleUid && user.googleUid !== decoded.uid) {
+      throw new AuthenticationError(409, 'This email is linked to another Google identity.');
+    }
+    if (user) {
+      user.googleUid = decoded.uid;
+      user.authMethod = user.authMethod === 'password' ? 'password_google' : 'google';
+    } else {
+      user = new User({
+        username: await availableGoogleUsername(email),
+        display_name: decoded.name?.trim() || email.split('@')[0],
+        email,
+        googleUid: decoded.uid,
+        authMethod: 'google',
+        avatar: decoded.picture || '',
+        role: 'user',
+      });
+    }
+  }
+
+  const sessionId = appendAuthenticatedSession(user, client);
+  await user.save();
+  return {
+    token: signIdentityToken(String(user._id), String(sessionId)),
+    user,
+  };
+}
+
 export function signIdentityToken(userId: string, sessionId?: string): string {
   const secret = requireEnvironmentSecret('JWT_SECRET');
   const expiresIn = requireEnvironmentVariable(
@@ -105,7 +156,7 @@ async function assertRegistrationIdentityAvailable(email: string, username: stri
   throw new AuthenticationError(409, `An account with this ${field} already exists.`);
 }
 
-function appendAuthenticatedSession(
+export function appendAuthenticatedSession(
   user: InstanceType<typeof User>,
   client: AuthenticationClientContext,
 ) {
@@ -126,4 +177,15 @@ function appendAuthenticatedSession(
     user.sessions.shift();
   }
   return sessionId;
+}
+
+async function availableGoogleUsername(email: string): Promise<string> {
+  const localPart = email.split('@')[0].toLowerCase().replace(/[^a-z0-9._-]+/gu, '');
+  const base = (localPart || 'dreamer').slice(0, 24);
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const suffix = attempt === 0 ? '' : `-${attempt + 1}`;
+    const username = `@${base.slice(0, 29 - suffix.length)}${suffix}`;
+    if (!(await User.exists({ username }))) return username;
+  }
+  throw new AuthenticationError(409, 'Could not allocate a unique username for this account.');
 }
