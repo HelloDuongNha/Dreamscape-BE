@@ -69,11 +69,16 @@ export async function runDoclingPdfImport(input: DoclingImportInput): Promise<Do
   }
 
   const pdfBuffer = await downloadOriginalPdfAsset(input.originalFile);
-  const inputBase = path.resolve(getDoclingInputTempBase());
-  const inputDir = fs.mkdtempSync(path.join(inputBase, 'docling-import-'));
+  const configuredInputBase = path.resolve(getDoclingInputTempBase());
+  fs.mkdirSync(configuredInputBase, { recursive: true, mode: 0o700 });
+  // Compare canonical paths on both sides. On macOS, for example, /var resolves
+  // to /private/var; comparing a resolved child with an unresolved base would
+  // incorrectly reject a safe temporary directory as being outside the base.
+  const realInputBase = fs.realpathSync(configuredInputBase);
+  const inputDir = fs.mkdtempSync(path.join(realInputBase, 'docling-import-'));
   fs.chmodSync(inputDir, 0o700);
   const realInputDir = fs.realpathSync(inputDir);
-  const relative = path.relative(inputBase, realInputDir);
+  const relative = path.relative(realInputBase, realInputDir);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
     fs.rmSync(inputDir, { recursive: true, force: true });
     throw new Error('Đường dẫn xử lý PDF tạm thời không hợp lệ.');
