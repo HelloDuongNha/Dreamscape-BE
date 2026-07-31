@@ -102,7 +102,7 @@ async function main(): Promise<void> {
   const failedRuns = (counts.failed || 0) + (counts.cancelled || 0);
 
   const summary = {
-    evidence: 'Figure C.29 - Oracle ETA Evidence',
+    evidence: 'Figure C.19 - Oracle ETA Evidence',
     measuredAt: new Date().toISOString(),
     database: options.atlas ? 'MongoDB Atlas' : 'Configured MongoDB',
     model,

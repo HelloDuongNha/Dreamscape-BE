@@ -36,7 +36,7 @@ async function main(): Promise<void> {
   }
 
   const evidence = {
-    evidence: 'Figure C.28 - Socket.IO Connection Benchmark',
+    evidence: 'Figure C.18 - Socket.IO Connection Benchmark',
     measuredAt: new Date().toISOString(),
     socketUrl,
     event: 'send_message with acknowledgement',

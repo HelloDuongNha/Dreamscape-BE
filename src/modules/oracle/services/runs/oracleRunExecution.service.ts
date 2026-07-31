@@ -1,4 +1,5 @@
 import { Types } from 'mongoose';
+import { logger } from '../../../../infrastructure/logger';
 import OracleRun, { type IOracleRun } from '../../models/OracleRun';
 import OracleThread from '../../models/OracleThread';
 import OracleTurn from '../../models/OracleTurn';
@@ -82,7 +83,12 @@ export async function executeOracleRun(runId: Types.ObjectId): Promise<void> {
       expectedMinMs: generation.estimate.minMs,
       expectedMaxMs: generation.estimate.maxMs,
     });
-  } catch {
+  } catch (error) {
+    logger.error('Oracle run execution failed.', error, {
+      runId: String(runId),
+      userId: run ? String(run.userId) : undefined,
+      aborted: execution.controller.signal.aborted,
+    });
     if (run) {
       await failOracleRun({
         run,

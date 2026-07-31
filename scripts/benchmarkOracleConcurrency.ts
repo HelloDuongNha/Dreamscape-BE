@@ -74,7 +74,7 @@ async function main(): Promise<void> {
   }
 
   const evidence = {
-    evidence: 'Figure C.27 - Remote AI-worker Concurrency',
+    evidence: 'Figure C.17 - Remote AI-worker Concurrency',
     measuredAt: new Date().toISOString(),
     apiBase,
     environment: 'Remote T4 AI worker through the deployed DreamScape API',
