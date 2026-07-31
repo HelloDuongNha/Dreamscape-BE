@@ -9,7 +9,7 @@ type RouteBaseline = {
 
 const ROUTES_DIRECTORY = join(process.cwd(), 'src', 'routes');
 const EXPECTED_ROUTE_FILES: Record<string, RouteBaseline> = {
-  'authRoutes.ts': { count: 19, sha256: '20199185b01df1a45f30c11ac89c92bb15e7532461470494b65677e1e29c5a56' },
+  'authRoutes.ts': { count: 20, sha256: 'd003644fc47505a8aa820d2f14f90d53c7760bb2609253f785684a92b2d8373e' },
   'commentRoutes.ts': { count: 3, sha256: '1c889bf2d7f88b15a35cd23f6547a08cc26662fbee069316ead333b6acfd02d6' },
   'conversationRoutes.ts': { count: 7, sha256: '6235862702506b6f64c1bfa911852b6e32fc54315860e4b76a8826a332ed3a53' },
   'dreamRoutes.ts': { count: 18, sha256: '1fe932acffadb35d934aa84ecc75d86948d3a8a7c759af2ac86a861ccae2061b' },
@@ -21,7 +21,7 @@ const EXPECTED_ROUTE_FILES: Record<string, RouteBaseline> = {
 };
 const EXPECTED_MOUNT_COUNT = 9;
 const EXPECTED_MOUNT_HASH = '2aaaa1c81edefe2ca6d10718399b51b3bb2a3f5b81d6321cc4a62a834fa30569';
-const EXPECTED_FEATURE_ROUTE_COUNT = 116;
+const EXPECTED_FEATURE_ROUTE_COUNT = 117;
 
 function sha256(lines: string[]): string {
   return createHash('sha256').update([...lines].sort().join('\n')).digest('hex');

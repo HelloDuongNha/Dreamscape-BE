@@ -118,7 +118,7 @@ async function main(): Promise<void> {
     writeJson(path.join(outputDirectory, 'rag-evaluation-dataset.json'), dataset),
     writeJson(path.join(outputDirectory, 'rag-evaluation-result.json'), result),
     writeFile(
-      path.join(outputDirectory, 'figure-c9-rag-retrieval.svg'),
+      path.join(outputDirectory, 'figure-c10-rag-retrieval.svg'),
       metricChartSvg({
         title: 'Real RAG Retrieval Evaluation',
         subtitle: `${metrics.caseCount} completed DreamScape analyses`,
@@ -132,7 +132,7 @@ async function main(): Promise<void> {
       'utf8',
     ),
     writeFile(
-      path.join(outputDirectory, 'figure-c10-rag-generation.svg'),
+      path.join(outputDirectory, 'figure-c11-rag-generation.svg'),
       metricChartSvg({
         title: 'Real RAG Generation Evaluation',
         subtitle: 'Claims, citations and task relevance',
@@ -146,7 +146,7 @@ async function main(): Promise<void> {
       'utf8',
     ),
     writeFile(
-      path.join(outputDirectory, 'figure-c11-rag-case-audit.svg'),
+      path.join(outputDirectory, 'figure-c9-rag-case-audit.svg'),
       caseAuditSvg(prepared, metrics),
       'utf8',
     ),
@@ -560,7 +560,7 @@ function summaryMarkdown(prepared: PreparedCase[], result: any): string {
     '',
     `Judge model: ${result.judgeModel}`,
     '',
-    'The command selected completed DreamScape analyses, read their stored retrieval audit, and applied one fixed zero-temperature JSON rubric. The generated values must be reported as an evaluation set result, not as accuracy for every possible dream. A reviewer should still inspect Figure C.11 and at least one exact evidence passage before the result is accepted.',
+    'The command selected completed DreamScape analyses, read their stored retrieval audit, and applied one fixed zero-temperature JSON rubric. The generated values must be reported as an evaluation set result, not as accuracy for every possible dream. A reviewer should still inspect Figure C.9 and at least one exact evidence passage before the result is accepted.',
     '',
     '| Case | Language | Retrieved | Relevant | Claims | P@k | R@k | Faithfulness | Answer relevance |',
     '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
