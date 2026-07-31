@@ -21,6 +21,7 @@ import { updateProfile } from '../modules/identity/controllers/profile.controlle
 import {
   changePassword,
   resetPassword,
+  resetPasswordWithGoogle,
   revokeRecoveredSessions,
   revokeOtherSessions,
   startEmailChange,
@@ -278,5 +279,6 @@ router.post('/email-change/start', authMiddleware, startEmailChange);
 router.post('/password/change', authMiddleware, changePassword);
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password', resetPassword);
+router.post('/password/google-reset', resetPasswordWithGoogle);
 
 export default router;

@@ -66,6 +66,7 @@ app.use('/api/auth/verify-otp', createRateLimitMiddleware(rateLimitPolicies.otp)
 app.use('/api/auth/resend-otp', createRateLimitMiddleware(rateLimitPolicies.otp));
 app.use('/api/auth/forgot-password', createRateLimitMiddleware(rateLimitPolicies.recovery));
 app.use('/api/auth/reset-password', createRateLimitMiddleware(rateLimitPolicies.recovery));
+app.use('/api/auth/password/google-reset', createRateLimitMiddleware(rateLimitPolicies.recovery));
 app.post('/api/dreams/analyze', aiRateLimit);
 app.post('/api/dreams/:id/analyze', aiRateLimit);
 app.post('/api/dreams/:id/continuation/regenerate', aiRateLimit);

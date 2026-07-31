@@ -16,6 +16,10 @@ import {
   issueOtp,
   restoreRecoveryGrant,
 } from '../otp/otpLifecycle.service';
+import {
+  GoogleIdentityVerificationError,
+  verifyGoogleIdentity,
+} from '../auth/googleIdentity.service';
 
 export class AccountSecurityError extends Error {
   constructor(
@@ -133,6 +137,54 @@ export async function resetPasswordWithGrant(input: {
     throw error;
   }
   return String(user._id);
+}
+
+// Resets a password only after Google freshly verifies the account owner.
+export async function resetPasswordWithGoogleIdentity(input: {
+  idToken: string;
+  newPassword: string;
+  confirmPassword: string;
+}): Promise<{ revokedSessionCount: number }> {
+  assertPasswordPolicy(input.newPassword);
+  assertPasswordConfirmation(input.newPassword, input.confirmPassword);
+
+  let identity;
+  try {
+    identity = await verifyGoogleIdentity(input.idToken);
+  } catch (error) {
+    if (error instanceof GoogleIdentityVerificationError) {
+      throw new AccountSecurityError(
+        'google_verification_failed',
+        401,
+        'Google could not verify this account.',
+      );
+    }
+    throw error;
+  }
+
+  const user = await User.findOne({ email: identity.email }).select('+password +googleUid');
+  if (!user || (user.googleUid && user.googleUid !== identity.uid)) {
+    throw new AccountSecurityError(
+      'google_verification_failed',
+      401,
+      'Google could not verify this account.',
+    );
+  }
+  if (user.password && await user.comparePassword(input.newPassword)) {
+    throw new AccountSecurityError(
+      'password_reused',
+      409,
+      'New password must be different from the current password.',
+    );
+  }
+
+  user.googleUid = identity.uid;
+  user.password = input.newPassword;
+  user.authMethod = 'password_google';
+  const revokedSessionCount = revokeOtherSessions(user);
+  await user.save();
+
+  return { revokedSessionCount };
 }
 
 export async function assertEmailChangeAuthorization(input: {

@@ -4,6 +4,7 @@ import {
   changePasswordWithCurrent,
   createRecoverySessionRevocationGrant,
   resetPasswordWithGrant,
+  resetPasswordWithGoogleIdentity,
   revokeAllOtherSessions,
   revokeSessionsWithRecoveryGrant,
 } from '../services/security/accountSecurity.service';
@@ -41,6 +42,35 @@ export async function resetPassword(req: Request, res: Response, next: NextFunct
       success: true,
       securityChange: 'password',
       sessionRevocationGrant: createRecoverySessionRevocationGrant(userId),
+      message: 'Password reset successfully.',
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// Resets the password after a fresh Google identity check instead of email OTP.
+export async function resetPasswordWithGoogle(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { idToken, newPassword, confirmPassword } = req.body;
+    if (!idToken || !newPassword || !confirmPassword) {
+      res.status(400).json({
+        success: false,
+        code: 'password_fields_required',
+        message: 'Google verification and both password fields are required.',
+      });
+      return;
+    }
+
+    const result = await resetPasswordWithGoogleIdentity({
+      idToken,
+      newPassword,
+      confirmPassword,
+    });
+    res.status(200).json({
+      success: true,
+      securityChange: 'password',
+      revokedSessionCount: result.revokedSessionCount,
       message: 'Password reset successfully.',
     });
   } catch (error) {

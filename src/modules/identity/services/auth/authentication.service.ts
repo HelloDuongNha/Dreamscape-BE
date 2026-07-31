@@ -1,7 +1,6 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
-import { getFirebaseAuth } from '../../../../config/firebaseAdmin';
 import {
   requireEnvironmentSecret,
   requireEnvironmentVariable,
@@ -17,6 +16,10 @@ import {
   assertPasswordConfirmation,
   assertPasswordPolicy,
 } from '../security/passwordPolicy.service';
+import {
+  GoogleIdentityVerificationError,
+  verifyGoogleIdentity,
+} from './googleIdentity.service';
 import { parseUserAgent } from './userAgent.service';
 
 export interface AuthenticationClientContext {
@@ -88,7 +91,7 @@ export async function authenticateWithGoogle(
   client: AuthenticationClientContext,
 ) {
   const decoded = await verifyGoogleIdToken(idToken);
-  const email = decoded.email.trim().toLowerCase();
+  const email = decoded.email;
   let user = await User.findOne({ googleUid: decoded.uid }).select('+googleUid +password');
   if (!user) {
     user = await User.findOne({ email }).select('+googleUid +password');
@@ -165,20 +168,17 @@ export async function completeGoogleRegistration(
 }
 
 async function verifyGoogleIdToken(idToken: string) {
-  if (!idToken.trim()) throw new AuthenticationError(400, 'Google ID token is required.');
-  let decoded;
   try {
-    decoded = await getFirebaseAuth().verifyIdToken(idToken, true);
-  } catch {
+    return await verifyGoogleIdentity(idToken);
+  } catch (error) {
+    if (
+      error instanceof GoogleIdentityVerificationError
+      && error.reason === 'token_required'
+    ) {
+      throw new AuthenticationError(400, 'Google ID token is required.');
+    }
     throw new AuthenticationError(401, 'Google sign-in could not be verified.');
   }
-  if (decoded.firebase?.sign_in_provider !== 'google.com') {
-    throw new AuthenticationError(401, 'The verified identity is not a Google sign-in.');
-  }
-  if (!decoded.email || decoded.email_verified !== true) {
-    throw new AuthenticationError(401, 'Google must verify the account email first.');
-  }
-  return decoded as typeof decoded & { email: string };
 }
 
 async function buildGoogleOnboarding(
