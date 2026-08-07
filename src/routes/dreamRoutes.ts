@@ -23,7 +23,7 @@ import {
   searchDreams,
   getUserDreams,
 } from '../modules/dream/controllers/dreamRead.controller';
-import authMiddleware, { optionalAuthMiddleware } from '../middleware/authMiddleware';
+import authMiddleware from '../middleware/authMiddleware';
 
 const router = Router();
 
@@ -174,15 +174,19 @@ router.post('/', authMiddleware, createDream);
  * @swagger
  * /api/dreams:
  *   get:
- *     summary: Get global public dream feed (cursor-based pagination)
+ *     summary: Get the authenticated community dream feed (cursor-based pagination)
  *     description: >
- *       Returns a paginated list of all public dreams sorted by newest first.
+ *       Returns public dreams to a signed-in DreamScape user, sorted by newest first.
+ *       Public describes visibility inside the authenticated community; this
+ *       endpoint is not an anonymous Internet feed.
  *       Uses cursor-based pagination for O(1) seek performance under large
  *       datasets — pass the `nextCursor` value from a previous response as
  *       the `nextCursor` query param to load the next page. Returns
  *       `nextCursor: null` when no further pages exist.
  *     tags:
  *       - Dreams
+ *     security:
+ *       - BearerAuth: []
  *     parameters:
  *       - in: query
  *         name: limit
@@ -204,6 +208,8 @@ router.post('/', authMiddleware, createDream);
  *     responses:
  *       200:
  *         description: Paginated list of public dreams
+ *       401:
+ *         description: Missing, invalid or inactive DreamScape session
  *         content:
  *           application/json:
  *             schema:
@@ -215,8 +221,8 @@ router.post('/', authMiddleware, createDream);
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.get('/', getPublicFeed);
-router.get('/search', optionalAuthMiddleware, searchDreams);
+router.get('/', authMiddleware, getPublicFeed);
+router.get('/search', authMiddleware, searchDreams);
 
 // ─── GET /api/dreams/user/:userId ─────────────────────────────────────────────
 
@@ -226,11 +232,13 @@ router.get('/search', optionalAuthMiddleware, searchDreams);
  *   get:
  *     summary: Get a user's personal dream archive (cursor-based pagination)
  *     description: >
- *       Returns all dreams (public and private) for the specified user,
+ *       Returns the permitted dreams for the specified user to an authenticated viewer,
  *       sorted newest first. Uses the same cursor-based pagination as the
  *       global feed. Intended for the Profile page archive view (FR05).
  *     tags:
  *       - Dreams
+ *     security:
+ *       - BearerAuth: []
  *     parameters:
  *       - in: path
  *         name: userId
@@ -265,6 +273,8 @@ router.get('/search', optionalAuthMiddleware, searchDreams);
  *               $ref: '#/components/schemas/DreamFeedResponse'
  *       400:
  *         description: Invalid userId format
+ *       401:
+ *         description: Missing, invalid or inactive DreamScape session
  *         content:
  *           application/json:
  *             schema:
@@ -276,7 +286,7 @@ router.get('/search', optionalAuthMiddleware, searchDreams);
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.get('/user/:userId', optionalAuthMiddleware, getUserDreams);
+router.get('/user/:userId', authMiddleware, getUserDreams);
 
 // ─── PUT /api/dreams/:id ──────────────────────────────────────────────────────
 
@@ -290,6 +300,8 @@ router.get('/user/:userId', optionalAuthMiddleware, getUserDreams);
  *       The old content is automatically archived in edit_history before saving.
  *     tags:
  *       - Dreams
+ *     security:
+ *       - BearerAuth: []
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -481,11 +493,13 @@ router.patch('/:id/comments-policy', authMiddleware, updateCommentPolicy);
  *     responses:
  *       200:
  *         description: Comments fetched successfully
+ *       401:
+ *         description: Missing, invalid or inactive DreamScape session
  *       400:
  *         description: Invalid dreamId
  */
-router.get('/:id/comments', optionalAuthMiddleware, getComments);
-router.get('/:id', optionalAuthMiddleware, getDream);
+router.get('/:id/comments', authMiddleware, getComments);
+router.get('/:id', authMiddleware, getDream);
 
 // ─── POST /api/dreams/analyze ─────────────────────────────────────────────────
 

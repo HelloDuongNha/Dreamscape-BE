@@ -4,7 +4,7 @@ import {
   deleteComment,
   editComment,
 } from '../modules/dream/controllers/dreamComment.controller';
-import authMiddleware, { optionalAuthMiddleware } from '../middleware/authMiddleware';
+import authMiddleware from '../middleware/authMiddleware';
 
 const router = Router();
 
@@ -22,6 +22,8 @@ const router = Router();
  *       a second request.
  *     tags:
  *       - Comments
+ *     security:
+ *       - BearerAuth: []
  *     parameters:
  *       - in: path
  *         name: userId
@@ -33,10 +35,12 @@ const router = Router();
  *         description: Comments fetched successfully
  *       400:
  *         description: Invalid userId format
+ *       401:
+ *         description: Missing, invalid or inactive DreamScape session
  *       500:
  *         description: Internal server error
  */
-router.get('/user/:userId', optionalAuthMiddleware, getUserComments);
+router.get('/user/:userId', authMiddleware, getUserComments);
 router.patch('/:commentId', authMiddleware, editComment);
 router.delete('/:commentId', authMiddleware, deleteComment);
 

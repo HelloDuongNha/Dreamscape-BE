@@ -10,9 +10,9 @@ type RouteBaseline = {
 const ROUTES_DIRECTORY = join(process.cwd(), 'src', 'routes');
 const EXPECTED_ROUTE_FILES: Record<string, RouteBaseline> = {
   'authRoutes.ts': { count: 20, sha256: 'd003644fc47505a8aa820d2f14f90d53c7760bb2609253f785684a92b2d8373e' },
-  'commentRoutes.ts': { count: 3, sha256: '1c889bf2d7f88b15a35cd23f6547a08cc26662fbee069316ead333b6acfd02d6' },
+  'commentRoutes.ts': { count: 3, sha256: '7b90dc1ed07dd87bcf15c0e2e876dd6cfe31fb918eb89519d56365f105bdb080' },
   'conversationRoutes.ts': { count: 7, sha256: '6235862702506b6f64c1bfa911852b6e32fc54315860e4b76a8826a332ed3a53' },
-  'dreamRoutes.ts': { count: 18, sha256: '1fe932acffadb35d934aa84ecc75d86948d3a8a7c759af2ac86a861ccae2061b' },
+  'dreamRoutes.ts': { count: 18, sha256: 'f19a4610ca86a48ba4a6ce5244f3be35b51735587851c1f25df119d13ded4262' },
   'moderationRoutes.ts': { count: 28, sha256: 'c219812d6d50179499d7e5e9950a414593a26eeb9959df96d9823f46964d8140' },
   'notificationRoutes.ts': { count: 4, sha256: '1091179e9e7b2cd3fc0407011bb2f6e137ce888eb9a4409c34e8992235365efd' },
   'oracleRoutes.ts': { count: 17, sha256: 'b7ac24a837be4ece918a24628bbbd95a0fde9a0209f2e9ee6a82d1ce9eecdae9' },
