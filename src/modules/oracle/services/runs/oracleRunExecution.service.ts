@@ -6,6 +6,10 @@ import OracleTurn from '../../models/OracleTurn';
 import { captureOracleEvidenceGaps } from '../evidence/oracleEvidenceCapture.service';
 import { resolveOracleModelAdapter } from '../providers/oracleProviderResolver.service';
 import { buildOracleGrounding } from '../grounding/oracleGrounding.service';
+import {
+  buildOraclePersonalHistoryGrounding,
+  requestsPersonalDreamHistory,
+} from '../grounding/oraclePersonalHistoryGrounding.service';
 import { validateAcademicCitationSupport } from '../grounding/oracleCitationValidation.service';
 import {
   compactUsedCitations,
@@ -154,9 +158,12 @@ async function prepareRunContext(run: IOracleRun, signal: AbortSignal) {
   const groundingText = mode === 'dream_analysis'
     ? findLatestDreamNarrative(messages) || latestUserText
     : latestUserText;
-  const grounding = mode === 'dream_analysis'
-    ? await buildOracleGrounding(String(run.userId), groundingText)
-    : { citations: [], promptContext: '', verificationQuestions: [] };
+  const grounding = await prepareOracleGrounding({
+    userId: String(run.userId),
+    mode,
+    groundingText,
+    latestUserText,
+  });
   const model = adapter.modelOverride || (adapter.name === 'openai_compatible'
     ? String(process.env.ORACLE_EXTERNAL_MODEL || resolveOracleModel(mode))
     : resolveOracleModel(mode));
@@ -210,6 +217,22 @@ async function prepareRunContext(run: IOracleRun, signal: AbortSignal) {
     includedMessages: compactedContext.includedMessages,
     omittedMessages: compactedContext.omittedMessages,
   };
+}
+
+// Selects academic dream grounding or owner-authorized history without mixing unrelated chat context.
+async function prepareOracleGrounding(input: {
+  userId: string;
+  mode: OracleExecutionMode;
+  groundingText: string;
+  latestUserText: string;
+}): Promise<Awaited<ReturnType<typeof buildOracleGrounding>>> {
+  if (input.mode === 'dream_analysis') {
+    return buildOracleGrounding(input.userId, input.groundingText);
+  }
+  if (input.mode === 'chat' && requestsPersonalDreamHistory(input.latestUserText)) {
+    return buildOraclePersonalHistoryGrounding(input.userId);
+  }
+  return { citations: [], promptContext: '', verificationQuestions: [] };
 }
 
 // Generate the narrative answer from the grounded context without mutating run state.
