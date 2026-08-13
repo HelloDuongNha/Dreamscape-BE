@@ -4,6 +4,7 @@ import KnowledgeRuleEvidenceV3 from '../../models/KnowledgeRuleEvidence';
 import RuleValidationFeedback, {
   type IRuleValidationImpact,
 } from '../../models/RuleValidationFeedback';
+import { scoreRuleV3Aggregate } from './ruleV3Scoring.service';
 
 export type RuleValidationAnswer = 'yes' | 'no' | 'unsure';
 
@@ -119,14 +120,18 @@ export async function recomputeRuleValidationScores(ruleIds: string[]): Promise<
       .select('effect impacts')
       .lean(),
   ]);
+  const evidenceOwnerIds = [...new Set(rules.flatMap((rule: any) => [
+    String(rule._id),
+    ...(rule.compositeComponents || []).map((component: any) => String(component.sourceRuleId)),
+  ]))];
+  const evidence = evidenceOwnerIds.length
+    ? await KnowledgeRuleEvidenceV3.find({ ruleId: { $in: evidenceOwnerIds } }).lean()
+    : [];
   const updates: RuleValidationScoreUpdate[] = [];
   for (const rule of rules) {
     const ruleId = String(rule._id);
     const previousScore = Number(rule.evidenceScore) || 0;
-    const previousAdjustment = Number(rule.userValidationAdjustment) || 0;
-    const sourceBaseScore = rule.sourceEvidenceScore == null
-      ? clampScore(previousScore - previousAdjustment)
-      : Number(rule.sourceEvidenceScore);
+    const sourceBaseScore = scoreRuleV3Aggregate(rule, evidence).score.evidenceScore;
     let adjustment = 0;
     for (const row of rows) {
       const impact = row.impacts.find((item) => item.ruleId === ruleId);

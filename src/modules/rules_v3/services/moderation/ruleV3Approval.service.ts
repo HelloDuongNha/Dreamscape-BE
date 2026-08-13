@@ -2,8 +2,7 @@ import { generateEmbedding } from '../../../../infrastructure/llm.service';
 import { reconcileOracleEvidenceGapsForRule } from '../../../oracle/services/evidence/oracleEvidenceReconciliation.service';
 import KnowledgeRuleV3 from '../../models/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../../models/KnowledgeRuleEvidence';
-import { areRuleV3ComponentsEvidenceEquivalent } from '../evidence/ruleV3Relationship.service';
-import { scoreRuleV3 } from '../evidence/ruleV3Scoring.service';
+import { scoreRuleV3, scoreRuleV3Aggregate } from '../evidence/ruleV3Scoring.service';
 import { applyStoredValidationAdjustment } from '../evidence/ruleV3ValidationScore.service';
 
 // Kiểm tra dẫn chứng, tạo chỉ mục và chuyển một lập luận sang trạng thái đã duyệt.
@@ -12,7 +11,7 @@ export async function approveRuleV3Record(existing: any): Promise<void> {
     ? existing.compositeComponents
     : [];
   const evidence = await loadApprovalEvidence(existing, components);
-  const score = scoreApprovalEvidence(existing, components, evidence);
+  const score = scoreRuleV3Aggregate(existing, evidence).score;
 
   requireApprovalQuality(score);
   requireCompositeQuality(existing, components, evidence);
@@ -50,16 +49,6 @@ async function loadApprovalEvidence(existing: any, components: any[]) {
   return KnowledgeRuleEvidenceV3.find({
     ruleId: { $in: componentIds.length ? componentIds : [existing._id] },
   }).lean();
-}
-
-function scoreApprovalEvidence(existing: any, components: any[], evidence: any[]) {
-  if (areRuleV3ComponentsEvidenceEquivalent(components)) {
-    return scoreRuleV3(components[0], evidence);
-  }
-  return scoreRuleV3(
-    existing,
-    evidence.filter(item => String(item.ruleId) === String(existing._id)),
-  );
 }
 
 function requireApprovalQuality(score: ReturnType<typeof scoreRuleV3>): void {

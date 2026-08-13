@@ -10,8 +10,9 @@ import type {
   RuleV3QualityReasonCode,
   RuleV3SemanticSupportLevel
 } from './ruleV3CandidateQuality.types';
+import { areRuleV3ComponentsEvidenceEquivalent } from './ruleV3Relationship.service';
 
-export const RULE_V3_SCORING_VERSION = 'evidence-review-5';
+export const RULE_V3_SCORING_VERSION = 'evidence-review-6';
 
 export interface RuleV3ScoringRule {
   statement: string;
@@ -64,6 +65,81 @@ export interface RuleV3ScoreResult {
   semanticSupportScore: number;
   applicationReadiness: RuleV3ApplicationReadiness;
   scoreCriteria: RuleV3ScoreCriterion[];
+}
+
+export interface RuleV3AggregateScoreResult {
+  score: RuleV3ScoreResult;
+  componentScores: Array<{
+    sourceRuleId: string;
+    score: RuleV3ScoreResult;
+  }>;
+  aggregation: 'single_rule' | 'pooled_equivalent_evidence' | 'minimum_component';
+  weakestSourceRuleId?: string;
+}
+
+interface RuleV3AggregateRule extends RuleV3ScoringRule {
+  _id?: unknown;
+  isComposite?: boolean;
+  compositeComponents?: Array<RuleV3ScoringRule & { sourceRuleId: unknown }>;
+}
+
+/**
+ * Returns the one academic-evidence score used by moderation, persistence,
+ * retrieval and feedback. Equivalent claims may pool evidence; a composite of
+ * different claims is limited by its weakest component so one strong claim
+ * cannot hide an unsupported one.
+ */
+export function scoreRuleV3Aggregate(
+  rule: RuleV3AggregateRule,
+  evidence: Array<RuleV3ScoringEvidence & { ruleId?: unknown }>,
+): RuleV3AggregateScoreResult {
+  const components = Array.isArray(rule.compositeComponents)
+    ? rule.compositeComponents
+    : [];
+  if (!rule.isComposite || components.length < 2) {
+    return {
+      score: scoreRuleV3(
+        rule,
+        evidence.filter(item => String(item.ruleId || '') === String(rule._id || '')),
+      ),
+      componentScores: [],
+      aggregation: 'single_rule',
+    };
+  }
+
+  const componentScores = components.map(component => ({
+    sourceRuleId: String(component.sourceRuleId),
+    score: scoreRuleV3(
+      component,
+      evidence.filter(item => String(item.ruleId || '') === String(component.sourceRuleId)),
+    ),
+  }));
+  if (areRuleV3ComponentsEvidenceEquivalent(components)) {
+    return {
+      score: scoreRuleV3(components[0], evidence),
+      componentScores,
+      aggregation: 'pooled_equivalent_evidence',
+    };
+  }
+
+  const weakest = componentScores.reduce((current, candidate) =>
+    candidate.score.evidenceScore < current.score.evidenceScore ? candidate : current,
+  );
+  return {
+    score: {
+      ...weakest.score,
+      oracleUsefulnessScore: Math.min(...componentScores.map(item => item.score.oracleUsefulnessScore)),
+      oracleEligible: componentScores.every(item => item.score.oracleEligible),
+      qualityAccepted: componentScores.every(item => item.score.qualityAccepted),
+      supportingCitationCount: componentScores.reduce((sum, item) => sum + item.score.supportingCitationCount, 0),
+      limitingCitationCount: componentScores.reduce((sum, item) => sum + item.score.limitingCitationCount, 0),
+      contradictingCitationCount: componentScores.reduce((sum, item) => sum + item.score.contradictingCitationCount, 0),
+      exactCitationCount: componentScores.reduce((sum, item) => sum + item.score.exactCitationCount, 0),
+    },
+    componentScores,
+    aggregation: 'minimum_component',
+    weakestSourceRuleId: weakest.sourceRuleId,
+  };
 }
 
 function sourceKey(value: unknown): string {

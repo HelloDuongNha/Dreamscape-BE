@@ -165,6 +165,14 @@ export async function applyDreamHypothesisFeedback(input: ApplyDreamFeedbackInpu
         ruleVoteDelta: score.voteDelta,
       } : item;
     });
+  refreshedAnalysis.scientific_context_notes = (refreshedAnalysis.scientific_context_notes || [])
+    .map((note: any) => {
+      const score: any = scoreByRule.get(String(note.ruleId || '').trim());
+      return score ? {
+        ...note,
+        academicEvidenceScore: score.score,
+      } : note;
+    });
 
   dream.ai_result = refreshedAnalysis;
   dream.markModified('ai_result');

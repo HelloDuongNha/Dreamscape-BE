@@ -302,8 +302,6 @@ router.get('/user/:userId', authMiddleware, getUserDreams);
  *       - Dreams
  *     security:
  *       - BearerAuth: []
- *     security:
- *       - BearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id

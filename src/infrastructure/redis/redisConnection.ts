@@ -46,6 +46,10 @@ export async function initializeRedis(): Promise<RedisHealth> {
     socket: {
       connectTimeout: 5_000,
       reconnectStrategy: retries => {
+        // Startup must resolve predictably. A required Redis instance failing
+        // forever here prevents Express from listening without reporting a
+        // terminal startup error.
+        if (retries >= 5) return false;
         const jitter = Math.floor(Math.random() * 100);
         return Math.min(2 ** retries * 50, 3_000) + jitter;
       },

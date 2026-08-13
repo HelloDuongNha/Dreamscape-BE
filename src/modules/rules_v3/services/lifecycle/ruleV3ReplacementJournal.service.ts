@@ -5,7 +5,7 @@ import KnowledgeRuleEvidenceV3 from '../../models/KnowledgeRuleEvidence';
 import RuleV3ReplacementBackupItem from '../../models/RuleV3ReplacementBackupItem';
 import RuleV3ReplacementJournal from '../../models/RuleV3ReplacementJournal';
 import { logger } from '../../../../infrastructure/logger';
-import { scoreRuleV3 } from '../evidence/ruleV3Scoring.service';
+import { scoreRuleV3Aggregate } from '../evidence/ruleV3Scoring.service';
 import { applyStoredValidationAdjustment } from '../evidence/ruleV3ValidationScore.service';
 
 const ACTIVE_STATES = ['preparing', 'prepared', 'applying', 'rolling_back'] as const;
@@ -37,7 +37,12 @@ export async function prepareRuleV3MutationJournal(input: {
     }).lean();
     const ruleIds = [...new Set(evidence.map(item => String(item.ruleId)))].map(objectId);
     const rules = ruleIds.length
-      ? await KnowledgeRuleV3.find({ _id: { $in: ruleIds } }).lean()
+      ? await KnowledgeRuleV3.find({
+        $or: [
+          { _id: { $in: ruleIds } },
+          { 'compositeComponents.sourceRuleId': { $in: ruleIds } },
+        ],
+      }).lean()
       : [];
     const items = [
       ...rules.map(rule => ({
@@ -100,13 +105,22 @@ export async function registerRuleV3NewRule(journalId: string, ruleId: mongoose.
 }
 
 async function rescoreRules(ruleIds: mongoose.Types.ObjectId[]): Promise<void> {
-  for (const ruleId of ruleIds) {
-    const [rule, evidence] = await Promise.all([
-      KnowledgeRuleV3.findById(ruleId),
-      KnowledgeRuleEvidenceV3.find({ ruleId }).lean(),
-    ]);
+  const rules = await KnowledgeRuleV3.find({
+    $or: [
+      { _id: { $in: ruleIds } },
+      { 'compositeComponents.sourceRuleId': { $in: ruleIds } },
+    ],
+  });
+  for (const rule of rules) {
+    const evidenceOwnerIds = [
+      rule._id,
+      ...(rule.compositeComponents || []).map(component => component.sourceRuleId),
+    ];
+    const evidence = await KnowledgeRuleEvidenceV3.find({
+      ruleId: { $in: evidenceOwnerIds },
+    }).lean();
     if (!rule || evidence.length === 0) continue;
-    const sourceScore = scoreRuleV3(rule, evidence);
+    const sourceScore = scoreRuleV3Aggregate(rule, evidence).score;
     const score = applyStoredValidationAdjustment(sourceScore, rule);
     rule.sourceEvidenceScore = sourceScore.evidenceScore;
     rule.evidenceScore = score.evidenceScore;

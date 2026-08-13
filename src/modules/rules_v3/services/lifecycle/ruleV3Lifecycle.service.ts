@@ -3,7 +3,7 @@ import AcademicSource from '../../../academic/models/AcademicSource';
 import AcademicRuleExtractionRunV3 from '../../models/AcademicRuleExtractionRun';
 import KnowledgeRuleV3 from '../../models/KnowledgeRule';
 import KnowledgeRuleEvidenceV3 from '../../models/KnowledgeRuleEvidence';
-import { scoreRuleV3 } from '../evidence/ruleV3Scoring.service';
+import { scoreRuleV3Aggregate } from '../evidence/ruleV3Scoring.service';
 import { applyStoredValidationAdjustment } from '../evidence/ruleV3ValidationScore.service';
 
 export interface RemoveRuleV3SourceDataOptions {
@@ -66,24 +66,33 @@ export async function removeRuleV3SourceData(
   );
   emptyResult.evidenceRemoved = evidenceDelete.deletedCount || 0;
 
-  for (const ruleId of affectedRuleIds) {
-    const evidenceQuery = KnowledgeRuleEvidenceV3.find({ ruleId });
+  const rulesQuery = KnowledgeRuleV3.find({
+    $or: [
+      { _id: { $in: affectedRuleIds } },
+      { 'compositeComponents.sourceRuleId': { $in: affectedRuleIds } },
+    ],
+  });
+  if (session) rulesQuery.session(session);
+  const affectedRules = await rulesQuery;
+
+  for (const rule of affectedRules) {
+    const evidenceOwnerIds = [
+      rule._id,
+      ...(rule.compositeComponents || []).map(component => component.sourceRuleId),
+    ];
+    const evidenceQuery = KnowledgeRuleEvidenceV3.find({ ruleId: { $in: evidenceOwnerIds } });
     if (session) evidenceQuery.session(session);
     const remainingEvidence = await evidenceQuery.lean();
     if (remainingEvidence.length === 0) {
       const deleted = await KnowledgeRuleV3.deleteOne(
-        { _id: ruleId },
+        { _id: rule._id },
         session ? { session } : {}
       );
       emptyResult.rulesRemoved += deleted.deletedCount || 0;
       continue;
     }
 
-    const ruleQuery = KnowledgeRuleV3.findById(ruleId);
-    if (session) ruleQuery.session(session);
-    const rule = await ruleQuery;
-    if (!rule) continue;
-    const sourceScore = scoreRuleV3(rule, remainingEvidence);
+    const sourceScore = scoreRuleV3Aggregate(rule, remainingEvidence).score;
     const score = applyStoredValidationAdjustment(sourceScore, rule);
     rule.sourceEvidenceScore = sourceScore.evidenceScore;
     rule.evidenceScore = score.evidenceScore;
